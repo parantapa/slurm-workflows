@@ -19,22 +19,42 @@ what the library is, requirements, install, links.
 
 | Document | Covers |
 | --- | --- |
-| [`howto-use-slurm-workflows.md`](howto-use-slurm-workflows.md) | The user guide, and the single home for usage docs: concepts, quick start, actors, `is_batch_worker`, running the task-queue server, troubleshooting. |
-| [`api-reference.md`](api-reference.md) | Every public name, argument and return type. |
-| [`bayesian-optimization-using-botorch.md`](bayesian-optimization-using-botorch.md) | The botorch optimizer in full. |
-| [`howto-run-tests.md`](howto-run-tests.md) | The suite: what is mocked, what is real, and the reasoning behind the trickier tests. |
+| [`concepts.md`](concepts.md) | Every public name, argument and return type, and the single home for usage docs: concepts, quick start, actors, `is_batch_worker`, running the task-queue server, troubleshooting. |
+| [`reference.md`](reference.md) | `SlurmPilotExecutor`, `ExploreSpaceSobolQMC` and `OptimizeSpaceBotorch` from a caller's side: the methods, the task dataclasses, the objective contract, the search space types, and the botorch search in full. |
+| [`how-to-use-swtop.md`](how-to-use-swtop.md) | The live queue view: the CLI, the blocks, what the host and job readings measure. |
+| [`installation-and-setup-instructions-for-rivanna.md`](installation-and-setup-instructions-for-rivanna.md) | Getting the package, its environment and the `ds-service` binary onto Rivanna. |
+| [`tutorial-computing-pi.md`](tutorial-computing-pi.md), [`tutorial-computing-pi-qmc.md`](tutorial-computing-pi-qmc.md), [`tutorial-optimize-himmelblau.md`](tutorial-optimize-himmelblau.md) | The three worked examples under `examples/`, one tutorial each. |
+| [`how-to-run-tests.md`](how-to-run-tests.md) | The suite: what is mocked, what is real, and the reasoning behind the trickier tests. |
 | `developer-notes.md` | This file. Only what the others do not cover. |
 
 When adding user-facing documentation,
-put it in the how-to,
+put it in `concepts.md`,
 or in a new doc under `docs/` added to the README's documentation table.
 Not in `README.md`.
+
+### Docstrings, comments, and this file
+
+Prose in the source is not a third documentation set.
+Each kind of prose has one job:
+
+| Where | Carries | Never carries |
+| --- | --- | --- |
+| Docstring | What a caller needs: what it does, its arguments, what comes back, what it raises | Why it was built this way, how it is implemented, anything a caller cannot act on |
+| Comment | What is not obvious at that line, in a sentence or two | An argument for the design, or a paragraph the docs already carry |
+| `docs/` | How to use the library, and what it does | |
+| This file | Why the code is the way it is: the invariants, the trade-offs, the alternatives that were tried | |
+
+A private helper's docstring is a line saying what it does.
+Its reasoning belongs under [Invariants](#invariants), where one reader
+looking for the design finds all of it, instead of in a comment that the
+next person to touch that function has to rediscover.
+
+A design decision written in both places will be changed in one of them.
 
 ## Commands
 
 There is **no CI** in this repository, so nothing runs these for you.
-The install and test commands are also at the top of
-[`howto-run-tests.md`](howto-run-tests.md).
+The install and test commands are also at the top of [`how-to-run-tests.md`](how-to-run-tests.md).
 
 ```sh
 pip install -ve .[test,dev]
@@ -54,7 +74,8 @@ Both are therefore run bare:
 `slurm-pilot-worker` is internal:
 generated sbatch scripts invoke it on the compute nodes,
 and users never call it directly.
-`swtop` is for users, and is documented in the how-to.
+`swtop` is for users, and is documented in
+[How to use `swtop`](how-to-use-swtop.md).
 
 Deploy to clusters with `cpush`.
 See `.cpush.json5` for the `rivanna` and `ivy-hip-tricr-2` remotes.
@@ -70,13 +91,16 @@ See `.cpush.json5` for the `rivanna` and `ivy-hip-tricr-2` remotes.
 | `search_space.py` | `SearchSpace`, the `ParameterRange` types, and the unit cube mapping |
 | `explore_space.py` | `ExplorationTask` and `ExploreSpaceSobolQMC`, Sobol' sweeps with no model behind them |
 | `monitors.py` | Host and cgroup sampling, and the threads that publish it |
-| `swtop.py` | The `swtop` monitor: `Collector`, `render` and the CLI |
+| `swtop.py` | The `swtop` monitor: `Collector`, the row builders, the text frames and the CLI |
+| `swtop_tui.py` | The Textual app `swtop` runs in |
 | `templates/` | Jinja templates and their loader |
-| `utils.py` | `RemoteExecutionError`, id and logging helpers, `floor_power_of_two`, the progress-line formatters |
+| `utils.py` | `RemoteExecutionError`, id and logging helpers, `floor_power_of_two` and `index_width`, the progress-line formatters |
 
 The coordinator and the workers never talk to each other directly,
 only through the `ds-service` server,
-via `DsServiceClient` from the external `ds-service-client` package.
+via `DsServiceClient` from the external `ds-service-client` package
+(`swtop` uses `DsServiceClientAsync`, the asyncio client of the same
+package and the same API, for the reason given under Monitoring).
 `DsServiceServer` (same package) can launch a local server process,
 but the executor is always given the address explicitly.
 
@@ -147,14 +171,28 @@ and the worker sleeps and retries on that alone.
 A `TimeoutError` there means an unreachable server
 and must stay distinguishable.
 
+**One executor per `ds-service` server.**
+A server's queues, its `worker_job_info:`, `worker_process_info:`,
+`task_name:` and `actor_class_args:` keys and its monitor counters
+are one flat namespace with no executor in it,
+so the design assumes a server belongs to a single executor.
+Two executors on one server share queues by group name
+and overwrite each other's actor arguments.
+Nothing enforces this: the executor cannot see another one,
+which is also why `_starved_tasks` and `_stranded_tasks`
+refuse a queue served by jobs this executor did not start.
+Task ids and worker names are still executor-prefixed,
+because a *cluster* holds many runs even when a server holds one.
+
 **`submit` sets `priority` to a *negated* wall clock.**
 ds-service dispatches the highest priority first,
 so a timestamp that rises with time serves the newest task first
 and leaves the oldest until last:
 a queue that runs backwards and never says so.
-It is a wall clock rather than `perf_counter`
-because two executors on one queue have to be comparable,
-and `perf_counter`'s zero is the start of whichever process asked.
+A wall clock rather than `perf_counter` costs nothing
+and keeps two processes' tasks comparable,
+which the invariant above says will not happen
+but which a stale `Task` from a restarted driver can still produce.
 
 **Actor constructor arguments travel through the key value store.**
 `define_worker` cloudpickles `actor_class_args` and `actor_class_kwargs`
@@ -170,28 +208,41 @@ rather than an error.
 The values are deliberately not kept on the `WorkerGroup`,
 so they are not part of what a redefinition is checked against:
 the store is the only copy, and the last `define_worker` call wins.
+The key holds the group name and not the executor's,
+which is safe only because a server belongs to one executor.
 
 **The executor's name is its identity.**
 It prefixes task ids, worker job names, script file names and the log,
 and it keys the executor's logger,
 so two live executors sharing a name collide on all of those
-and their log lines land in both work dirs.
+and their log lines land in both work dirs,
+even when each has a server to itself.
 `SlurmPilotExecutor` validates it
 (`[A-Za-z][A-Za-z0-9_-]*`, at least 3 characters)
 because the characters that are safe in a Slurm job name,
 a directory name and a task id are the intersection of three sets,
 not one.
 
+**A run publishes itself in two halves, one key each.**
+`SlurmPilotExecutor._add_worker` writes `worker_job_info:<worker-name>`
+as soon as `sbatch` returns, so a queued job is visible before it runs,
+and `PilotWorkerProcess.__init__` writes `worker_process_info:<worker-id>`
+when the process starts.
+`swtop` shows them as two blocks, and the difference between them
+is what says a job has not started yet.
+Neither key is ever updated, which is what makes both cacheable.
+
 **Workers publish their identity at startup, as one key.**
-`PilotWorkerProcess.__init__` writes `worker_info:<worker-id>`,
+`PilotWorkerProcess.__init__` writes `worker_process_info:<worker-id>`,
 a JSON object, before it builds the actor,
 so a worker that dies in its actor's constructor
 has still recorded which job and node it died on.
 One key and not five, because `swtop` caches what it reads:
 a reader landing between two writes would otherwise
 remember a worker whose host it never learned.
-`WORKER_INFO_PREFIX` lives in `slurm_pilot_worker.py`
-and is imported by `swtop.py`, so the two cannot drift apart.
+`WORKER_PROCESS_INFO_PREFIX` lives in `slurm_pilot_worker.py`
+and `WORKER_JOB_INFO_PREFIX` in `slurm_pilot_executor.py`;
+`swtop.py` imports both, so the writers and the reader cannot drift apart.
 Nothing deletes the key:
 the store is in memory and dies with the server,
 which is the only cleanup there is.
@@ -303,7 +354,8 @@ are written out in both classes.
 The fiddliest part of it is not:
 `utils.objective_value` is the one place an objective's result is checked,
 so the four rejection messages cannot drift apart.
-The rest still can. A fix to one class belongs in the other.
+The rest still can.
+A fix to one class belongs in the other.
 
 **The results file format is owned by `explore_space`.**
 `load_results` reads what both `save` methods write,
@@ -361,8 +413,7 @@ each against its own `patience`, floor and ceiling.
   never against a literal.
 - **The stall counter runs from round 1;
   `min_search_iterations` gates the stop, not the counting.**
-  Report the gap to the stop as
-  `max(patience - stalled, min_search_iterations - iteration)`.
+  Report the gap to the stop as `max(patience - stalled, min_search_iterations - iteration)`.
   A bare `stalled`/`patience` ratio runs past its own denominator
   whenever the floor outlasts the streak, which the defaults do.
 - **One acquisition, one `optimize_acqf` call per round**,
@@ -377,8 +428,12 @@ each against its own `patience`, floor and ceiling.
   the restart cost once per point instead of once per batch.
 - **Ranges clamp in `unstandardize`**,
   because `optimize_acqf` can return a point a hair outside the bounds.
-- **Keep this module out of the package `__init__.py`**,
-  so `import slurm_workflows` works without botorch installed.
+- **Never import this module eagerly from the package `__init__.py`.**
+  `OptimizeSpaceBotorch` and `OptimizationTask` are importable from the
+  package root, but through the `__getattr__` there, which imports this
+  module on first use, so `import slurm_workflows` still works without
+  botorch installed. An import at the top of `__init__.py` would make
+  botorch a hard dependency of the whole package.
 - `optimize_acqf`, `fit_gpytorch_mll`, `qLogNoisyExpectedImprovement`
   and `fit_and_propose` are called through module globals.
   The tests monkeypatch those to assert what was asked for,
@@ -393,7 +448,7 @@ each against its own `patience`, floor and ceiling.
   so the max hits 1.0 on correct runs,
   and exploration alone lands near the minimum,
   so `best_point()` passes even with the sign flipped.
-  [`howto-run-tests.md`](howto-run-tests.md) carries the measured margins.
+  [`how-to-run-tests.md`](how-to-run-tests.md) carries the measured margins.
 
 ### Monitoring (`monitors.py`, `swtop.py`)
 
@@ -407,8 +462,8 @@ the series stops, and `swtop` marks it stale.
 Re-electing would need a heartbeat and a lease, which this does not have.
 
 **Sampling threads are daemons that swallow their errors.**
-A worker killed at the end of its walltime must not be held open by a
-monitor, and a failed sample must not end the series:
+A worker killed at the end of its walltime must not be held open by a monitor,
+and a failed sample must not end the series:
 a node briefly unreachable is the common case, and a gap beats a stop.
 `close()` stops them before closing the client whose channel they use.
 
@@ -421,11 +476,12 @@ because it covers every process and thread Slurm put in the job,
 including ones the worker never started.
 
 **`swtop` can only show what an RPC can answer.**
-`task_get_count_by_state` covers every task,
-but nothing enumerates tasks, workers, hosts or jobs,
-so every table is built by searching a key space
-for keys the executor, the workers and the monitors publish.
-A task nobody named cannot be listed, only counted.
+`task_get_count_by_state` covers every task
+and `task_search_id` enumerates them,
+but nothing enumerates workers, hosts or jobs,
+so those tables are built by searching a key space
+for keys the workers and the monitors publish.
+A worker that has not published its identity cannot be listed.
 That is a property of the server, not a gap to be worked around here.
 
 **`swtop` reads only the tail of a series.**
@@ -436,20 +492,57 @@ It asks for the last minute, and calls a subject with nothing there stale.
 **Identities are read once.**
 `Collector` caches every worker's fields and every task's name,
 because both are written once and never change.
-Without the cache a 400 worker pool would cost 2000 reads every 2 seconds.
+Without the cache a 400 worker pool would cost 400 reads every 2 seconds,
+plus one for every named task.
+A name that is not there yet is not cached as missing:
+`set_task_name` runs just after `submit`,
+so a task polled between the two
+would otherwise stay `-` for the rest of the run.
 
 **A poll that fails is drawn, not raised.**
 A monitor that exits when the server blinks
 takes the screen down with it.
+In the UI the tables are left as they were,
+because the last good reading beats a blank screen
+while a server restarts.
+
+**`swtop` reads with the asyncio client.**
+A poll is a handful of key searches plus a read per worker,
+per named task and per monitored series,
+and one after another that is a round trip apiece:
+a few hundred workers would not fit in a two second interval.
+`Collector` issues each group with `asyncio.gather`,
+so a poll costs about one round trip however wide the pool is,
+and the cache means only what is new is ever read.
+
+**The UI polls in a worker, never inline.**
+An awaited poll cannot block the interface the way a blocking one would,
+but it still must not run inside a message handler or a timer tick.
+`run_worker(..., exclusive=True)` gives it a worker of its own
+and cancels the poll already in flight, RPCs and all,
+so a slow server cannot pile up a poll per interval.
+The result is applied on the event loop like any other update,
+with no `call_from_thread` in the way.
+
+**Tables are updated in place, not rebuilt.**
+`sync_table` adds, updates and removes rows by key
+--- a worker id, a hostname, a task id ---
+because `DataTable.clear()` throws away the scroll position
+and the cursor, which a 3600 worker pool needs to keep.
+That is what the keys from the row builders in `swtop.py` are for.
+
+**Both displays read the same row builders.**
+`worker_rows`, `host_rows`, `job_rows` and `task_rows`
+are the one definition of what each block shows;
+the text frames and the UI differ only in how they draw them.
 
 ### Slurm interaction (`slurm_utils.py`)
 
 `is_batch_worker=False` wraps the worker script in `srun`
 and passes `--output <work_dir>/<name>-%j-%t.out`.
 That is why the `worker_sbatch_script` template takes `name` and `work_dir`.
-Which file a worker's log ends up in
-is documented for users in
-[`howto-use-slurm-workflows.md`](howto-use-slurm-workflows.md#logs-and-troubleshooting);
+Which file a worker's log ends up in is documented for users in
+[`concepts.md`](concepts.md#logs-and-troubleshooting);
 what follows is why the shell decides it rather than Python.
 
 **The `--output` is dropped for a job of exactly one task**,

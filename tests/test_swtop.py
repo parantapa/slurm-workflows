@@ -4,22 +4,32 @@ The server is real, as everywhere else here,
 so what the collector reports is what a live queue would tell it.
 Slurm is mocked, since a worker's identity comes from the store
 rather than from a running job.
+
+The collector is async and these tests are not.
+Each is given a collector on an event loop that lasts the whole test
+(`LoopBound`) and calls `snapshot()` as if it were an ordinary method,
+so a test can change the store between two polls
+--- which is what the caching and staleness tests are about ---
+without every test being written as a coroutine.
 """
 
 from __future__ import annotations
 
 import json
-from typing import cast
+import asyncio
+from typing import Any, Callable, Coroutine, TypeVar, cast
 from datetime import datetime, timedelta, timezone
 
 import pytest
 from click.testing import CliRunner
-from ds_service_client import DsServiceClient
+from ds_service_client import DsServiceClientAsync
 
 from slurm_workflows import swtop as swtop_mod
-from slurm_workflows.swtop import Collector, Snapshot, render, swtop
+from slurm_workflows.swtop import UNNAMED, Collector, Snapshot, render, swtop
 from worker_harness import make_worker
 from test_monitors import wait_for
+
+T = TypeVar("T")
 
 
 def _now_utc() -> str:
@@ -30,9 +40,45 @@ def square(x):
     return x * x
 
 
+class LoopBound:
+    """A collector, and the one event loop its client belongs to.
+
+    `DsServiceClientAsync` binds its channel to the loop running when it is made,
+    so a fresh `asyncio.run` per call
+    would leave the second poll talking to a loop that has closed.
+    One loop is kept for the test instead.
+    """
+
+    def __init__(
+        self,
+        address: str,
+        wrap: Callable[[DsServiceClientAsync], Any] = lambda client: client,
+    ) -> None:
+        self.loop = asyncio.new_event_loop()
+        self.client = self.run(_make_client(address))
+        self.collector = Collector(wrap(self.client), address)
+
+    def run(self, coro: Coroutine[Any, Any, T]) -> T:
+        return self.loop.run_until_complete(coro)
+
+    def snapshot(self) -> Snapshot:
+        return self.run(self.collector.snapshot())
+
+    def close(self) -> None:
+        self.run(self.client.close())
+        self.loop.close()
+
+
+async def _make_client(address: str) -> DsServiceClientAsync:
+    """Build the client with the loop that will own it running."""
+    return DsServiceClientAsync(address)
+
+
 @pytest.fixture
-def collector(ds_client, ds_service_address):
-    return Collector(ds_client, ds_service_address)
+def collector(ds_service_address):
+    bound = LoopBound(ds_service_address)
+    yield bound
+    bound.close()
 
 
 class CountingClient:
@@ -42,9 +88,9 @@ class CountingClient:
         self._inner = inner
         self.map_gets = 0
 
-    def map_get(self, key):
+    async def map_get(self, key):
         self.map_gets += 1
-        return self._inner.map_get(key)
+        return await self._inner.map_get(key)
 
     def __getattr__(self, name):
         return getattr(self._inner, name)
@@ -72,25 +118,36 @@ class TestCollectTasks:
         assert snapshot.workers == []
         assert snapshot.tasks == []
 
-    def test_counts_cover_every_task_named_or_not(self, collector, executor):
-        [executor.submit("cpu", square, i) for i in range(3)]
+    def test_every_task_is_listed_named_or_not(self, collector, executor):
+        tasks = [executor.submit("cpu", square, i) for i in range(3)]
 
         snapshot = collector.snapshot()
 
         assert snapshot.counts["ready"] == 3
-        assert snapshot.tasks == [], "unnamed tasks are counted, not listed"
+        assert [t.task_id for t in snapshot.tasks] == [t.task_id for t in tasks]
+        assert [t.name for t in snapshot.tasks] == [UNNAMED] * 3
 
-    def test_named_tasks_are_listed(self, collector, executor):
+    def test_a_named_task_is_listed_under_its_name(self, collector, executor):
         task = executor.submit("cpu", square, 1)
-        executor.submit("cpu", square, 2)
+        other = executor.submit("cpu", square, 2)
         executor.set_task_name(task, "the-named-one")
 
-        (listed,) = collector.snapshot().tasks
+        listed = {t.task_id: t for t in collector.snapshot().tasks}
 
-        assert listed.name == "the-named-one"
-        assert listed.task_id == task.task_id
-        assert listed.state == "Ready"
-        assert listed.worker == ""
+        assert listed[task.task_id].name == "the-named-one"
+        assert listed[task.task_id].state == "Ready"
+        assert listed[task.task_id].worker == ""
+        assert listed[other.task_id].name == UNNAMED
+
+    def test_a_name_published_after_a_poll_is_picked_up(self, collector, executor):
+        task = executor.submit("cpu", square, 1)
+
+        (before,) = collector.snapshot().tasks
+        executor.set_task_name(task, "named-late")
+        (after,) = collector.snapshot().tasks
+
+        assert before.name == UNNAMED, "nothing had named it yet"
+        assert after.name == "named-late", "the missing name is looked for again"
 
     def test_a_running_task_names_its_worker(
         self, collector, executor, ds_service_address, tmp_path
@@ -139,6 +196,71 @@ class TestCollectTasks:
         assert states == [("a-running", "Running"), ("b-ready", "Complete")]
 
 
+class TestCollectWorkerJobs:
+    """The pilot jobs, as the executor left them in the store."""
+
+    def test_a_job_appears_when_it_is_submitted(self, collector, executor):
+        assert collector.snapshot().worker_jobs == []
+
+        executor.define_worker("cpu", [])
+        executor.scale_workers("cpu", 1)
+
+        (listed,) = collector.snapshot().worker_jobs
+        (worker_name,) = executor.groups["cpu"].workers
+        assert listed.name == worker_name
+        assert listed.group == "cpu"
+        assert listed.slurm_job_id == str(
+            executor.groups["cpu"].workers[worker_name].job_id
+        )
+        assert listed.submit_time
+
+    def test_jobs_are_sorted_by_group_then_name(self, collector, executor):
+        executor.define_worker("gpu", [])
+        executor.define_worker("cpu", [])
+        executor.scale_workers("gpu", 1)
+        executor.scale_workers("cpu", 2)
+
+        listed = collector.snapshot().worker_jobs
+
+        assert [job.group for job in listed] == ["cpu", "cpu", "gpu"]
+        assert listed[0].name < listed[1].name
+
+    def test_a_job_with_no_process_is_still_listed(self, collector, executor):
+        """Which is what a queued job looks like: submitted, not yet running."""
+        executor.define_worker("cpu", [])
+        executor.scale_workers("cpu", 1)
+
+        snapshot = collector.snapshot()
+
+        assert len(snapshot.worker_jobs) == 1
+        assert snapshot.workers == []
+
+    def test_a_description_that_cannot_be_read_is_shown_as_unknown(
+        self, collector, ds_client
+    ):
+        ds_client.map_set("worker_job_info:half-written", b"not json")
+
+        (listed,) = collector.snapshot().worker_jobs
+
+        assert listed.name == "half-written"
+        assert listed.slurm_job_id == "?"
+
+    def test_a_job_is_read_once(self, ds_service_address, executor):
+        """Written once when the job is submitted, so never read twice."""
+        executor.define_worker("cpu", [])
+        executor.scale_workers("cpu", 1)
+        bound = LoopBound(ds_service_address, wrap=CountingClient)
+        counting = cast(CountingClient, bound.collector.client)
+
+        bound.snapshot()
+        after_first = counting.map_gets
+        bound.snapshot()
+
+        assert after_first == 1, "the whole description is one key"
+        assert counting.map_gets == after_first
+        bound.close()
+
+
 class TestCollectWorkers:
     def test_a_worker_appears_once_it_registers(
         self, collector, ds_service_address, tmp_path
@@ -185,27 +307,29 @@ class TestCollectWorkers:
             worker.close()
 
     def test_an_identity_is_read_once_however_long_it_runs(
-        self, ds_client, ds_service_address, tmp_path
+        self, ds_service_address, tmp_path
     ):
         """The published description never changes, so re-reading it is waste."""
         worker = make_worker(ds_service_address, tmp_path, group="cpu", name="w-1")
-        counting = CountingClient(ds_client)
-        # Forwards everything it does not count, as the worker harness's
-        # doubles do, so it stands in for a client without subclassing one.
-        collector = Collector(cast(DsServiceClient, counting), ds_service_address)
+        # `CountingClient` forwards everything it does not count,
+        # as the worker harness's doubles do,
+        # so it stands in for a client without subclassing one.
+        bound = LoopBound(ds_service_address, wrap=CountingClient)
+        counting = cast(CountingClient, bound.collector.client)
 
-        collector.snapshot()
+        bound.snapshot()
         after_first = counting.map_gets
-        collector.snapshot()
+        bound.snapshot()
 
         assert after_first == 1, "the whole description is one key"
         assert counting.map_gets == after_first
         worker.close()
+        bound.close()
 
     def test_a_description_that_cannot_be_read_is_shown_as_unknown(
         self, collector, ds_client
     ):
-        ds_client.map_set("worker_info:something-else", b"not json")
+        ds_client.map_set("worker_process_info:something-else", b"not json")
 
         (listed,) = collector.snapshot().workers
 
@@ -214,11 +338,11 @@ class TestCollectWorkers:
 
     def test_an_unreadable_description_is_not_cached(self, collector, ds_client):
         """It may be a writer this reader arrived in the middle of."""
-        ds_client.map_set("worker_info:w", b"not json")
+        ds_client.map_set("worker_process_info:w", b"not json")
         collector.snapshot()
 
         ds_client.map_set(
-            "worker_info:w",
+            "worker_process_info:w",
             json.dumps(
                 {
                     "group": "cpu",
@@ -304,11 +428,19 @@ class TestRender:
         pilot_jobs("cpu")
 
     def test_an_idle_server_says_so(self, collector):
+        """A pilot job is submitted here, but nothing is running in it yet."""
         out = render(collector.snapshot())
 
         assert "total 0" in out
-        assert "no workers have registered" in out
-        assert "no tasks have been named" in out
+        assert "worker jobs (1)" in out
+        assert "no worker processes have registered" in out
+        assert "no tasks have been submitted" in out
+
+    def test_a_server_with_nothing_submitted_says_so(self):
+        out = render(Snapshot(address="a", when=datetime.now()))
+
+        assert "no pilot jobs have been submitted" in out
+        assert "no worker processes have registered" in out
 
     def test_the_tables_carry_the_data(
         self, collector, executor, ds_service_address, tmp_path
@@ -319,8 +451,8 @@ class TestRender:
 
         out = render(collector.snapshot())
 
-        assert "workers (1)" in out
-        assert "named tasks (1)" in out
+        assert "worker processes (1)" in out
+        assert "tasks (1)" in out
         for expected in ["w-1", "testhost", "4242", "the-named-one", task.task_id]:
             assert expected in out
         worker.close()
@@ -397,10 +529,10 @@ class TestCli:
     def stop_after_one_poll(self, monkeypatch):
         """Let one frame be drawn, then interrupt as a user would."""
 
-        def sleep(seconds):
+        async def sleep(seconds):
             raise KeyboardInterrupt
 
-        monkeypatch.setattr(swtop_mod.time, "sleep", sleep)
+        monkeypatch.setattr(swtop_mod.asyncio, "sleep", sleep)
 
     def test_it_polls_and_stops_on_interrupt(
         self, ds_service_address, stop_after_one_poll
@@ -416,11 +548,11 @@ class TestCli:
     ):
         slept = []
 
-        def sleep(seconds):
+        async def sleep(seconds):
             slept.append(seconds)
             raise KeyboardInterrupt
 
-        monkeypatch.setattr(swtop_mod.time, "sleep", sleep)
+        monkeypatch.setattr(swtop_mod.asyncio, "sleep", sleep)
 
         CliRunner().invoke(swtop, [ds_service_address], catch_exceptions=False)
 
@@ -429,11 +561,11 @@ class TestCli:
     def test_the_interval_can_be_set(self, ds_service_address, monkeypatch):
         slept = []
 
-        def sleep(seconds):
+        async def sleep(seconds):
             slept.append(seconds)
             raise KeyboardInterrupt
 
-        monkeypatch.setattr(swtop_mod.time, "sleep", sleep)
+        monkeypatch.setattr(swtop_mod.asyncio, "sleep", sleep)
 
         CliRunner().invoke(swtop, [ds_service_address, "-i", "0.5"])
 

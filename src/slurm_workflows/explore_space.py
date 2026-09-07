@@ -3,25 +3,9 @@
 Draws a low-discrepancy design over each `SearchSpace` it is given,
 evaluates every point of every design across a pilot pool,
 and keeps what came back.
+Needs neither torch nor botorch.
 
-This is the exploration phase of `OptimizeSpaceBotorch` standing on its own,
-for a sweep that is not going to be followed by a model:
-a first look at a space,
-a baseline to compare a search against,
-or a set of points to hand to something else.
-The Sobol' engine is scipy's rather than botorch's,
-so exploring a space needs neither torch nor botorch installed.
-
-Several spaces are explored at once rather than one after another.
-Each is an `ExplorationTask`, with its own space, objective and queue,
-and one `ExploreSpaceSobolQMC` submits the whole lot before waiting for any
-of it: a sweep of 16 points and a sweep of 512 fill the pool together
-instead of the first leaving it idle.
-
-Sobol' is used rather than a uniform random sample
-because a low-discrepancy sequence covers the space more evenly
-at the sample sizes a cluster run can afford:
-a random design of 64 points leaves clumps and gaps that a Sobol' one does not.
+See `docs/reference.md` for what a sweep is for and how it behaves.
 """
 
 from __future__ import annotations
@@ -41,6 +25,7 @@ from .utils import (
     RemoteExecutionError,
     floor_power_of_two,
     format_mapping,
+    index_width,
     objective_value,
 )
 
@@ -52,33 +37,21 @@ ObjectiveFunction = Callable[..., ObjectiveOutput]
 class ExplorationTask:
     """One space to explore, and everything needed to explore it.
 
-    name: names this task. It labels the progress lines and keys the
-        results, so no two tasks of one sweep may share one.
+    name: names this task. Keys its results; unique within a sweep.
     space: the search space.
     objective: the function to evaluate.
-        Its argument names must match the keys of `space`.
-        It returns a mapping: the value of interest under `objective_key`,
-        plus anything else worth recording about the evaluation.
-        Only the value under `objective_key` is ranked,
-        but the whole mapping is kept.
+        Its argument names must match the keys of `space`,
+        and it returns a mapping carrying `objective_key`.
     objective_queue: queue(s) the evaluations are submitted to.
-        Tasks may name different queues, and are still submitted together.
-    num_exploration_points: number of points to sample.
-        Truncated to the nearest lower power of two.
-        Left as None, the count `ExploreSpaceSobolQMC` was constructed with
-        is used instead.
+    num_exploration_points: number of points to sample,
+        truncated to the nearest lower power of two.
+        Taken from the sweep when None.
     seed: seed for this task's design.
-        Left as None, one is drawn from os.urandom and printed,
-        so the run can still be repeated afterwards.
-    objective_key: the key in the objective's result
-        holding the value to rank points by.
-        Set it when the objective already reports under another name,
-        such as "loss" or "rmse".
+        Drawn from os.urandom and printed when None.
+    objective_key: the key of the result to rank points by, lower first.
         Every other key is recorded and not ranked.
-        Lower is better, as in `OptimizeSpaceBotorch`:
-        negate a score you would rather maximize.
     extra_objective_kwargs: extra keyword arguments for the objective.
-        Forwarded verbatim, and may not shadow a parameter of the space.
+        May not shadow a parameter of the space.
     """
 
     name: str
@@ -95,11 +68,7 @@ class ExplorationTask:
 class SavedResults:
     """Exactly what a results file holds for one task.
 
-    `unit_points` is not in the file:
-    it is derivable from the points and the space,
-    and only whoever holds the space can derive it,
-    so a reader recomputes it rather than trusting a stored copy
-    that may have been written against another space.
+    `unit_points` is not in the file; a reader recomputes it.
     """
 
     points: list[dict[str, Any]] = field(default_factory=list)
@@ -113,10 +82,7 @@ def load_results(paths: Iterable[Path | str]) -> dict[str, SavedResults]:
     Reads what `ExploreSpaceSobolQMC.save` and `OptimizeSpaceBotorch.save`
     write: a gzipped pickle of one dict keyed by task name,
     each entry holding `points`, `values` and `outputs`.
-
-    Merging is what makes a run resumable:
-    the exploration file and every optimization file since
-    are one argument list, and a task's observations are their concatenation.
+    A task's observations are the concatenation, in the order given.
     """
     merged: dict[str, SavedResults] = {}
 
@@ -159,10 +125,7 @@ class ExplorationResult:
     The four lists are index-aligned:
     `points[i]` was evaluated, returned `outputs[i]`,
     was ranked by `values[i]`, and sits at `unit_points[i]` in the unit cube.
-
-    `unit_points` holds the standardized coordinates of the point the
-    objective actually ran at, after rounding rather than the drawn
-    coordinate, so what is recorded is always a location that was evaluated.
+    `unit_points` is where the objective ran, after any rounding.
     """
 
     points: list[dict[str, Any]] = field(default_factory=list)
@@ -183,20 +146,15 @@ class ExploreSpaceSobolQMC:
     ):
         """Initialize.
 
-        tasks: the spaces to explore, one `ExplorationTask` each.
-            They run together rather than one after another,
-            so a small sweep does not hold the pool
-            while a large one waits its turn.
+        tasks: the spaces to explore, one `ExplorationTask` each,
+            all of them run together.
         executor: executor for parallelizing objective execution.
-        num_exploration_points: point count for tasks that do not carry
-            their own. A task with neither is an error rather than a guess.
+        num_exploration_points: point count for tasks that do not carry their own.
+            A task with neither raises.
 
-        Every task is checked here rather than when it runs,
-        so a misspelled keyword or an empty space
-        is reported before anything reaches the cluster.
-        The tasks are copied, with the point count and the seed filled in,
-        so `self.tasks` says what will actually be run
-        and the caller's own objects are left alone.
+        Every task is validated here rather than when it runs.
+        `self.tasks` holds copies with the point count and seed filled in;
+        the caller's own objects are left alone.
         """
         if not tasks:
             raise ValueError("no exploration tasks given")
@@ -268,56 +226,45 @@ class ExploreSpaceSobolQMC:
     def design(self, name: str) -> list[dict[str, Any]]:
         """The points a task will evaluate, without evaluating them.
 
-        Drawing is reproducible: the same seed redraws the same design,
-        so this is also how to see what a run will do before it runs.
+        Reproducible: the same seed redraws the same design.
         """
         task = self._task(name)
         assert task.num_exploration_points is not None  # filled in by _resolve
         assert task.seed is not None
 
-        # `random_base2` rather than `random`, which warns that a count
-        # that is not a power of two loses the balance property.
-        # The count is already floored to one, so it is the same draw
-        # asked for in the terms scipy states it in.
+        # `random_base2`: the count is already floored to a power of two,
+        # which is the form scipy takes without warning.
         engine = qmc.Sobol(d=space_dim(task.space), scramble=True, rng=task.seed)
         design = engine.random_base2(m=task.num_exploration_points.bit_length() - 1)
         return [to_params(task.space, row.tolist()) for row in design]
 
-    def run_exploration_jobs(self) -> None:
+    def run(self) -> None:
         """Evaluate every task's design, all of them in one batch.
 
-        Everything is submitted before anything is waited for,
-        so the tasks share the pool rather than queueing behind each other,
-        and a task with its own queue is served by that queue's workers
-        while the others run elsewhere.
-
         Blocks until every point of every task is back.
-        Calling it a second time draws the same designs again,
-        so a repeated call re-evaluates the same points
-        rather than exploring further.
+        Calling it again re-evaluates the same designs.
+        Each point is named `<task>-explore-<index>` on the queue server.
         """
         submitted: list[tuple[ExplorationTask, dict[str, Any], Task]] = []
         for task in self.tasks:
-            for params in self.design(task.name):
-                submitted.append(
-                    (
-                        task,
-                        params,
-                        self.executor.submit(
-                            task.objective_queue,
-                            task.objective,
-                            **params,
-                            **task.extra_objective_kwargs,
-                        ),
-                    )
+            design = self.design(task.name)
+            width = index_width(len(design))
+            for i, params in enumerate(design):
+                submission = self.executor.submit(
+                    task.objective_queue,
+                    task.objective,
+                    **params,
+                    **task.extra_objective_kwargs,
                 )
+                self.executor.set_task_name(
+                    submission, f"{task.name}-explore-{i:0{width}d}"
+                )
+                submitted.append((task, params, submission))
 
         try:
             self._wait(submitted)
         except RuntimeError:
             # Keep what did come back before reporting the failure.
-            # A sweep of a few thousand points must not lose all of them
-            # to one that failed, since `save()` is what the next run reads.
             self._record_returned(submitted)
             raise
 
@@ -330,13 +277,7 @@ class ExploreSpaceSobolQMC:
     def _wait(
         self, submitted: list[tuple[ExplorationTask, dict[str, Any], Task]]
     ) -> None:
-        """Wait for the whole batch, and say which tasks failed if it did.
-
-        Deferred rather than immediate:
-        one failed evaluation should not hide the rest of the sweep,
-        and with several spaces in flight
-        the interesting question is which of them broke.
-        """
+        """Wait for the whole batch, and name the tasks that failed."""
         try:
             self.executor.wait(
                 [submission for _, _, submission in submitted],
@@ -362,12 +303,7 @@ class ExploreSpaceSobolQMC:
     def _record_returned(
         self, submitted: list[tuple[ExplorationTask, dict[str, Any], Task]]
     ) -> None:
-        """Record every evaluation that did come back, ignoring the rest.
-
-        For the failure path only, where an exception is already on its way:
-        a task that failed, or returned something unusable, is skipped
-        rather than raising over the report of what went wrong.
-        """
+        """Record every evaluation that came back; for the failure path only."""
         for task, params, submission in submitted:
             try:
                 self._record(task, params, submission)
@@ -423,25 +359,15 @@ class ExploreSpaceSobolQMC:
         """Write what every task measured to a gzipped pickle.
 
         The file holds one dict keyed by task name,
-        each entry holding `points`, `values` and `outputs`
-        under those names, each a list in submission order and index-aligned
-        with the other two.
-        Read it back with:
+        each entry holding `points`, `values` and `outputs`,
+        index-aligned and in submission order.
+        Read it back with `load_results`, or with:
 
             with gzip.open(path, "rb") as fobj:
                 results = pickle.load(fobj)
 
-        Plain `pickle`, not `cloudpickle`:
-        this is the measurements, not the code that produced them,
-        so anything an objective returns that a plain unpickler
-        cannot reconstruct does not belong in the file.
-        Gzipped because an exploration of a few thousand points
-        is a few thousand near-identical small mappings,
-        which is what compresses well.
-
-        Overwrites `path`. Saving before anything has been evaluated
-        writes each task's three empty lists rather than raising:
-        the file says what the sweep measured, and that is nothing yet.
+        Plain `pickle`, so an objective's result has to be plainly picklable.
+        Overwrites `path`, and writes empty lists if nothing was evaluated.
         """
         results = {
             name: {

@@ -122,10 +122,7 @@ def submit_sbatch_job(
         env=get_clean_environ(),
     )
 
-    # Extract job id.
-    # Searched for rather than matched at the start:
-    # a site that prints a banner or a warning on stdout
-    # would otherwise turn a successful submission into a parse failure.
+    # Searched for, not matched at the start: a site may print a banner.
     match = SBATCH_OUTPUT_REGEX.search(proc.stdout)
     if match is None:
         raise RuntimeError("Failed to parse sbatch output", proc, match)

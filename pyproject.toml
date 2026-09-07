@@ -27,9 +27,13 @@ dependencies = [
     "typeguard>=3",
     "psutil",
     "numpy",
+    # The terminal UI `swtop` runs in.
+    "textual",
     # 1.15 is where `qmc.Sobol` took `rng=`, the seed argument used here.
     "scipy>=1.15",
-    "ds-service-client>=4.0.0"
+    # 5.0.0 is where `task_search_id` arrived,
+    # which is how `swtop` lists the tasks on a server.
+    "ds-service-client>=5.0.0"
 ]
 
 [project.optional-dependencies]

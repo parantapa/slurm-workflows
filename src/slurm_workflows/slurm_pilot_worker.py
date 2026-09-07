@@ -25,10 +25,9 @@ from .monitors import (
 
 NEXT_TASK_RETRY_TIME_S: float = 0.1
 
-# Where a worker says what and where it is, keyed on its worker id.
-# `swtop` reads it back, so the name and the JSON fields under it
-# are a contract between the two.
-WORKER_INFO_PREFIX = "worker_info:"
+# One JSON key per worker process, keyed on its worker id.
+# Read by `swtop`; the fields are listed in `docs/concepts.md`.
+WORKER_PROCESS_INFO_PREFIX = "worker_process_info:"
 
 
 class PilotWorkerProcess:
@@ -49,17 +48,13 @@ class PilotWorkerProcess:
         self.server_address = server_address
         self.work_dir = work_dir
 
-        # The worker's name leads, so the id opens with what the executor
-        # called this worker (`<executor>.worker.<group>.<index>`),
-        # and the placement that name cannot know follows it.
-        # No group of its own: the name already carries one.
+        # `<worker-name>.<job>.<host>.<pid>`; the name carries the group.
         self.worker_id = "%s.%s.%s.%s" % (name, slurm_job_id, hostname, pid)
         self.logger = logging.getLogger("worker_process")
         self.client = DsServiceClient(self.server_address)
 
-        # Published before the actor is built,
-        # so a worker that dies in its actor's constructor
-        # has still said which job and host it died on.
+        # Before the actor is built, so a worker that dies building one
+        # has still said where it died.
         self._publish_identity(slurm_job_id, hostname, pid)
 
         self.monitors: list[Monitor] = []
@@ -69,9 +64,7 @@ class PilotWorkerProcess:
         try:
             self.actor_instance = self._build_actor(actor_class_name)
         except Exception:
-            # Nothing calls `close()` on a worker whose constructor raised,
-            # so the threads and the channel started above
-            # would outlive the object that owns them.
+            # Nothing calls `close()` on a worker whose constructor raised.
             self._stop_monitors()
             self.client.close()
             raise
@@ -93,19 +86,7 @@ class PilotWorkerProcess:
         return klass(*args, **kwargs)
 
     def _publish_identity(self, slurm_job_id: int, hostname: str, pid: int) -> None:
-        """Record who this worker is in the key value store.
-
-        The worker id alone reaches the coordinator, through `task_get`,
-        and it is the only handle anything else has on a worker,
-        so the parts that identify the process it names are published
-        under it.
-
-        One key, not one per field:
-        a reader that arrives between two writes would otherwise see a
-        worker whose id is known and whose host is not.
-        JSON rather than a pickle, for the same reason task names are text:
-        the point of publishing this is that another program can read it.
-        """
+        """Record who this worker is in the key value store, as one JSON key."""
         identity = {
             "group": self.group,
             "name": self.name,
@@ -114,7 +95,7 @@ class PilotWorkerProcess:
             "pid": pid,
         }
         self.client.map_set(
-            f"{WORKER_INFO_PREFIX}{self.worker_id}",
+            f"{WORKER_PROCESS_INFO_PREFIX}{self.worker_id}",
             json.dumps(identity).encode("utf-8"),
         )
 
@@ -123,15 +104,7 @@ class PilotWorkerProcess:
     ) -> None:
         """Take on monitoring this node and this job, if nobody else has.
 
-        A node runs one worker per task slot and a job spans many nodes,
-        so most workers here have a peer already watching the same thing.
-        The counters are the election:
-        `counter_get_next_value` hands out distinct, gap-free values,
-        so exactly one worker per host and one per job is told 1,
-        with no lock and no designated rank.
-
-        Nothing hands the job back if that worker dies.
-        The series simply stops, which `swtop` shows as stale.
+        The worker a counter answers 1 to takes the subject, for good.
         """
         if self.client.counter_get_next_value(f"host_monitor:{hostname}") == 1:
             self.logger.info("Monitoring host %s", hostname)
@@ -151,9 +124,7 @@ class PilotWorkerProcess:
     def _get_actor_ctor_arg(self, key: str, default: Any) -> Any:
         """Read one cloudpickled constructor argument out of the key value store.
 
-        A missing key means the caller passed nothing for it,
-        which is the common case:
-        `define_worker` writes a key only when it is given a value.
+        A missing key means none was passed.
         """
         try:
             value = self.client.map_get(key)
@@ -164,8 +135,7 @@ class PilotWorkerProcess:
     def _stop_monitors(self) -> None:
         """Stop whatever monitoring this worker took on.
 
-        Idempotent, and safe on a half-built worker:
-        the list exists before the first monitor is started.
+        Idempotent, and safe on a half-built worker.
         """
         for monitor in self.monitors:
             monitor.stop()
@@ -189,10 +159,8 @@ class PilotWorkerProcess:
                 try:
                     task = self.client.task_get(self.worker_id, self.group)
                 except NoTaskAvailable:
-                    # Nothing on the queue right now, which is the normal
-                    # idle case; sleep and ask again.
-                    # A TimeoutError here means an unreachable server instead,
-                    # and is deliberately left to the handler below.
+                    # An idle queue: sleep and ask again.
+                    # A TimeoutError is a server problem, handled below.
                     time.sleep(NEXT_TASK_RETRY_TIME_S)
                     continue
 
@@ -225,11 +193,8 @@ class PilotWorkerProcess:
             except Exception:
                 self.logger.exception("Unexpected exception")
 
-                # An unreachable server is the likely cause,
-                # and it answers straight away rather than at the deadline
-                # -- a refused connection is a TimeoutError in no time at all.
-                # Without this the loop would spin on a core
-                # and fill the job's output file with the same traceback.
+                # A refused connection returns at once, so without this
+                # sleep the loop would spin on a core.
                 time.sleep(NEXT_TASK_RETRY_TIME_S)
 
 

@@ -1,6 +1,6 @@
 # How to run the tests
 
-[← back to the main README](../README.md)
+[<- back to the main README](../README.md)
 
 From the repository root:
 
@@ -16,7 +16,7 @@ and the rest is GP fits.
 Most of that first 26s is one ds-service process started per test,
 which is the price of testing against the real queue.
 
-The `[test]` extra pulls botorch, and so torch — a large download.
+The `[test]` extra pulls botorch, and so torch - a large download.
 Without it `test_optimize_space_botorch.py` skips
 and the rest of the suite still runs.
 `[dev]` adds `black` and `pyright`,
@@ -28,8 +28,8 @@ alongside a passing suite.
 **Slurm is mocked.**
 `FakeSlurm` (in `tests/conftest.py`) replaces the `subprocess` module
 *inside* `slurm_utils`, intercepting `sbatch` / `squeue` / `scancel`.
-Everything above that boundary is the real code path
-— script rendering, job-id parsing, environment scrubbing —
+Everything above that boundary is the real code path -
+script rendering, job-id parsing, environment scrubbing -
 and tests can inspect the scripts that would have been submitted
 (`fake_slurm.submissions`)
 or inject command failures (`fake_slurm.fail_command("sbatch")`).
@@ -60,7 +60,8 @@ Paths are relative to [`tests/`](../tests).
 | `test_executor.py` | `SlurmPilotExecutor`: worker groups, scaling, submit/poll, lifecycle |
 | `test_worker.py` | `PilotWorkerProcess` and the `slurm-pilot-worker` CLI |
 | `test_monitors.py` | The host and cgroup samplers and the monitor threads |
-| `test_swtop.py` | The `swtop` monitor: what it collects, how it renders, and the CLI |
+| `test_swtop.py` | The `swtop` monitor: what it collects, how it renders as text, and the CLI |
+| `test_swtop_tui.py` | The Textual app: table updates, what each block shows, and polling |
 | `test_search_space.py` | The range types and the unit cube mapping (no botorch needed) |
 | `test_explore_space.py` | `ExploreSpaceSobolQMC`: the design it draws and what it records (no botorch needed) |
 | `test_utils.py` | The shared helpers |
@@ -75,12 +76,21 @@ Paths are relative to [`tests/`](../tests).
   `PilotWorkerProcess.main()` loops forever by design
   and swallows every `Exception` so a bad task can't kill a worker.
   `run_worker()` stops it with a `BaseException` raised from `task_done`
-  after the expected number of tasks
-  — that's why `StopWorker` is not an `Exception`.
+  after the expected number of tasks -
+  that's why `StopWorker` is not an `Exception`.
   `poll_worker()` counts `task_get` calls instead of completions,
   which is the only way to bound a worker with nothing to run:
   an empty queue completes no tasks,
   so `run_worker` would never reach its limit.
+- **The Textual app is driven headlessly.**
+  `test_swtop_tui.py` runs each scenario through `App.run_test()`
+  inside `asyncio.run`, so the suite needs no async plugin.
+  Polling happens in a Textual worker, so a test that waits for a poll
+  waits on `app.workers.wait_for_complete()` rather than sleeping.
+  The collector's client belongs to the loop it was made on,
+  so tests against the real server build it inside the scenario
+  (`open_collector`), and `test_swtop.py` keeps one loop per test
+  so a collector can be polled twice.
 - **Tests are bounded by a wall-clock alarm.**
   The executor's polling loop and the worker's main loop
   both run until a condition holds,
@@ -93,13 +103,13 @@ Paths are relative to [`tests/`](../tests).
   (`submit` returns a `Task`, `wait` fills in its `output`),
   and a GP fit already dominates each test,
   so a queue round trip on top would buy nothing.
-  `TestRealExecutor` is what keeps the stand-in honest
-  — it runs a whole optimization
+  `TestRealExecutor` is what keeps the stand-in honest -
+  it runs a whole optimization
   through the real executor, the real queue and a real worker
   (in a thread, since the optimizer blocks in `wait` the moment it submits).
 - **Four botorch tests assert search *behaviour*, not bookkeeping.**
-  They are the ones that catch the objective's sign being flipped
-  — botorch maximizes, the optimizer minimizes.
+  They are the ones that catch the objective's sign being flipped -
+  botorch maximizes, the optimizer minimizes.
   They are stochastic
   (torch's global RNG is left unseeded, so each run is a fresh sample),
   and their margins were chosen from measured spreads:
@@ -109,8 +119,8 @@ Paths are relative to [`tests/`](../tests).
   Assert on that median rather than the max: `qLogNoisyExpectedImprovement`
   deliberately probes away from the incumbent, so single points reach 1.0
   on perfectly correct runs.
-  All four use *unimodal* objectives on purpose
-  — an earlier Himmelblau version of the random-search comparison
+  All four use *unimodal* objectives on purpose -
+  an earlier Himmelblau version of the random-search comparison
   lost 1 run in 10.
 - **Queue name == worker group name.**
   A task submitted to queue `cpu` is only served by workers in group `cpu`;

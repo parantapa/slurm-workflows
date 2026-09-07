@@ -1,50 +1,51 @@
 """`swtop`: a live view of a `ds-service` task queue.
 
-Polls the server and redraws a summary of its tasks and of the pilot
-workers that have registered with it.
+Polls the server and redraws a summary of its tasks, of the pilot jobs
+the executor submitted, and of the worker processes running in them.
+`swtop_tui.py` holds the terminal UI; this module decides what to show.
 
-What can be shown is decided by what the server can be asked.
-Task counts by state come from a single RPC,
-so they are always complete.
-Individual tasks and workers have to be discovered
-through the key value store instead,
-which means a worker appears once it has published its identity
-(`PilotWorkerProcess` does that at startup)
-and a task appears once it has been named
-with `SlurmPilotExecutor.set_task_name`.
-An unnamed task is counted, but has no row.
-
-Host and job readings come from the monitor threads in `monitors.py`,
-which one worker per node and one per job runs.
-A subject whose series have stopped is shown as stale
-rather than dropped, since a monitor that died is worth noticing.
+See `docs/how-to-use-swtop.md` for the blocks and what fills them,
+and the monitoring section of `docs/developer-notes.md` for why they
+are collected the way they are.
 """
 
 from __future__ import annotations
 
 import sys
 import json
-import time
-from typing import cast
+import asyncio
+from typing import cast, AsyncIterator
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
+from contextlib import asynccontextmanager
 
 import click
-from ds_service_client import DsServiceClient, TaskState, TaskStateError
+from ds_service_client import DsServiceClientAsync, TaskState, TaskStateError
 
 from .monitors import HOST_SERIES, JOB_SERIES
-from .slurm_pilot_worker import WORKER_INFO_PREFIX
+from .slurm_pilot_executor import WORKER_JOB_INFO_PREFIX
+from .slurm_pilot_worker import WORKER_PROCESS_INFO_PREFIX
 
 DEFAULT_INTERVAL_S: float = 2.0
 
-# The fields a worker publishes about itself, in display order.
+# The fields a worker process publishes about itself,
+# in the order it writes them; the tables order their own columns.
 WORKER_INFO_FIELDS = ["group", "name", "slurm_job_id", "hostname", "pid"]
+
+# The fields the executor publishes about a pilot job, likewise.
+WORKER_JOB_FIELDS = ["name", "group", "slurm_job_id", "submit_time"]
 
 TASK_NAME_PREFIX = "task_name:"
 
+# `task_search_id` matches task ids against a regular expression,
+# and an empty one matches every task the server holds.
+ALL_TASK_IDS = ""
+
+# Shown in place of the name of a task that was never given one.
+UNNAMED = "-"
+
 # How far back a monitored value is still worth showing.
-# A monitor samples every 5 seconds by default,
-# so a subject with nothing this recent has lost the worker watching it.
+# A monitor samples every 5 seconds, so nothing this recent is stale.
 STALE_AFTER_S = 60.0
 
 # Shown when a worker published its id but not the field being read,
@@ -54,10 +55,18 @@ UNKNOWN = "?"
 # The order tasks are listed in: what is happening now, first.
 STATE_ORDER = ["Running", "Ready", "Complete", "Canceled", "Undefined"]
 
+# What each block says when it has nothing to show.
+# Each says why it is empty, since an empty block is usually a question.
+EMPTY_WORKER_JOBS = "no pilot jobs have been submitted through this server"
+EMPTY_WORKERS = "no worker processes have registered with this server"
+EMPTY_HOSTS = "no host is being monitored"
+EMPTY_JOBS = "no slurm job is being monitored"
+EMPTY_TASKS = "no tasks have been submitted to this server"
+
 
 @dataclass
 class WorkerInfo:
-    """One registered worker, as it describes itself in the store."""
+    """One registered worker process, as it describes itself in the store."""
 
     worker_id: str
     group: str
@@ -68,8 +77,22 @@ class WorkerInfo:
 
 
 @dataclass
+class WorkerJobInfo:
+    """One pilot job, as the executor described it when it submitted it."""
+
+    name: str
+    group: str
+    slurm_job_id: str
+    submit_time: str
+
+
+@dataclass
 class TaskInfo:
-    """One named task, with the state the server reports for it."""
+    """One task, with the state the server reports for it.
+
+    `name` is what `SlurmPilotExecutor.set_task_name` published for it,
+    or `UNNAMED` for a task nothing named.
+    """
 
     task_id: str
     name: str
@@ -100,6 +123,7 @@ class Snapshot:
     address: str
     when: datetime
     counts: dict[str, int] = field(default_factory=dict)
+    worker_jobs: list[WorkerJobInfo] = field(default_factory=list)
     workers: list[WorkerInfo] = field(default_factory=list)
     tasks: list[TaskInfo] = field(default_factory=list)
     hosts: list[SubjectInfo] = field(default_factory=list)
@@ -110,25 +134,30 @@ class Snapshot:
 class Collector:
     """Turns the server's RPCs into a `Snapshot`.
 
-    Holds the identity of every worker it has seen
-    and the name of every task it has seen,
-    both of which are written once and never change,
-    so a steady state costs one status batch and two key searches
-    rather than a read per worker per poll.
+    Caches the identities it has read, which are written once and never
+    change, so a steady state re-reads only what is new.
     """
 
-    def __init__(self, client: DsServiceClient, address: str) -> None:
+    def __init__(self, client: DsServiceClientAsync, address: str) -> None:
         self.client = client
         self.address = address
+        self._worker_jobs: dict[str, WorkerJobInfo] = {}
         self._workers: dict[str, WorkerInfo] = {}
         self._task_names: dict[str, str] = {}
 
-    def snapshot(self) -> Snapshot:
-        counts = self.client.task_get_count_by_state()
-        workers = self._collect_workers()
-        tasks = self._collect_tasks(workers)
-        hosts = self._collect_subjects(HOST_SERIES)
-        jobs = self._collect_subjects(JOB_SERIES)
+    async def snapshot(self) -> Snapshot:
+        # None of these five needs an answer from another,
+        # so they go out together and the poll waits once.
+        counts, worker_jobs, workers, hosts, jobs = await asyncio.gather(
+            self.client.task_get_count_by_state(),
+            self._collect_worker_jobs(),
+            self._collect_workers(),
+            self._collect_subjects(HOST_SERIES),
+            self._collect_subjects(JOB_SERIES),
+        )
+        # The tasks do need the workers:
+        # a running task is labelled with the name of the worker holding it.
+        tasks = await self._collect_tasks(workers)
 
         return Snapshot(
             address=self.address,
@@ -139,138 +168,199 @@ class Collector:
                 "complete": counts.complete,
                 "canceled": counts.canceled,
             },
+            worker_jobs=worker_jobs,
             workers=workers,
             tasks=tasks,
             hosts=hosts,
             jobs=jobs,
         )
 
-    def _text(self, key: str) -> str:
+    async def _text(self, key: str) -> str:
         try:
-            return self.client.map_get(key).decode("utf-8", errors="replace")
+            value = await self.client.map_get(key)
         except KeyError:
             return UNKNOWN
+        return value.decode("utf-8", errors="replace")
 
-    def _collect_workers(self) -> list[WorkerInfo]:
-        worker_ids = [
-            key[len(WORKER_INFO_PREFIX) :]
-            for key in self.client.map_search_key(f"^{WORKER_INFO_PREFIX}")
+    async def _collect_worker_jobs(self) -> list[WorkerJobInfo]:
+        """Every pilot job the executor has published, cached like the rest."""
+        names = [
+            key[len(WORKER_JOB_INFO_PREFIX) :]
+            for key in await self.client.map_search_key(f"^{WORKER_JOB_INFO_PREFIX}")
         ]
 
-        listed = []
-        for worker_id in worker_ids:
-            info = self._workers.get(worker_id) or self._worker_info(worker_id)
-            if info is None:
-                # Not cached: whatever is under the key now
-                # is not what a worker writes, and might be later.
-                listed.append(_unknown_worker(worker_id))
-                continue
-            self._workers[worker_id] = info
-            listed.append(info)
+        missing = [n for n in names if n not in self._worker_jobs]
+        read = await asyncio.gather(*(self._worker_job_info(n) for n in missing))
+        for name, info in zip(missing, read):
+            if info is not None:
+                self._worker_jobs[name] = info
 
+        listed = [
+            self._worker_jobs.get(name) or _unknown_worker_job(name) for name in names
+        ]
+        return sorted(listed, key=lambda j: (j.group, j.name))
+
+    async def _worker_job_info(self, name: str) -> WorkerJobInfo | None:
+        """One job's published description, or None if it is not readable."""
+        text = await self._text(f"{WORKER_JOB_INFO_PREFIX}{name}")
+        try:
+            published = json.loads(text)
+            fields = {field: str(published[field]) for field in WORKER_JOB_FIELDS}
+        except (ValueError, TypeError, KeyError):
+            return None
+
+        return WorkerJobInfo(**fields)
+
+    async def _collect_workers(self) -> list[WorkerInfo]:
+        worker_ids = [
+            key[len(WORKER_PROCESS_INFO_PREFIX) :]
+            for key in await self.client.map_search_key(
+                f"^{WORKER_PROCESS_INFO_PREFIX}"
+            )
+        ]
+
+        # Every description the cache is short of, read in one go.
+        missing = [w for w in worker_ids if w not in self._workers]
+        read = await asyncio.gather(*(self._worker_info(w) for w in missing))
+        for worker_id, info in zip(missing, read):
+            if info is not None:
+                # Not cached: it may be a write this read landed in the middle of.
+                self._workers[worker_id] = info
+
+        listed = [
+            self._workers.get(worker_id) or _unknown_worker(worker_id)
+            for worker_id in worker_ids
+        ]
         return sorted(listed, key=lambda w: (w.group, w.name))
 
-    def _worker_info(self, worker_id: str) -> WorkerInfo | None:
-        """One worker's published description, or None if it is not readable.
-
-        A worker writes it as a single key,
-        so what comes back is either all of it or none of it,
-        which is what makes it safe to cache:
-        there is no half-written state to be remembered as final.
-        """
+    async def _worker_info(self, worker_id: str) -> WorkerInfo | None:
+        """One worker's published description, or None if it is not readable."""
+        text = await self._text(f"{WORKER_PROCESS_INFO_PREFIX}{worker_id}")
         try:
-            published = json.loads(self._text(f"{WORKER_INFO_PREFIX}{worker_id}"))
+            published = json.loads(text)
             fields = {name: str(published[name]) for name in WORKER_INFO_FIELDS}
         except (ValueError, TypeError, KeyError):
             return None
 
         return WorkerInfo(worker_id=worker_id, **fields)
 
-    def _collect_tasks(self, workers: list[WorkerInfo]) -> list[TaskInfo]:
-        task_ids = [
-            key[len(TASK_NAME_PREFIX) :]
-            for key in self.client.map_search_key(f"^{TASK_NAME_PREFIX}")
-        ]
+    async def _collect_tasks(self, workers: list[WorkerInfo]) -> list[TaskInfo]:
+        # Which tasks there are, and which of them have been named:
+        # two searches, neither of which needs the other's answer.
+        task_ids, name_keys = await asyncio.gather(
+            self.client.task_search_id(ALL_TASK_IDS),
+            self.client.map_search_key(f"^{TASK_NAME_PREFIX}"),
+        )
         if not task_ids:
             return []
 
-        for task_id in task_ids:
-            if task_id not in self._task_names:
-                self._task_names[task_id] = self._text(f"{TASK_NAME_PREFIX}{task_id}")
+        # Only names that were there are cached: a task seen before
+        # `set_task_name` ran may have been named since.
+        named = {key[len(TASK_NAME_PREFIX) :] for key in name_keys}
+        missing = sorted(named - self._task_names.keys())
+        names = await asyncio.gather(
+            *(self._text(f"{TASK_NAME_PREFIX}{task_id}") for task_id in missing)
+        )
+        self._task_names.update(zip(missing, names))
 
-        # One batched call for every named task,
+        # One batched call for every task,
         # rather than a status RPC apiece.
-        states = self.client.task_get_status(task_ids)
+        states = await self.client.task_get_status(task_ids)
         # A list of ids answers with a list of states, one per id.
         states = cast(list[TaskState], states)
         worker_names = {w.worker_id: w.name for w in workers}
 
-        tasks = []
-        for task_id, state in zip(task_ids, states):
-            state_name = TaskState.Name(state)
-            task = TaskInfo(
+        tasks = [
+            TaskInfo(
                 task_id=task_id,
-                name=self._task_names[task_id],
-                state=state_name,
+                name=self._task_names.get(task_id, UNNAMED),
+                state=TaskState.Name(state),
             )
-            if state_name == "Running":
-                task.worker = self._holder(task_id, worker_names)
-            tasks.append(task)
+            for task_id, state in zip(task_ids, states)
+        ]
 
-        return sorted(tasks, key=lambda t: (_state_rank(t.state), t.name, t.task_id))
+        # Who holds a task is a read apiece, so the running ones go together.
+        running = [t for t in tasks if t.state == "Running"]
+        holders = await asyncio.gather(
+            *(self._holder(t.task_id, worker_names) for t in running)
+        )
+        for task, holder in zip(running, holders):
+            task.worker = holder
 
-    def _collect_subjects(self, prefixes: dict[str, str]) -> list[SubjectInfo]:
+        # Named before unnamed within a state:
+        # a name is what somebody wanted to be able to find.
+        return sorted(
+            tasks,
+            key=lambda t: (_state_rank(t.state), t.name == UNNAMED, t.name, t.task_id),
+        )
+
+    async def _collect_subjects(self, prefixes: dict[str, str]) -> list[SubjectInfo]:
         """The latest reading of every subject one monitor writes about.
 
-        The subjects are discovered from one of the series
-        rather than from a list of nodes or jobs,
-        because a monitor is the only thing that knows either exists.
+        The subjects are discovered from one of the series.
         """
         first = next(iter(prefixes.values()))
         subjects = sorted(
-            key[len(first) :] for key in self.client.time_series_search_key(f"^{first}")
+            key[len(first) :]
+            for key in await self.client.time_series_search_key(f"^{first}")
         )
         if not subjects:
             return []
 
-        # Only the tail of each series is asked for.
-        # Reading it whole would grow without bound
-        # over a run long enough to be worth watching.
+        # The tail only: a whole series grows without bound over a run.
         since = (
             datetime.now(timezone.utc) - timedelta(seconds=STALE_AFTER_S)
         ).isoformat()
 
-        readings = []
-        for subject in subjects:
-            values = {}
-            for name, prefix in prefixes.items():
-                points = self.client.time_series_get(
-                    f"{prefix}{subject}", start_time=since
-                )
-                if points:
-                    values[name] = points[-1].value
-            readings.append(SubjectInfo(subject=subject, values=values))
-        return readings
+        # Every series of every subject in one go.
+        wanted = [
+            (subject, name, prefix)
+            for subject in subjects
+            for name, prefix in prefixes.items()
+        ]
+        series = await asyncio.gather(
+            *(
+                self.client.time_series_get(f"{prefix}{subject}", start_time=since)
+                for subject, _, prefix in wanted
+            )
+        )
 
-    def _holder(self, task_id: str, worker_names: dict[str, str]) -> str:
-        """The name of the worker running `task_id`, as far as it can be told.
+        readings = {subject: SubjectInfo(subject=subject) for subject in subjects}
+        for (subject, name, _), points in zip(wanted, series):
+            if points:
+                readings[subject].values[name] = points[-1].value
+        return [readings[subject] for subject in subjects]
 
-        The task can finish between the status call and this one,
-        and the worker holding it need not be one that registered
-        (anything with the client library can take a task),
-        so neither answer is guaranteed.
-        """
+    async def _holder(self, task_id: str, worker_names: dict[str, str]) -> str:
+        """The name of the worker running `task_id`, or "" if it cannot be told."""
         try:
-            worker_id = self.client.task_get_worker_id(task_id)
+            worker_id = await self.client.task_get_worker_id(task_id)
         except (KeyError, TaskStateError):
             return ""
         return worker_names.get(worker_id, worker_id)
 
 
+@asynccontextmanager
+async def open_collector(address: str) -> AsyncIterator[Collector]:
+    """A collector on a client of its own, closed on the way out.
+
+    Must be entered on the event loop the client is to belong to.
+    """
+    async with DsServiceClientAsync(address) as client:
+        yield Collector(client, address)
+
+
 def _unknown_worker(worker_id: str) -> WorkerInfo:
-    """A row for a worker whose description could not be read."""
+    """A row for a worker process whose description could not be read."""
     return WorkerInfo(
         worker_id=worker_id, **{name: UNKNOWN for name in WORKER_INFO_FIELDS}
+    )
+
+
+def _unknown_worker_job(name: str) -> WorkerJobInfo:
+    """A row for a pilot job whose description could not be read."""
+    return WorkerJobInfo(
+        **{field: UNKNOWN for field in WORKER_JOB_FIELDS} | {"name": name}
     )
 
 
@@ -302,6 +392,81 @@ def _cell(values: dict[str, float], name: str, fmt) -> str:
     return fmt(values[name])
 
 
+# The columns of each block, shared by the text frames and the UI.
+WORKER_JOB_COLUMNS = ["NAME", "GROUP", "JOB", "SUBMITTED"]
+WORKER_COLUMNS = ["NAME", "GROUP", "HOST", "JOB", "PID"]
+HOST_COLUMNS = ["HOST", "FREE MEM", "LOAD", "/dev/shm", "/tmp"]
+JOB_COLUMNS = ["JOB", "MEMORY", "CPU"]
+TASK_COLUMNS = ["NAME", "TASK ID", "STATE", "WORKER"]
+
+
+def counts_line(snapshot: Snapshot) -> str:
+    """The task counts, as one line."""
+    counts = snapshot.counts
+    total = sum(counts.values())
+    return (
+        "tasks  "
+        + "  ".join(f"{name} {counts[name]}" for name in counts)
+        + f"  total {total}"
+    )
+
+
+def worker_job_rows(snapshot: Snapshot) -> list[tuple[str, list[str]]]:
+    """One row per submitted pilot job, keyed by its worker name."""
+    return [
+        (job.name, [job.name, job.group, job.slurm_job_id, job.submit_time])
+        for job in snapshot.worker_jobs
+    ]
+
+
+def worker_rows(snapshot: Snapshot) -> list[tuple[str, list[str]]]:
+    """One row per registered worker process, keyed by its worker id."""
+    return [
+        (w.worker_id, [w.name, w.group, w.hostname, w.slurm_job_id, w.pid])
+        for w in snapshot.workers
+    ]
+
+
+def host_rows(snapshot: Snapshot) -> list[tuple[str, list[str]]]:
+    """One row per monitored host, keyed by its hostname."""
+    return [
+        (
+            host.subject,
+            [
+                _subject(host),
+                _cell(host.values, "free_memory", _bytes),
+                _cell(host.values, "load_average", lambda v: f"{v:.2f}"),
+                _cell(host.values, "dev_shm_used", lambda v: f"{v:.1f}%"),
+                _cell(host.values, "tmp_used", lambda v: f"{v:.1f}%"),
+            ],
+        )
+        for host in snapshot.hosts
+    ]
+
+
+def job_rows(snapshot: Snapshot) -> list[tuple[str, list[str]]]:
+    """One row per monitored Slurm job, keyed by its job id."""
+    return [
+        (
+            job.subject,
+            [
+                _subject(job),
+                _cell(job.values, "memory", _bytes),
+                _cell(job.values, "cpu", lambda v: f"{v:.1f} cores"),
+            ],
+        )
+        for job in snapshot.jobs
+    ]
+
+
+def task_rows(snapshot: Snapshot) -> list[tuple[str, list[str]]]:
+    """One row per task, keyed by its task id."""
+    return [
+        (task.task_id, [task.name, task.task_id, task.state, task.worker])
+        for task in snapshot.tasks
+    ]
+
+
 def _table(headers: list[str], rows: list[list[str]]) -> list[str]:
     """Left-aligned fixed-width columns, sized to their contents."""
     widths = [len(h) for h in headers]
@@ -324,92 +489,36 @@ def render(snapshot: Snapshot) -> str:
         lines.append(f"cannot read the server: {snapshot.error}")
         return "\n".join(lines) + "\n"
 
-    counts = snapshot.counts
-    total = sum(counts.values())
-    lines.append(
-        "tasks  "
-        + "  ".join(f"{name} {counts[name]}" for name in counts)
-        + f"  total {total}"
-    )
+    lines.append(counts_line(snapshot))
     lines.append("")
 
-    lines.append(f"workers ({len(snapshot.workers)})")
-    if snapshot.workers:
-        lines.extend(
-            _table(
-                ["NAME", "GROUP", "HOST", "JOB", "PID"],
-                [
-                    [w.name, w.group, w.hostname, w.slurm_job_id, w.pid]
-                    for w in snapshot.workers
-                ],
-            )
-        )
-    else:
-        lines.append("no workers have registered with this server")
-    lines.append("")
+    blocks = [
+        (
+            "worker jobs",
+            WORKER_JOB_COLUMNS,
+            worker_job_rows(snapshot),
+            EMPTY_WORKER_JOBS,
+        ),
+        ("worker processes", WORKER_COLUMNS, worker_rows(snapshot), EMPTY_WORKERS),
+        ("hosts", HOST_COLUMNS, host_rows(snapshot), EMPTY_HOSTS),
+        ("slurm jobs", JOB_COLUMNS, job_rows(snapshot), EMPTY_JOBS),
+        ("tasks", TASK_COLUMNS, task_rows(snapshot), EMPTY_TASKS),
+    ]
+    for title, columns, rows, empty in blocks:
+        lines.append(f"{title} ({len(rows)})")
+        if rows:
+            lines.extend(_table(columns, [cells for _, cells in rows]))
+        else:
+            lines.append(empty)
+        lines.append("")
 
-    lines.append(f"hosts ({len(snapshot.hosts)})")
-    if snapshot.hosts:
-        lines.extend(
-            _table(
-                ["HOST", "FREE MEM", "LOAD", "/dev/shm", "/tmp"],
-                [
-                    [
-                        _subject(host),
-                        _cell(host.values, "free_memory", _bytes),
-                        _cell(host.values, "load_average", lambda v: f"{v:.2f}"),
-                        _cell(host.values, "dev_shm_used", lambda v: f"{v:.1f}%"),
-                        _cell(host.values, "tmp_used", lambda v: f"{v:.1f}%"),
-                    ]
-                    for host in snapshot.hosts
-                ],
-            )
-        )
-    else:
-        lines.append("no host is being monitored")
-    lines.append("")
-
-    lines.append(f"slurm jobs ({len(snapshot.jobs)})")
-    if snapshot.jobs:
-        lines.extend(
-            _table(
-                ["JOB", "MEMORY", "CPU"],
-                [
-                    [
-                        _subject(job),
-                        _cell(job.values, "memory", _bytes),
-                        _cell(job.values, "cpu", lambda v: f"{v:.1f} cores"),
-                    ]
-                    for job in snapshot.jobs
-                ],
-            )
-        )
-    else:
-        lines.append("no slurm job is being monitored")
-    lines.append("")
-
-    lines.append(f"named tasks ({len(snapshot.tasks)})")
-    if snapshot.tasks:
-        lines.extend(
-            _table(
-                ["NAME", "TASK ID", "STATE", "WORKER"],
-                [[t.name, t.task_id, t.state, t.worker] for t in snapshot.tasks],
-            )
-        )
-    else:
-        # Every task is counted above; only named ones can be listed,
-        # because there is no RPC that enumerates tasks.
-        lines.append("no tasks have been named with set_task_name()")
-
-    return "\n".join(lines) + "\n"
+    return "\n".join(lines[:-1]) + "\n"
 
 
 def draw(text: str) -> None:
     """Put `text` on the screen, replacing what was there.
 
-    Only on a terminal:
-    piped into a file or a pager, the escape codes would be noise,
-    so the polls are simply appended and stay readable.
+    Redirected output is appended instead, without escape codes.
     """
     if sys.stdout.isatty():
         # Home, then clear: clearing first leaves the old frame visible
@@ -419,6 +528,40 @@ def draw(text: str) -> None:
     if not sys.stdout.isatty():
         sys.stdout.write("\n")
     sys.stdout.flush()
+
+
+async def run_plain(collector: Collector, interval: float) -> None:
+    """Poll and print frames until interrupted."""
+    try:
+        while True:
+            try:
+                snapshot = await collector.snapshot()
+            except Exception as e:
+                # A server that is down, or not up yet, is waited out.
+                snapshot = Snapshot(
+                    address=collector.address,
+                    when=datetime.now(),
+                    error=f"{type(e).__name__}: {e}",
+                )
+
+            draw(render(snapshot))
+            await asyncio.sleep(interval)
+    except KeyboardInterrupt:
+        # Ctrl-C is how this is meant to end.
+        pass
+
+
+async def watch(server_address: str, interval: float, plain: bool) -> None:
+    """Open a client on this loop and run whichever display was asked for."""
+    async with open_collector(server_address) as collector:
+        if plain or not sys.stdout.isatty():
+            await run_plain(collector, interval)
+        else:
+            # Imported here so the text path, and the tests that drive it,
+            # do not pay for loading Textual.
+            from .swtop_tui import run_app
+
+            await run_app(collector, interval)
 
 
 @click.command()
@@ -431,7 +574,12 @@ def draw(text: str) -> None:
     show_default=True,
     help="Seconds between polls.",
 )
-def swtop(server_address: str, interval: float) -> None:
+@click.option(
+    "--plain",
+    is_flag=True,
+    help="Print frames as text instead of running the terminal UI.",
+)
+def swtop(server_address: str, interval: float, plain: bool) -> None:
     """Watch the tasks and workers on the ds-service server at SERVER_ADDRESS.
 
     SERVER_ADDRESS is `host:port`, the same address an executor is given.
@@ -440,27 +588,9 @@ def swtop(server_address: str, interval: float) -> None:
     if interval <= 0:
         raise click.BadParameter("must be greater than 0", param_hint="'--interval'")
 
-    client = DsServiceClient(server_address)
-    collector = Collector(client, server_address)
-
     try:
-        while True:
-            try:
-                snapshot = collector.snapshot()
-            except Exception as e:
-                # A server that is down, or not up yet, is worth waiting out:
-                # this is a monitor, and quitting would lose the history
-                # on the screen along with the view.
-                snapshot = Snapshot(
-                    address=server_address,
-                    when=datetime.now(),
-                    error=f"{type(e).__name__}: {e}",
-                )
-
-            draw(render(snapshot))
-            time.sleep(interval)
+        asyncio.run(watch(server_address, interval, plain))
     except KeyboardInterrupt:
-        # Ctrl-C is how this is meant to end.
+        # A Ctrl-C that lands between two awaits comes out here
+        # rather than inside the loop that was asked to stop.
         pass
-    finally:
-        client.close()

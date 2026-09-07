@@ -58,6 +58,7 @@ class LocalExecutor:
         self.kwargs: list[dict] = []
         self.waits: list[str | None] = []
         self.batch_sizes: list[int] = []
+        self.names: list[str] = []
 
     def submit(self, queue, fn, *args, **kwargs) -> Task:
         self.queues.append(queue)
@@ -74,6 +75,11 @@ class LocalExecutor:
             input=(args, kwargs),
             output=output,
         )
+
+    def set_task_name(self, task: Task, name: str) -> None:
+        """Record a name, as the real executor does on the queue server."""
+        self.names.append(name)
+        task._task_name = name
 
     def wait(self, tasks, desc=None, unit="task", raise_on_error=None) -> None:
         self.waits.append(desc)
@@ -262,7 +268,7 @@ class TestRun:
     def test_it_evaluates_every_point_of_the_design(self):
         sweep = explorer(task(points=8))
 
-        sweep.run_exploration_jobs()
+        sweep.run()
 
         result = sweep.results["sweep"]
         assert len(result.points) == 8
@@ -273,7 +279,7 @@ class TestRun:
     def test_the_values_are_the_objectives_own(self):
         sweep = explorer(task(points=8))
 
-        sweep.run_exploration_jobs()
+        sweep.run()
 
         result = sweep.results["sweep"]
         for params, value in zip(result.points, result.values):
@@ -282,7 +288,7 @@ class TestRun:
     def test_the_whole_output_is_kept_not_just_the_ranked_value(self):
         sweep = explorer(task(space=MIXED, objective=mixed_objective, points=4))
 
-        sweep.run_exploration_jobs()
+        sweep.run()
 
         outputs = sweep.results["sweep"].outputs
         assert all(set(o) == {"objective", "n", "kind"} for o in outputs)
@@ -290,7 +296,7 @@ class TestRun:
     def test_the_best_point_is_the_lowest_value(self):
         sweep = explorer(task(points=8))
 
-        sweep.run_exploration_jobs()
+        sweep.run()
         params, value = sweep.best_point("sweep")
 
         result = sweep.results["sweep"]
@@ -301,7 +307,7 @@ class TestRun:
     def test_the_best_of_each_task_is_reported(self, capsys):
         sweep = explorer(task(name="first", points=4), task(name="second", points=4))
 
-        sweep.run_exploration_jobs()
+        sweep.run()
 
         out = capsys.readouterr().out
         assert "first: best of 4 points" in out
@@ -311,7 +317,7 @@ class TestRun:
         """Discrete parameters are rounded; the rounded point is the record."""
         sweep = explorer(task(space=MIXED, objective=mixed_objective, points=4))
 
-        sweep.run_exploration_jobs()
+        sweep.run()
 
         result = sweep.results["sweep"]
         for params, unit in zip(result.points, result.unit_points):
@@ -323,7 +329,7 @@ class TestRun:
 
         sweep = explorer(task(objective=objective, points=4, scale=2.0))
 
-        sweep.run_exploration_jobs()
+        sweep.run()
 
         assert all("scale" in kw for kw in sweep.executor.kwargs)  # type: ignore[attr-defined]
 
@@ -331,11 +337,57 @@ class TestRun:
         """The seed decides the design, so this is a re-evaluation."""
         sweep = explorer(task(points=4))
 
-        sweep.run_exploration_jobs()
-        sweep.run_exploration_jobs()
+        sweep.run()
+        sweep.run()
 
         points = sweep.results["sweep"].points
         assert points[:4] == points[4:]
+
+
+class TestTaskNames:
+    """What the sweep calls its evaluations on the queue server."""
+
+    def test_every_point_is_named_after_its_task(self):
+        sweep = explorer(task(points=4))
+
+        sweep.run()
+
+        assert sweep.executor.names == [  # type: ignore[attr-defined]
+            "sweep-explore-0",
+            "sweep-explore-1",
+            "sweep-explore-2",
+            "sweep-explore-3",
+        ]
+
+    def test_the_index_is_padded_so_the_names_sort(self):
+        sweep = explorer(task(points=16))
+
+        sweep.run()
+
+        names = sweep.executor.names  # type: ignore[attr-defined]
+        assert names[0] == "sweep-explore-00"
+        assert names[-1] == "sweep-explore-15"
+        assert names == sorted(names)
+
+    def test_each_task_names_its_own_points(self):
+        sweep = explorer(
+            task(name="small", points=4),
+            task(name="large", objective=plane, points=16),
+        )
+
+        sweep.run()
+
+        names = sweep.executor.names  # type: ignore[attr-defined]
+        assert sum(n.startswith("small-explore-") for n in names) == 4
+        assert sum(n.startswith("large-explore-") for n in names) == 16
+
+    def test_nothing_is_submitted_unnamed(self):
+        sweep = explorer(task(points=8))
+
+        sweep.run()
+
+        executor = sweep.executor
+        assert len(executor.names) == len(executor.queues)  # type: ignore[attr-defined]
 
 
 class TestSeveralSpacesAtOnce:
@@ -345,7 +397,7 @@ class TestSeveralSpacesAtOnce:
             task(name="large", objective=plane, points=16),
         )
 
-        sweep.run_exploration_jobs()
+        sweep.run()
 
         assert len(sweep.results["small"].values) == 4
         assert len(sweep.results["large"].values) == 16
@@ -357,7 +409,7 @@ class TestSeveralSpacesAtOnce:
             task(name="large", objective=plane, points=16),
         )
 
-        sweep.run_exploration_jobs()
+        sweep.run()
 
         assert sweep.executor.batch_sizes == [20]  # type: ignore[attr-defined]
         assert len(sweep.executor.waits) == 1  # type: ignore[attr-defined]
@@ -368,7 +420,7 @@ class TestSeveralSpacesAtOnce:
             task(name="on_gpu", queue="gpu", objective=plane, points=4),
         )
 
-        sweep.run_exploration_jobs()
+        sweep.run()
 
         assert sweep.executor.queues == ["cpu"] * 4 + ["gpu"] * 4  # type: ignore[attr-defined]
 
@@ -378,7 +430,7 @@ class TestSeveralSpacesAtOnce:
             task(name="plane", objective=plane, points=4),
         )
 
-        sweep.run_exploration_jobs()
+        sweep.run()
 
         for params, value in zip(
             sweep.results["plane"].points, sweep.results["plane"].values
@@ -397,7 +449,7 @@ class TestSeveralSpacesAtOnce:
             ),
         )
 
-        sweep.run_exploration_jobs()
+        sweep.run()
 
         assert len(sweep.results["b"].values) == 4
 
@@ -411,7 +463,7 @@ class TestSeveralSpacesAtOnce:
         )
 
         with pytest.raises(RuntimeError, match=r"exploration of \['broken'\]"):
-            sweep.run_exploration_jobs()
+            sweep.run()
 
 
 class TestPartialFailure:
@@ -432,7 +484,7 @@ class TestPartialFailure:
         sweep = explorer(task(objective=self.fails_at(0.0), points=8))
 
         with pytest.raises(RuntimeError, match="objective evaluations failed"):
-            sweep.run_exploration_jobs()
+            sweep.run()
 
         result = sweep.results["sweep"]
         assert result.values, "the successful points were thrown away"
@@ -443,7 +495,7 @@ class TestPartialFailure:
         sweep = explorer(task(objective=self.fails_at(0.0), points=8))
 
         with pytest.raises(RuntimeError):
-            sweep.run_exploration_jobs()
+            sweep.run()
 
         result = sweep.results["sweep"]
         assert len(result.points) == len(result.values) == len(result.outputs)
@@ -454,7 +506,7 @@ class TestPartialFailure:
         sweep = explorer(task(objective=self.fails_at(0.0), points=8))
 
         with pytest.raises(RuntimeError):
-            sweep.run_exploration_jobs()
+            sweep.run()
         path: Path = tmp_path / "sweep.pkl.gz"
         sweep.save(path)
 
@@ -470,7 +522,7 @@ class TestPartialFailure:
         )
 
         with pytest.raises(RuntimeError, match=r"exploration of \['broken'\]"):
-            sweep.run_exploration_jobs()
+            sweep.run()
 
         assert len(sweep.results["fine"].values) == 4
         assert sweep.results["broken"].values == []
@@ -486,7 +538,7 @@ class TestSave:
         sweep = explorer(
             task(name="a", points=8), task(name="b", objective=plane, points=4)
         )
-        sweep.run_exploration_jobs()
+        sweep.run()
 
         sweep.save(tmp_path / "sweep.pkl.gz")
 
@@ -499,7 +551,7 @@ class TestSave:
 
     def test_the_three_lists_stay_index_aligned(self, tmp_path):
         sweep = explorer(task(space=MIXED, objective=mixed_objective, points=4))
-        sweep.run_exploration_jobs()
+        sweep.run()
 
         sweep.save(tmp_path / "sweep.pkl.gz")
 
@@ -512,7 +564,7 @@ class TestSave:
 
     def test_the_file_is_gzipped(self, tmp_path):
         sweep = explorer(task(points=4))
-        sweep.run_exploration_jobs()
+        sweep.run()
 
         sweep.save(tmp_path / "sweep.pkl.gz")
 
@@ -520,7 +572,7 @@ class TestSave:
 
     def test_a_path_may_be_a_string(self, tmp_path):
         sweep = explorer(task(points=4))
-        sweep.run_exploration_jobs()
+        sweep.run()
 
         sweep.save(str(tmp_path / "sweep.pkl.gz"))
 
@@ -529,10 +581,10 @@ class TestSave:
 
     def test_saving_again_replaces_the_file(self, tmp_path):
         sweep = explorer(task(points=4))
-        sweep.run_exploration_jobs()
+        sweep.run()
         sweep.save(tmp_path / "sweep.pkl.gz")
 
-        sweep.run_exploration_jobs()
+        sweep.run()
         sweep.save(tmp_path / "sweep.pkl.gz")
 
         assert len(self.load(tmp_path / "sweep.pkl.gz")["sweep"]["values"]) == 8
@@ -553,19 +605,19 @@ class TestObjectiveResults:
         sweep = explorer(task(objective=objective, points=4))
 
         with pytest.raises(RuntimeError, match="objective evaluations failed"):
-            sweep.run_exploration_jobs()
+            sweep.run()
 
     def test_a_result_that_is_not_a_mapping_is_rejected(self):
         sweep = explorer(task(objective=lambda x, y: x + y, points=4))
 
         with pytest.raises(RuntimeError, match="expected a mapping"):
-            sweep.run_exploration_jobs()
+            sweep.run()
 
     def test_a_missing_objective_key_is_rejected(self):
         sweep = explorer(task(objective=lambda x, y: {"loss": x}, points=4))
 
         with pytest.raises(RuntimeError, match="no 'objective' among them"):
-            sweep.run_exploration_jobs()
+            sweep.run()
 
     def test_another_objective_key_can_be_named(self):
         sweep = explorer(
@@ -576,7 +628,7 @@ class TestObjectiveResults:
             )
         )
 
-        sweep.run_exploration_jobs()
+        sweep.run()
 
         assert len(sweep.results["sweep"].values) == 4
 
@@ -584,7 +636,7 @@ class TestObjectiveResults:
         sweep = explorer(task(objective=lambda x, y: {"objective": "cheap"}, points=4))
 
         with pytest.raises(RuntimeError, match="not a float"):
-            sweep.run_exploration_jobs()
+            sweep.run()
 
     def test_a_non_finite_value_is_rejected(self):
         sweep = explorer(
@@ -592,7 +644,7 @@ class TestObjectiveResults:
         )
 
         with pytest.raises(RuntimeError, match="non-finite"):
-            sweep.run_exploration_jobs()
+            sweep.run()
 
 
 class TestRealExecutor:
@@ -614,15 +666,16 @@ class TestRealExecutor:
             executor,
         )
 
-        # A real worker in a thread: the sweep blocks in wait() as soon as
-        # it submits, so nothing can play the worker's part after the fact.
+        # A real worker in a thread:
+        # the sweep blocks in wait() as soon as it submits,
+        # so nothing can play the worker's part after the fact.
         worker = make_worker(ds_service_address, tmp_path / "worker", group="cpu")
         thread = threading.Thread(
             target=run_worker, args=(worker, 2 * points), daemon=True
         )
         thread.start()
         try:
-            sweep.run_exploration_jobs()
+            sweep.run()
         finally:
             thread.join(timeout=30)
             worker.close()
@@ -632,3 +685,35 @@ class TestRealExecutor:
             result = sweep.results[name]
             assert len(result.values) == points
             assert sweep.best_point(name)[1] == min(result.values)
+
+    def test_the_names_it_gives_are_on_the_queue_server(
+        self, executor, ds_service_address, ds_client, tmp_path
+    ):
+        """What `swtop` reads: the names, keyed by task id, in the store."""
+        points = 4
+        sweep = ExploreSpaceSobolQMC(
+            [
+                ExplorationTask("box", BOX_2D, sphere, "cpu", points, SEED),
+                ExplorationTask("flat", BOX_2D, plane, "cpu", points, SEED),
+            ],
+            executor,
+        )
+
+        worker = make_worker(ds_service_address, tmp_path / "worker", group="cpu")
+        thread = threading.Thread(
+            target=run_worker, args=(worker, 2 * points), daemon=True
+        )
+        thread.start()
+        try:
+            sweep.run()
+        finally:
+            thread.join(timeout=30)
+            worker.close()
+
+        stored = sorted(
+            ds_client.map_get(key).decode("utf-8")
+            for key in ds_client.map_search_key("^task_name:")
+        )
+        assert stored == [
+            f"{name}-explore-{i}" for name in ("box", "flat") for i in range(points)
+        ]

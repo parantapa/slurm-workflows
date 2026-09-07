@@ -384,7 +384,9 @@ class TestWorkerIdentity:
     ):
         worker = make_worker(ds_service_address, tmp_path, group="cpu", name="w-1")
 
-        published = json.loads(ds_client.map_get(f"worker_info:{worker.worker_id}"))
+        published = json.loads(
+            ds_client.map_get(f"worker_process_info:{worker.worker_id}")
+        )
 
         assert published == {
             "group": "cpu",
@@ -402,7 +404,7 @@ class TestWorkerIdentity:
         worker = make_worker(ds_service_address, tmp_path, group="cpu", name="w-1")
 
         assert ds_client.map_search_key(f"^worker_.*:{worker.worker_id}$") == [
-            f"worker_info:{worker.worker_id}"
+            f"worker_process_info:{worker.worker_id}"
         ]
         worker.close()
 
@@ -413,7 +415,9 @@ class TestWorkerIdentity:
         second = make_worker(ds_service_address, tmp_path, group="gpu", name="w-2")
 
         for worker, group in [(first, "cpu"), (second, "gpu")]:
-            published = json.loads(ds_client.map_get(f"worker_info:{worker.worker_id}"))
+            published = json.loads(
+                ds_client.map_get(f"worker_process_info:{worker.worker_id}")
+            )
             assert published["group"] == group
         first.close()
         second.close()
@@ -432,7 +436,7 @@ class TestWorkerIdentity:
             )
 
         wid = "w-1.42.testhost.4242"
-        published = json.loads(ds_client.map_get(f"worker_info:{wid}"))
+        published = json.loads(ds_client.map_get(f"worker_process_info:{wid}"))
         assert published["hostname"] == "testhost"
 
 
@@ -533,8 +537,8 @@ class TestCli:
 
         The command writes both directly and undoes neither
         --- it is a process entry point, and the process is the worker ---
-        so without this a run leaks `DS_SERVER_ADDRESS` into every later
-        test, which is exactly the value `DsServiceClient()` falls back to
+        so without this a run leaks `DS_SERVER_ADDRESS` into every later test,
+        which is exactly the value `DsServiceClient()` falls back to
         when it is given no address.
         """
         env = dict(os.environ)

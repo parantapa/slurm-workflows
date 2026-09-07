@@ -1,14 +1,10 @@
 """Search spaces: what an optimizer is allowed to vary, and over what.
 
 A search space maps parameter names to ranges.
-Every range knows how to move one of its own values into `[0, 1]`
-and back again, which is what lets a single model span parameters of
-different kinds: the optimizer only ever works in the unit cube, and the
-objective only ever sees values of the kind it declared.
-
-Nothing here imports torch or botorch,
-so a search space can be built, inspected and tested
-without an optimizer installed.
+Every range moves one of its own values into `[0, 1]` and back again,
+so an optimizer works in the unit cube
+and the objective sees values of the kind it declared.
+Nothing here imports torch or botorch.
 """
 
 from __future__ import annotations
@@ -78,18 +74,10 @@ class FloatRange:
 
 @dataclass
 class CategoricalRange:
-    """Categorical range.
+    """Categorical range, standardized as an index in `[0, n - 1]`.
 
     `num_categories=1` is accepted, unlike a degenerate `IntRange`,
-    because a search space assembled programmatically
-    may legitimately end up with a one-valued category.
-    It is a dead dimension, though:
-    it standardizes to a constant,
-    so the GP is fit on a constant column
-    and the acquisition optimizes a coordinate that cannot move.
-    Drop the parameter and pass the value
-    through `extra_objective_kwargs` instead
-    when you know it has only one level.
+    but is a dead dimension: prefer `extra_objective_kwargs` for it.
     """
 
     num_categories: int

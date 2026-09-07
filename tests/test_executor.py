@@ -9,6 +9,7 @@ so executor behaviour is isolated from worker behaviour.
 
 from __future__ import annotations
 
+import json
 import itertools
 import logging
 import subprocess
@@ -27,6 +28,20 @@ from slurm_workflows.slurm_pilot_executor import (
     Task,
 )
 from slurm_workflows.utils import RemoteExecutionError
+
+
+def num_groups(ex: SlurmPilotExecutor) -> int:
+    """Groups defined on an executor, which no longer counts them itself."""
+
+    return len(ex.groups)
+
+
+def num_workers(ex: SlurmPilotExecutor, detail: bool = False):
+    """Pilot jobs submitted, in total or per group."""
+
+    if detail:
+        return {g.name: len(g.workers) for g in ex.groups.values()}
+    return sum(len(g.workers) for g in ex.groups.values())
 
 
 def drain(ds_client, queue: str, count: int) -> list[str]:
@@ -172,8 +187,8 @@ class TestDefineWorker:
             name="cpu", sbatch_args=["-A alloc"], setup_script=setup_script
         )
 
-        assert executor.num_groups() == 1
-        assert executor.num_workers() == 0
+        assert num_groups(executor) == 1
+        assert num_workers(executor) == 0
         assert fake_slurm.submissions == [], "define_worker must not submit jobs"
 
     def test_is_idempotent_for_identical_definitions(self, executor, setup_script):
@@ -182,7 +197,7 @@ class TestDefineWorker:
                 name="cpu", sbatch_args=["-A alloc"], setup_script=setup_script
             )
 
-        assert executor.num_groups() == 1
+        assert num_groups(executor) == 1
 
     def test_conflicting_redefinition_is_rejected(self, executor, setup_script):
         executor.define_worker(
@@ -258,7 +273,7 @@ class TestDefineWorker:
         # so this is not the conflict that differing sbatch_args would be.
         executor.define_worker(name="cpu", actor_class_args=[2], **common)
 
-        assert executor.num_groups() == 1
+        assert num_groups(executor) == 1
         assert cloudpickle.loads(ds_client.map_get("actor_class_args:cpu")) == [2]
 
     def test_cwd_is_added_to_python_path_by_default(self, executor, setup_script):
@@ -342,12 +357,42 @@ class TestScaleWorkers:
         with pytest.raises(AssertionError, match="Unknown worker type"):
             executor.scale_workers("nope", 1)
 
+    def test_a_submitted_job_is_published(self, defined, ds_client, fake_slurm):
+        """`swtop` reads the jobs from the store; nothing else announces them."""
+        defined.scale_workers("cpu", 1)
+
+        (worker_name,) = defined.groups["cpu"].workers
+        published = json.loads(ds_client.map_get(f"worker_job_info:{worker_name}"))
+
+        assert published["name"] == worker_name
+        assert published["group"] == "cpu"
+        assert published["slurm_job_id"] == fake_slurm.submissions[0].job_id
+        # An offset-aware ISO timestamp, so a reader knows what it is looking at.
+        assert datetime.fromisoformat(published["submit_time"]).tzinfo is not None
+
+    def test_every_job_is_published_under_its_own_key(self, defined, ds_client):
+        defined.scale_workers("cpu", 3)
+
+        keys = ds_client.map_search_key("^worker_job_info:")
+
+        assert len(keys) == 3
+        assert set(keys) == {
+            f"worker_job_info:{name}" for name in defined.groups["cpu"].workers
+        }
+
+    def test_a_canceled_job_keeps_its_key(self, defined, ds_client):
+        """Nothing deletes it: the store is the record of what was submitted."""
+        defined.scale_workers("cpu", 2)
+        defined.scale_workers("cpu", 0)
+
+        assert len(ds_client.map_search_key("^worker_job_info:")) == 2
+
     def test_scaling_up_submits_one_job_per_worker(self, defined, fake_slurm):
         defined.scale_workers("cpu", 3)
 
         assert len(fake_slurm.submissions) == 3
-        assert defined.num_workers() == 3
-        assert defined.num_workers(detail=True) == {"cpu": 3}
+        assert num_workers(defined) == 3
+        assert num_workers(defined, detail=True) == {"cpu": 3}
 
     def test_submitted_script_carries_sbatch_args(self, defined, fake_slurm):
         defined.scale_workers("cpu", 1)
@@ -374,7 +419,7 @@ class TestScaleWorkers:
         defined.scale_workers("cpu", 5)
 
         assert len(fake_slurm.submissions) == 5
-        assert defined.num_workers() == 5
+        assert num_workers(defined) == 5
         # Indices keep increasing rather than restarting.
         names = [s.job_name for s in fake_slurm.submissions]
         assert names[-1] == "testex.worker.cpu.4"
@@ -390,7 +435,7 @@ class TestScaleWorkers:
         defined.scale_workers("cpu", 3)
         defined.scale_workers("cpu", 1)
 
-        assert defined.num_workers() == 1
+        assert num_workers(defined) == 1
         assert len(fake_slurm.cancelled_job_ids) == 2
 
     def test_scaling_to_zero_cancels_everything(self, defined, fake_slurm):
@@ -399,7 +444,7 @@ class TestScaleWorkers:
 
         defined.scale_workers("cpu", 0)
 
-        assert defined.num_workers() == 0
+        assert num_workers(defined) == 0
         assert sorted(fake_slurm.cancelled_job_ids) == sorted(job_ids)
 
     def test_already_finished_jobs_are_not_cancelled(self, defined, fake_slurm):
@@ -410,7 +455,7 @@ class TestScaleWorkers:
         defined.scale_workers("cpu", 0)
 
         assert fake_slurm.cancelled_job_ids == []
-        assert defined.num_workers() == 0
+        assert num_workers(defined) == 0
 
     def test_submission_failure_propagates(self, defined, fake_slurm):
         fake_slurm.fail_command("sbatch", stderr="invalid account")
@@ -1298,7 +1343,7 @@ class TestLifecycle:
         executor.stop()
 
         assert sorted(fake_slurm.cancelled_job_ids) == sorted(job_ids)
-        assert executor.num_workers() == 0
+        assert num_workers(executor) == 0
         # The client is still open, so the executor can be reused.
         assert executor.submit("cpu", square, 2) is not None
 
@@ -1312,7 +1357,7 @@ class TestLifecycle:
         executor.close()
 
         assert sorted(fake_slurm.cancelled_job_ids) == sorted(job_ids)
-        assert executor.num_workers() == 0
+        assert num_workers(executor) == 0
 
     def test_close_tolerates_squeue_failure(self, executor, fake_slurm, setup_script):
         """Cleanup must not explode if the cluster is unreachable."""
@@ -1340,7 +1385,7 @@ class TestLifecycle:
             job_ids = [s.job_id for s in fake_slurm.submissions]
 
         assert sorted(fake_slurm.cancelled_job_ids) == sorted(job_ids)
-        assert executor.num_workers() == 0
+        assert num_workers(executor) == 0
 
     def test_context_manager_closes_after_an_exception(
         self, executor, fake_slurm, setup_script
@@ -1353,4 +1398,4 @@ class TestLifecycle:
                 raise ValueError("boom")
 
         assert fake_slurm.cancelled_job_ids == [fake_slurm.submissions[0].job_id]
-        assert executor.num_workers() == 0
+        assert num_workers(executor) == 0

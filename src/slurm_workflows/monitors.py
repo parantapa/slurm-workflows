@@ -1,15 +1,9 @@
 """Background sampling of a compute node and of a Slurm job.
 
-A pilot worker knows things nothing else on the queue does:
-which node it landed on, and which job it belongs to.
-Many workers share both, so they elect a sampler between themselves
-with a `ds-service` counter (see `PilotWorkerProcess._start_monitors`)
-and the elected one runs the threads here.
-
-Each thread appends to `ds-service` time series,
-one series per measurement per subject,
-so `swtop` (or anything else) can read a node's load
-without logging in to it.
+One elected worker per node and one per job runs these threads
+(`PilotWorkerProcess._start_monitors`), each appending to a `ds-service`
+time series, one series per measurement per subject.
+`docs/how-to-use-swtop.md` says what the readings mean.
 """
 
 from __future__ import annotations
@@ -28,13 +22,10 @@ from ds_service_client import DsServiceClient
 DEFAULT_MONITOR_INTERVAL_S: float = 5.0
 
 # Where the cgroup v2 files of the current process live.
-# Slurm puts a job in its own cgroup and accounts it there,
-# so this is the whole job on this node, not just this process tree.
+# Slurm accounts the whole job on this node here.
 CGROUP_ROOT = Path("/sys/fs/cgroup")
 
-# The filesystems worth watching on a compute node:
-# both are node-local scratch that a job can fill,
-# and a full one fails jobs in ways that look like anything but a full disk.
+# Node-local scratch, which a job can fill.
 HOST_FILESYSTEMS = {"dev_shm": "/dev/shm", "tmp": "/tmp"}
 
 # Time series keys, as `<prefix><subject>`.
@@ -54,9 +45,7 @@ JOB_SERIES = {
 def sample_host() -> dict[str, float]:
     """One reading of this node: free memory, load, and scratch usage.
 
-    A filesystem that is not mounted is left out rather than reported as
-    zero, since a node without `/dev/shm` and a node with an empty one
-    are not the same thing.
+    A filesystem that is not mounted is left out rather than reported as zero.
     """
     values = {
         "free_memory": float(psutil.virtual_memory().available),
@@ -75,16 +64,8 @@ def sample_host() -> dict[str, float]:
 class CgroupSampler:
     """Total memory and CPU of everything in this process's cgroup.
 
-    The cgroup is what Slurm accounts and enforces a job against,
-    so it covers every process and thread of the job on this node,
-    including ones this worker never started.
-
-    CPU is reported as cores in use, averaged since the previous sample,
-    which is why this is a class and not a function:
-    the kernel reports CPU as a total that only rises,
-    and the rate has to be differenced out of two readings.
-    The first sample therefore reports 0 cores,
-    having nothing to difference against.
+    CPU is cores in use, averaged since the previous sample,
+    so the first sample of a run reports 0.
     """
 
     def __init__(self, root: Path = CGROUP_ROOT) -> None:
@@ -103,9 +84,7 @@ class CgroupSampler:
             last_now, last_cpu = self._last
             elapsed = now - last_now
             if elapsed > 0:
-                # Clamped, because a cgroup can be recreated under us
-                # and a counter that restarts would otherwise read
-                # as a large negative rate.
+                # Clamped: a recreated cgroup restarts the counter.
                 cores = max(0.0, (cpu_seconds - last_cpu) / elapsed)
         self._last = (now, cpu_seconds)
 
@@ -114,9 +93,7 @@ class CgroupSampler:
     def _read_cgroup(self) -> tuple[float, float] | None:
         """Memory in bytes and cumulative CPU seconds, from cgroup v2.
 
-        Returns None where those files are not readable
-        -- cgroup v1, a container that does not mount them,
-        or a login node -- and the caller falls back to counting processes.
+        None where those files are not readable, and the caller falls back.
         """
         try:
             memory = float((self.root / "memory.current").read_text().strip())
@@ -136,9 +113,7 @@ class CgroupSampler:
     def _read_processes(self) -> tuple[float, float]:
         """The same two numbers, summed over the processes in the cgroup.
 
-        Less accurate than the cgroup's own accounting:
-        summed RSS counts shared pages once per process.
-        It is a fallback, not an equivalent.
+        A fallback: summed RSS counts shared pages once per process.
         """
         memory = 0.0
         cpu_seconds = 0.0
@@ -182,8 +157,7 @@ class CgroupSampler:
 class Monitor(threading.Thread):
     """Appends one sampler's readings to `ds-service`, on a timer.
 
-    A daemon thread: a worker killed by Slurm at the end of its walltime
-    must not be held open by its monitor.
+    Runs as a daemon thread.
     """
 
     def __init__(
@@ -209,9 +183,7 @@ class Monitor(threading.Thread):
             try:
                 self.append_sample()
             except Exception:
-                # A sampling or network failure must not end the monitor:
-                # the node it is watching is usually still there,
-                # and a series that stops for good is worse than a gap.
+                # A failed sample leaves a gap; it does not end the series.
                 self.logger.exception("Monitor %s failed to sample", self.subject)
 
             if self._stopping.wait(self.interval):

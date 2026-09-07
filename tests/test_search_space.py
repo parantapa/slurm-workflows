@@ -157,8 +157,9 @@ class TestConversions:
         low = to_params(SPACE, [0.0, 0.0, 0.0])
         high = to_params(SPACE, [1.0, 1.0, 1.0])
 
-        # The log range goes through exp(log(x)), so it lands next to its
-        # endpoint rather than on it; the other two are exact.
+        # The log range goes through exp(log(x)),
+        # so it lands next to its endpoint rather than on it;
+        # the other two are exact.
         assert math.isclose(low["lr"], 1e-4)
         assert math.isclose(high["lr"], 1e-1)
         assert (low["width"], low["optimizer"]) == (8, 0)

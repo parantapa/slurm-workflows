@@ -100,6 +100,7 @@ class LocalExecutor:
         self.kwargs: list[dict] = []
         self.waits: list[str | None] = []
         self.batch_sizes: list[int] = []
+        self.names: list[str] = []
 
     def submit(self, queue, fn, *args, **kwargs) -> Task:
         self.queues.append(queue)
@@ -116,6 +117,11 @@ class LocalExecutor:
             input=(args, kwargs),
             output=output,
         )
+
+    def set_task_name(self, task: Task, name: str) -> None:
+        """Record a name, as the real executor does on the queue server."""
+        self.names.append(name)
+        task._task_name = name
 
     def wait(
         self,
@@ -162,9 +168,11 @@ def as_executor(executor: LocalExecutor) -> SlurmPilotExecutor:
 def sphere(x, y):
     """Convex, minimum f = 0 at the origin.
 
-    Objectives return a mapping, not a bare number: the value to minimize
-    under "objective", plus whatever else is worth recording. The extra key
-    here keeps the tests honest about the optimizer carrying it through.
+    Objectives return a mapping, not a bare number:
+    the value to minimize under "objective",
+    plus whatever else is worth recording.
+    The extra key here keeps the tests honest
+    about the optimizer carrying it through.
     """
     return {"objective": x * x + y * y, "note": "sphere"}
 
@@ -214,7 +222,7 @@ def explored(
         [ExplorationTask(name, space, objective, "cpu", points, seed)],
         as_executor(LocalExecutor()),
     )
-    sweep.run_exploration_jobs()
+    sweep.run()
 
     path = tmp_path / (filename or f"{name}-explore.pkl.gz")
     sweep.save(path)
@@ -467,7 +475,7 @@ class TestEarlyStopping:
             max_search_iterations=30,
             patience=3,
         )
-        opt.run_search_jobs()
+        opt.run()
 
         # Stalls count from the first round, so patience alone decides
         # once it is the larger of the two.
@@ -484,7 +492,7 @@ class TestEarlyStopping:
             max_search_iterations=30,
             patience=1,
         )
-        opt.run_search_jobs()
+        opt.run()
 
         assert rounds_run(opt) == 6
 
@@ -499,7 +507,7 @@ class TestEarlyStopping:
             max_search_iterations=30,
             patience=2,
         )
-        opt.run_search_jobs()
+        opt.run()
 
         assert rounds_run(opt) == 3
 
@@ -513,7 +521,7 @@ class TestEarlyStopping:
             max_search_iterations=4,
             patience=100,
         )
-        opt.run_search_jobs()
+        opt.run()
 
         assert rounds_run(opt) == 4
 
@@ -537,7 +545,7 @@ class TestEarlyStopping:
             max_search_iterations=30,
             patience=3,
         )
-        opt.run_search_jobs()
+        opt.run()
 
         assert rounds_run(opt) == 6
 
@@ -551,7 +559,7 @@ class TestEarlyStopping:
             max_search_iterations=30,
             patience=2,
         )
-        opt.run_search_jobs()
+        opt.run()
 
         assert rounds_run(opt) == 2
 
@@ -566,7 +574,7 @@ class TestEarlyStopping:
             max_search_iterations=30,
             patience=3,
         )
-        opt.run_search_jobs()
+        opt.run()
 
         out = capsys.readouterr().out
 
@@ -590,7 +598,7 @@ class TestEarlyStopping:
             max_search_iterations=30,
             patience=2,
         )
-        opt.run_search_jobs()
+        opt.run()
 
         out = capsys.readouterr().out
         assert "stopping after 2 rounds" in out
@@ -606,7 +614,7 @@ class TestEarlyStopping:
             max_search_iterations=2,
             patience=100,
         )
-        opt.run_search_jobs()
+        opt.run()
 
         assert "the ceiling on this search" in capsys.readouterr().out
 
@@ -674,23 +682,23 @@ class TestAcquisition:
 
     def test_one_call_per_round_for_the_whole_batch(self, tmp_path, record):
         opt, _ = make_opt(tmp_path, explore=4, iterations=1, parallel=4)
-        opt.run_search_jobs()
+        opt.run()
         assert record == [(qLogNoisyExpectedImprovement.__name__, 4)]
 
     def test_an_odd_batch_is_not_split(self, tmp_path, record):
         opt, _ = make_opt(tmp_path, explore=4, iterations=1, parallel=3)
-        opt.run_search_jobs()
+        opt.run()
         assert record == [(qLogNoisyExpectedImprovement.__name__, 3)]
 
     def test_a_parallelism_of_one_still_asks_for_one_point(self, tmp_path, record):
         opt, _ = make_opt(tmp_path, explore=4, iterations=2, parallel=1)
-        opt.run_search_jobs()
+        opt.run()
         assert record == [(qLogNoisyExpectedImprovement.__name__, 1)] * 2
 
     def test_every_round_asks_for_the_full_parallelism(self, tmp_path, record):
         """The budget is rounds, so no round is short."""
         opt, _ = make_opt(tmp_path, explore=4, iterations=3, parallel=3)
-        opt.run_search_jobs()
+        opt.run()
         assert record == [(qLogNoisyExpectedImprovement.__name__, 3)] * 3
 
     def test_a_timeout_is_passed_to_the_optimizer(self, tmp_path, monkeypatch):
@@ -704,7 +712,7 @@ class TestAcquisition:
 
         monkeypatch.setattr(osb, "optimize_acqf", fake_optimize_acqf)
         opt, _ = make_opt(tmp_path, explore=4, iterations=2, parallel=2)
-        opt.run_search_jobs()
+        opt.run()
 
         # Against the task's own setting rather than a literal:
         # the default lives in the dataclass,
@@ -718,7 +726,7 @@ class TestAcquisition:
         opt, _ = make_opt(
             tmp_path, explore=4, iterations=1, parallel=3, acqf_timeout_s=0.001
         )
-        opt.run_search_jobs()
+        opt.run()
 
         searched = opt.results["test"].points
         assert len(searched) == 3
@@ -738,7 +746,7 @@ class TestAcquisition:
 
         monkeypatch.setattr(osb, "qLogNoisyExpectedImprovement", spy)
         opt, _ = make_opt(tmp_path, explore=4, iterations=2, parallel=2)
-        opt.run_search_jobs()
+        opt.run()
 
         assert shapes == [(opt.tasks[0].mc_samples,)] * 2
 
@@ -753,14 +761,14 @@ class TestAcquisition:
 
         monkeypatch.setattr(osb, "qLogNoisyExpectedImprovement", spy)
         opt, _ = make_opt(tmp_path, explore=4, iterations=2, parallel=2)
-        opt.run_search_jobs()
+        opt.run()
 
         # Four points from the file, then those plus the first round's two.
         assert baselines == [4, 6]
 
     def test_each_round_reports_how_long_proposing_took(self, tmp_path, capsys):
         opt, _ = make_opt(tmp_path, explore=4, iterations=3, parallel=2)
-        opt.run_search_jobs()
+        opt.run()
 
         out = capsys.readouterr().out
 
@@ -771,7 +779,7 @@ class TestAcquisition:
 
     def test_the_best_so_far_is_reported_after_every_round(self, tmp_path, capsys):
         opt, _ = make_opt(tmp_path, explore=4, iterations=3, parallel=2)
-        opt.run_search_jobs()
+        opt.run()
 
         out = capsys.readouterr().out
         counts = [int(n) for n in re.findall(r"best after (\d+) points", out)]
@@ -792,7 +800,7 @@ class TestAcquisition:
             iterations=1,
             parallel=2,
         )
-        opt.run_search_jobs()
+        opt.run()
 
         out = capsys.readouterr().out
         params, _ = opt.best_point("test")
@@ -801,7 +809,7 @@ class TestAcquisition:
 
     def test_each_fit_reports_its_size_and_duration(self, tmp_path, capsys):
         opt, _ = make_opt(tmp_path, explore=4, iterations=2, parallel=2)
-        opt.run_search_jobs()
+        opt.run()
 
         out = capsys.readouterr().out
 
@@ -829,7 +837,7 @@ class TestAcquisition:
         monkeypatch.setattr(osb, "fit_gpytorch_mll", explode)
 
         with pytest.raises(RuntimeError, match="fit blew up"):
-            opt.run_search_jobs()
+            opt.run()
 
         out = capsys.readouterr().out
         assert "test: fitting GP on 4 points" in out
@@ -844,7 +852,7 @@ class TestAcquisition:
             lambda mll, **kw: (fits.append(1), real_fit(mll, **kw))[1],
         )
         opt, _ = make_opt(tmp_path, explore=4, iterations=3, parallel=2)
-        opt.run_search_jobs()
+        opt.run()
         assert len(fits) == 3
 
 
@@ -858,7 +866,7 @@ class TestOptimizerQueue:
 
     def test_the_fit_goes_to_the_optimizer_queue(self, tmp_path):
         opt, executor = make_opt(tmp_path, explore=2, iterations=2, parallel=2)
-        opt.run_search_jobs()
+        opt.run()
 
         # Each round is one fit followed by that round's evaluations.
         assert executor.queues == ["opt", "cpu", "cpu"] * 2
@@ -867,7 +875,7 @@ class TestOptimizerQueue:
         opt, executor = make_opt(
             tmp_path, explore=2, iterations=1, parallel=1, optimizer_queue=["a", "b"]
         )
-        opt.run_search_jobs()
+        opt.run()
         assert executor.queues == [["a", "b"], "cpu"]
 
     def test_one_queue_may_serve_both(self, tmp_path):
@@ -875,7 +883,7 @@ class TestOptimizerQueue:
         opt, executor = make_opt(
             tmp_path, explore=2, iterations=1, parallel=2, optimizer_queue="cpu"
         )
-        opt.run_search_jobs()
+        opt.run()
         assert executor.queues == ["cpu"] * 3
         assert len(opt.results["test"].values) == 2
 
@@ -893,7 +901,7 @@ class TestOptimizerQueue:
             mc_samples=11,
             acqf_timeout_s=1.5,
         )
-        opt.run_search_jobs()
+        opt.run()
 
         assert seen == [
             {
@@ -909,7 +917,7 @@ class TestOptimizerQueue:
         seen = self._record_kwargs(monkeypatch)
 
         opt, _ = make_opt(tmp_path, explore=4, iterations=1, parallel=2)
-        opt.run_search_jobs()
+        opt.run()
 
         task = opt.tasks[0]
         assert seen == [
@@ -949,7 +957,7 @@ class TestOptimizerQueue:
         monkeypatch.setattr(osb, "fit_gpytorch_mll", explode)
 
         with pytest.raises(RuntimeError, match="'opt'.*botorch") as excinfo:
-            opt.run_search_jobs()
+            opt.run()
         assert "search round 1" in str(excinfo.value)
         assert "test on queue" in str(excinfo.value)
 
@@ -962,7 +970,7 @@ class TestOptimizerQueue:
         opt, _ = make_opt(tmp_path, explore=4, iterations=1, parallel=2)
 
         with pytest.raises(RuntimeError, match="no 'candidates'"):
-            opt.run_search_jobs()
+            opt.run()
 
     def test_a_result_missing_only_the_timings_is_reported_too(
         self, tmp_path, monkeypatch
@@ -979,7 +987,7 @@ class TestOptimizerQueue:
         opt, _ = make_opt(tmp_path, explore=4, iterations=1, parallel=2)
 
         with pytest.raises(RuntimeError, match="'fit_seconds', 'propose_seconds'"):
-            opt.run_search_jobs()
+            opt.run()
 
     def test_a_batch_that_is_not_the_full_width_is_rejected(
         self, tmp_path, monkeypatch
@@ -998,7 +1006,7 @@ class TestOptimizerQueue:
         opt, _ = make_opt(tmp_path, explore=4, iterations=1, parallel=3)
 
         with pytest.raises(RuntimeError, match=r"proposed 2 points.*not the 3"):
-            opt.run_search_jobs()
+            opt.run()
 
     def test_the_fit_sees_every_point_measured_so_far(self, tmp_path, monkeypatch):
         """It is given the observations, not a handle to the driver's state."""
@@ -1012,7 +1020,7 @@ class TestOptimizerQueue:
         monkeypatch.setattr(osb, "fit_and_propose", spy)
 
         opt, _ = make_opt(tmp_path, explore=4, iterations=2, parallel=2)
-        opt.run_search_jobs()
+        opt.run()
 
         assert sizes == [(4, 4), (6, 6)]
 
@@ -1033,7 +1041,7 @@ class TestSeveralSpacesAtOnce:
             ],
             as_executor(LocalExecutor()),
         )
-        sweep.run_exploration_jobs()
+        sweep.run()
         path = tmp_path / "explore.pkl.gz"
         sweep.save(path)
 
@@ -1051,7 +1059,7 @@ class TestSeveralSpacesAtOnce:
     def test_every_task_runs(self, two):
         opt, _ = two
 
-        opt.run_search_jobs()
+        opt.run()
 
         assert len(opt.results["a"].values) == 4
         assert len(opt.results["b"].values) == 6
@@ -1060,7 +1068,7 @@ class TestSeveralSpacesAtOnce:
         """The point of running them together: two waits a round, not four."""
         opt, executor = two
 
-        opt.run_search_jobs()
+        opt.run()
 
         # Per round: both fits, then both batches of points.
         assert executor.batch_sizes == [2, 5, 2, 5]
@@ -1069,7 +1077,7 @@ class TestSeveralSpacesAtOnce:
     def test_each_task_uses_its_own_queues(self, two):
         opt, executor = two
 
-        opt.run_search_jobs()
+        opt.run()
 
         assert executor.queues[:2] == ["opt", "opt2"]
         assert executor.queues[2:7] == ["cpu"] * 5
@@ -1082,7 +1090,7 @@ class TestSeveralSpacesAtOnce:
             ],
             as_executor(LocalExecutor()),
         )
-        sweep.run_exploration_jobs()
+        sweep.run()
         path = tmp_path / "explore.pkl.gz"
         sweep.save(path)
 
@@ -1109,7 +1117,7 @@ class TestSeveralSpacesAtOnce:
             [path],
         )
 
-        opt.run_search_jobs()
+        opt.run()
 
         assert rounds_run(opt, "short") == 1
         assert rounds_run(opt, "long") == 4
@@ -1125,7 +1133,7 @@ class TestSeveralSpacesAtOnce:
             ],
             as_executor(LocalExecutor()),
         )
-        sweep.run_exploration_jobs()
+        sweep.run()
         path = tmp_path / "explore.pkl.gz"
         sweep.save(path)
 
@@ -1139,7 +1147,7 @@ class TestSeveralSpacesAtOnce:
         )
 
         with pytest.raises(RuntimeError, match=r"failed during .* of \['broken'\]"):
-            opt.run_search_jobs()
+            opt.run()
 
 
 # --------------------------------------------------------------------------
@@ -1172,7 +1180,7 @@ class TestPartialFailure:
         )
 
         with pytest.raises(RuntimeError, match="objective evaluations failed"):
-            opt.run_search_jobs()
+            opt.run()
 
         result = opt.results["test"]
         assert result.values, "the successful points were thrown away"
@@ -1187,7 +1195,7 @@ class TestPartialFailure:
             ],
             as_executor(LocalExecutor()),
         )
-        sweep.run_exploration_jobs()
+        sweep.run()
         path = tmp_path / "explore.pkl.gz"
         sweep.save(path)
 
@@ -1206,7 +1214,7 @@ class TestPartialFailure:
         )
 
         with pytest.raises(RuntimeError, match=r"of \['broken'\]"):
-            opt.run_search_jobs()
+            opt.run()
 
         assert len(opt.results["fine"].values) == 2
         assert opt.results["broken"].values == []
@@ -1222,7 +1230,7 @@ class TestPartialFailure:
         )
 
         with pytest.raises(RuntimeError):
-            opt.run_search_jobs()
+            opt.run()
         opt.save(tmp_path / "search.pkl.gz")
 
         saved = load_results([tmp_path / "search.pkl.gz"])
@@ -1301,7 +1309,7 @@ class TestSavedObservations:
 class TestSaveAndResume:
     def test_it_saves_only_what_this_run_measured(self, tmp_path):
         opt, _ = make_opt(tmp_path, explore=4, iterations=2, parallel=2)
-        opt.run_search_jobs()
+        opt.run()
 
         opt.save(tmp_path / "search.pkl.gz")
 
@@ -1311,7 +1319,7 @@ class TestSaveAndResume:
 
     def test_the_file_has_the_shape_the_explorer_writes(self, tmp_path):
         opt, _ = make_opt(tmp_path, explore=4, iterations=1, parallel=2)
-        opt.run_search_jobs()
+        opt.run()
         opt.save(tmp_path / "search.pkl.gz")
 
         path: Path = tmp_path / "search.pkl.gz"
@@ -1335,7 +1343,7 @@ class TestSaveAndResume:
         first, _ = make_opt(
             tmp_path, files=[prior], iterations=2, parallel=2, explore=4
         )
-        first.run_search_jobs()
+        first.run()
         first.save(tmp_path / "round-one.pkl.gz")
 
         second, _ = make_opt(
@@ -1348,7 +1356,7 @@ class TestSaveAndResume:
         # Four from the exploration, four from the first search.
         assert second.num_observations("test") == 8
 
-        second.run_search_jobs()
+        second.run()
 
         assert second.num_observations("test") == 12
         assert len(second.results["test"].values) == 4
@@ -1356,13 +1364,13 @@ class TestSaveAndResume:
     def test_resuming_does_not_double_count_the_earlier_run(self, tmp_path):
         prior = explored(tmp_path, points=4, filename="prior.pkl.gz")
         first, _ = make_opt(tmp_path, files=[prior], iterations=1, parallel=2)
-        first.run_search_jobs()
+        first.run()
         first.save(tmp_path / "round-one.pkl.gz")
 
         second, _ = make_opt(
             tmp_path, files=[prior, tmp_path / "round-one.pkl.gz"], iterations=1
         )
-        second.run_search_jobs()
+        second.run()
         second.save(tmp_path / "round-two.pkl.gz")
 
         third, _ = make_opt(
@@ -1381,11 +1389,66 @@ class TestSaveAndResume:
     def test_the_best_covers_the_files_as_well_as_this_run(self, tmp_path):
         opt, _ = make_opt(tmp_path, explore=8, iterations=1, parallel=2)
 
-        opt.run_search_jobs()
+        opt.run()
         _, value = opt.best_point("test")
 
         everything = opt.prior["test"].values + opt.results["test"].values
         assert value == min(everything)
+
+
+# --------------------------------------------------------------------------
+# What the round's tasks are called
+# --------------------------------------------------------------------------
+
+
+class TestTaskNames:
+    """What the search calls its tasks on the queue server.
+
+    The round is in every name because the batches look alike:
+    a queue full of evaluations otherwise says nothing
+    about where the search has got to.
+    """
+
+    def test_the_fit_is_named_after_the_round_it_belongs_to(self, tmp_path):
+        opt, executor = make_opt(tmp_path, iterations=2)
+
+        opt.run()
+
+        assert [name for name in executor.names if "-fit-" in name] == [
+            "test-fit-1",
+            "test-fit-2",
+        ]
+
+    def test_an_evaluation_carries_its_round_and_its_place_in_it(self, tmp_path):
+        opt, executor = make_opt(tmp_path, iterations=1, parallel=4)
+
+        opt.run()
+
+        assert [name for name in executor.names if "-search-" in name] == [
+            "test-search-1-0",
+            "test-search-1-1",
+            "test-search-1-2",
+            "test-search-1-3",
+        ]
+
+    def test_a_later_round_is_told_from_an_earlier_one(self, tmp_path):
+        opt, executor = make_opt(tmp_path, iterations=2, parallel=2)
+
+        opt.run()
+
+        assert [name for name in executor.names if "-search-" in name] == [
+            "test-search-1-0",
+            "test-search-1-1",
+            "test-search-2-0",
+            "test-search-2-1",
+        ]
+
+    def test_nothing_is_submitted_unnamed(self, tmp_path):
+        opt, executor = make_opt(tmp_path, iterations=2)
+
+        opt.run()
+
+        assert len(executor.names) == executor.num_submitted
 
 
 # --------------------------------------------------------------------------
@@ -1398,9 +1461,10 @@ class TestSearchBehaviour:
 
     def test_search_moves_toward_the_minimum(self, tmp_path):
         # f(x) = x on [0, 1]: a flipped sign sends the search to 1.0 instead.
-        # Asserted on the median search point: qLogNEI keeps probing away
-        # from the incumbent, so the max is not a reliable signal, and the
-        # best is already near the minimum from the exploration file.
+        # Asserted on the median search point:
+        # qLogNEI keeps probing away from the incumbent,
+        # so the max is not a reliable signal,
+        # and the best is already near the minimum from the exploration file.
         space = {"x": FloatRange(0.0, 1.0)}
         opt, _ = make_opt(
             tmp_path,
@@ -1410,7 +1474,7 @@ class TestSearchBehaviour:
             iterations=2,
             parallel=2,
         )
-        opt.run_search_jobs()
+        opt.run()
 
         searched = [p["x"] for p in opt.results["test"].points]
         assert statistics.median(searched) < 0.5, searched
@@ -1419,7 +1483,7 @@ class TestSearchBehaviour:
         opt, _ = make_opt(
             tmp_path, objective=sphere, explore=8, iterations=3, parallel=4
         )
-        opt.run_search_jobs()
+        opt.run()
 
         params, value = opt.best_point("test")
         assert value < 0.5, value
@@ -1430,14 +1494,14 @@ class TestSearchBehaviour:
         opt, _ = make_opt(
             tmp_path, objective=sphere, explore=8, iterations=4, parallel=4
         )
-        opt.run_search_jobs()
+        opt.run()
         guided = opt.best_point("test")[1]
 
         blind = ExploreSpaceSobolQMC(
             [ExplorationTask("blind", BOX_2D, sphere, "cpu", 24, SEED)],
             as_executor(LocalExecutor()),
         )
-        blind.run_exploration_jobs()
+        blind.run()
 
         assert guided < blind.best_point("blind")[1]
 
@@ -1461,7 +1525,7 @@ class TestSearchBehaviour:
             iterations=4,
             parallel=4,
         )
-        opt.run_search_jobs()
+        opt.run()
 
         params, value = opt.best_point("test")
         assert params["cat"] == 0, params
@@ -1489,7 +1553,7 @@ class TestFailures:
             parallel=2,
         )
         with pytest.raises(RuntimeError, match="failed"):
-            opt.run_search_jobs()
+            opt.run()
 
     def test_a_remote_error_is_never_recorded_as_a_value(self, tmp_path):
         def boom(x, y):
@@ -1504,7 +1568,7 @@ class TestFailures:
             parallel=2,
         )
         with pytest.raises(RuntimeError):
-            opt.run_search_jobs()
+            opt.run()
         assert opt.results["test"].values == []
 
     @pytest.mark.parametrize(
@@ -1529,7 +1593,7 @@ class TestFailures:
         )
 
         with pytest.raises(RuntimeError, match=match):
-            opt.run_search_jobs()
+            opt.run()
 
     def test_a_configured_key_is_what_the_message_names(self, tmp_path):
         """The default key is not what a run with its own key is missing."""
@@ -1543,7 +1607,7 @@ class TestFailures:
             objective_key="rmse",
         )
         with pytest.raises(RuntimeError, match="no 'rmse'"):
-            opt.run_search_jobs()
+            opt.run()
 
     def test_an_integer_objective_is_accepted(self, tmp_path):
         opt, _ = make_opt(
@@ -1554,7 +1618,7 @@ class TestFailures:
             iterations=1,
             parallel=2,
         )
-        opt.run_search_jobs()
+        opt.run()
         assert opt.results["test"].values == [1.0, 1.0]
 
 
@@ -1580,7 +1644,7 @@ class TestObjectiveKey:
             parallel=2,
             objective_key="loss",
         )
-        opt.run_search_jobs()
+        opt.run()
 
         result = opt.results["test"]
         assert result.values == [objective(**p)["loss"] for p in result.points]
@@ -1600,7 +1664,7 @@ class TestObjectiveKey:
             parallel=2,
             objective_key="loss",
         )
-        opt.run_search_jobs()
+        opt.run()
 
         result = opt.results["test"]
         assert 999.0 not in result.values
@@ -1613,7 +1677,7 @@ class TestBestPoint:
         opt, _ = make_opt(
             tmp_path, objective=sphere, explore=8, iterations=1, parallel=2
         )
-        opt.run_search_jobs()
+        opt.run()
 
         params, value = opt.best_point("test")
         assert value == sphere(**params)["objective"]
@@ -1622,7 +1686,7 @@ class TestBestPoint:
         opt, _ = make_opt(
             tmp_path, objective=sphere, explore=8, iterations=1, parallel=2
         )
-        opt.run_search_jobs()
+        opt.run()
         params, value = opt.best_point("test")
 
         output = opt.best_output("test")
@@ -1634,7 +1698,7 @@ class TestBestPoint:
         opt, _ = make_opt(
             tmp_path, objective=sphere, explore=4, iterations=2, parallel=2
         )
-        opt.run_search_jobs()
+        opt.run()
 
         result = opt.results["test"]
         assert len(result.outputs) == len(result.values) == len(result.points)
@@ -1654,7 +1718,7 @@ class TestBestPoint:
         opt, _ = make_opt(
             tmp_path, objective=objective, explore=4, iterations=1, parallel=2
         )
-        opt.run_search_jobs()
+        opt.run()
         recorded = dict(opt.results["test"].outputs[-1])
 
         returned["objective"] = -999.0
@@ -1665,7 +1729,7 @@ class TestBestPoint:
     def test_returns_a_copy(self, tmp_path):
         # A caller mutating the returned dict must not corrupt the history.
         opt, _ = make_opt(tmp_path, explore=4, iterations=1, parallel=2)
-        opt.run_search_jobs()
+        opt.run()
 
         params, _ = opt.best_point("test")
         params["x"] = 999.0
@@ -1679,7 +1743,7 @@ class TestBestPoint:
         )
         before = min(opt.prior["test"].values)
 
-        opt.run_search_jobs()
+        opt.run()
 
         assert opt.best_point("test")[1] <= before
 
@@ -1700,10 +1764,10 @@ class TestRealExecutor:
         self, executor, ds_service_address, tmp_path
     ):
         explore, iterations, parallel = 4, 2, 2
-        # The exploration's points, then per round one fit-and-propose task
-        # on top of the evaluations. Both kinds go to the one queue this
-        # worker serves, which is also what pins that a real worker can run
-        # the fit at all.
+        # The exploration's points,
+        # then per round one fit-and-propose task on top of the evaluations.
+        # Both kinds go to the one queue this worker serves,
+        # which is also what pins that a real worker can run the fit at all.
         total = explore + iterations * (parallel + 1)
 
         worker = make_worker(ds_service_address, tmp_path / "worker", group="cpu")
@@ -1714,7 +1778,7 @@ class TestRealExecutor:
                 [ExplorationTask("e2e", BOX_2D, sphere, "cpu", explore, SEED)],
                 executor,
             )
-            sweep.run_exploration_jobs()
+            sweep.run()
             path = tmp_path / "explore.pkl.gz"
             sweep.save(path)
 
@@ -1734,7 +1798,7 @@ class TestRealExecutor:
                 executor,
                 [path],
             )
-            opt.run_search_jobs()
+            opt.run()
         finally:
             thread.join(timeout=30)
             worker.close()
@@ -1780,7 +1844,7 @@ class TestRealExecutor:
         thread.start()
         try:
             with pytest.raises(RuntimeError, match="failed"):
-                opt.run_search_jobs()
+                opt.run()
         finally:
             thread.join(timeout=30)
             worker.close()

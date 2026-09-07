@@ -108,7 +108,10 @@ class TestParseFile:
         assert parse_file("sample", self.write(tmp_path, "")) == {}
 
     def test_a_repeated_name_keeps_the_last(self, tmp_path: Path):
-        """Not an error today. Pinned so a change to that is a deliberate one."""
+        """Not an error today.
+
+        Pinned so a change to that is a deliberate one.
+        """
         path = self.write(
             tmp_path,
             '{#- name: "dup" -#}\nfirst\n{#- name: "dup" -#}\nsecond\n',

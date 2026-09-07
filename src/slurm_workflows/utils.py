@@ -29,10 +29,7 @@ def objective_value(
 ) -> float:
     """The value to rank one evaluation by, or a `RuntimeError` saying why not.
 
-    Every rejection is a mistake in the objective rather than a bad point,
-    so each names what came back and where,
-    which is the only context the driver has to offer:
-    the traceback is on a compute node, if there is one at all.
+    Every rejection names what came back and at which point.
     """
     if not isinstance(output, Mapping):
         raise RuntimeError(
@@ -69,13 +66,13 @@ def floor_power_of_two(n: int) -> int:
     return 1 << (n.bit_length() - 1)
 
 
-def format_param(value: Any) -> str:
-    """Render one value for a progress line.
+def index_width(count: int) -> int:
+    """Digits needed to number `count` things, so that the numbers sort."""
+    return len(str(max(count - 1, 0)))
 
-    Floats get a fixed precision so columns stay aligned across rounds.
-    Everything else prints as itself:
-    an objective's result may carry values of any type.
-    """
+
+def format_param(value: Any) -> str:
+    """Render one value for a progress line, floats at a fixed precision."""
     return f"{value:.6g}" if isinstance(value, float) else str(value)
 
 
