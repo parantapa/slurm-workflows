@@ -1,6 +1,6 @@
 # Tutorial: Computing PI on a Slurm Cluster
 
-[<- back to the main README](../README.md)
+[<- back to the main README](../../README.md)
 
 This tutorial demonstrates how to use the `slurm-workflows` package.
 It numerically computes $\pi$
@@ -9,14 +9,14 @@ The example runs on the `bii` partition of the Rivanna cluster at UVA,
 and uses the `bii_nssac` account.
 
 The complete program can be found at
-[`examples/example_compute_pi.py`](../examples/example_compute_pi.py).
+[`examples/example_compute_pi.py`](../../examples/example_compute_pi.py).
 
 ## Before you start
 
 This program is meant to be run from a Rivanna login node.
 
 Work through
-[Installation and setup on Rivanna](installation-and-setup-instructions-for-rivanna.md)
+[How to install slurm-workflows on Rivanna](../how-to-guides/install-on-rivanna.md)
 first.
 It leaves you with the two things this program needs:
 
@@ -122,18 +122,27 @@ if __name__ == "__main__":
     main()
 ```
 
-What happens when you run it, in order:
+What to watch for while it runs, in order:
 
 * a `ds-service` task queue starts on the login node;
-* one Slurm job is submitted, spanning `NUM_NODES` nodes;
+* one Slurm job is submitted, spanning `NUM_NODES` nodes -
+    watch for it in `squeue -u $USER`;
 * `srun` starts a worker process on every task slot in that job;
 * each worker connects back to the queue over InfiniBand,
     pulls tasks, runs them, and posts results;
 * the driver blocks in `wait()` until every task is back.
 
+Notice that the 800 tasks are submitted before a single worker exists.
+Tasks queue up and are picked up as pilot jobs start running,
+so nothing has to be timed by hand.
+
 ## Next steps
 
-[Tutorial: Computing PI with a Sobol' QMC sweep](tutorial-computing-pi-qmc.md)
+[Tutorial: Computing PI with a Sobol' QMC sweep](computing-pi-qmc.md)
 does the same calculation with `ExploreSpaceSobolQMC`,
 which owns the submit-and-wait loop
 and keeps what every evaluation returned.
+
+[About the pilot-job model](../explanation/about-the-pilot-job-model.md)
+is why the work is arranged this way,
+and what the three processes above are each responsible for.

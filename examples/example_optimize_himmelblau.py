@@ -1,6 +1,6 @@
 """Batch Bayesian optimization on Rivanna's BII cluster.
 
-Walked through in `docs/tutorial-optimize-himmelblau.md`.
+Walked through in `docs/tutorials/optimizing-himmelblau.md`.
 """
 
 import math

@@ -1,6 +1,6 @@
 """The coordinator: worker groups, pilot jobs, and the tasks they run.
 
-One executor per `ds-service` server; see `docs/concepts.md`.
+One executor per `ds-service` server; see `docs/explanation/about-the-pilot-job-model.md`.
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ from .templates import render_template
 NoOutput = object()
 
 # One JSON key per submitted pilot job, keyed on the worker name.
-# Read by `swtop`; the fields are listed in `docs/concepts.md`.
+# Read by `swtop`; the fields are listed in `docs/reference/executor.md`.
 WORKER_JOB_INFO_PREFIX = "worker_job_info:"
 
 # What `wait` and `as_completed` are working through, for `swtop` to draw.

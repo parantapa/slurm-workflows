@@ -4,7 +4,7 @@ Polls the server and redraws a summary of its tasks, of the pilot jobs
 the executor submitted, and of the worker processes running in them.
 `swtop_tui.py` holds the terminal UI; this module decides what to show.
 
-See `docs/how-to-use-swtop.md` for the blocks and what fills them,
+See `docs/reference/swtop.md` for the blocks and what fills them,
 and the monitoring section of `docs/developer-notes.md` for why they
 are collected the way they are.
 """

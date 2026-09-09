@@ -13,24 +13,35 @@ the pilot-job executor, and the batch Bayesian optimizer built on it.
 
 ## Where documentation goes
 
-All user documentation lives under `docs/`, not in `README.md`.
+User documentation lives under `docs/`,
+organized by [Diataxis](https://diataxis.fr/) type.
 The README is a landing page:
-what the library is, requirements, install, links.
+what the library is, requirements, install,
+one minimal usage example, and the index of everything else.
+It links every document, so the README's tables are the one index;
+this file does not keep a second copy of them.
 
-| Document | Covers |
-| --- | --- |
-| [`concepts.md`](concepts.md) | Every public name, argument and return type, and the single home for usage docs: concepts, quick start, actors, `is_batch_worker`, running the task-queue server, troubleshooting. |
-| [`reference.md`](reference.md) | `SlurmPilotExecutor`, `ExploreSpaceSobolQMC` and `OptimizeSpaceBotorch` from a caller's side: the methods, the task dataclasses, the objective contract, the search space types, and the botorch search in full. |
-| [`how-to-use-swtop.md`](how-to-use-swtop.md) | The live queue view: the CLI, the blocks, what the host and job readings measure. |
-| [`installation-and-setup-instructions-for-rivanna.md`](installation-and-setup-instructions-for-rivanna.md) | Getting the package, its environment and the `ds-service` binary onto Rivanna. |
-| [`tutorial-computing-pi.md`](tutorial-computing-pi.md), [`tutorial-computing-pi-qmc.md`](tutorial-computing-pi-qmc.md), [`tutorial-optimize-himmelblau.md`](tutorial-optimize-himmelblau.md) | The three worked examples under `examples/`, one tutorial each. |
-| [`how-to-run-tests.md`](how-to-run-tests.md) | The suite: what is mocked, what is real, and the reasoning behind the trickier tests. |
-| `developer-notes.md` | This file. Only what the others do not cover. |
+```
+docs/
+  tutorials/        lessons: a learner runs a worked example end to end
+  how-to-guides/    directions: a competent user solving one stated problem
+  reference/        neutral description, one page per module of src/
+  explanation/      why the code is the way it is, for users
+  developer-notes.md, how-to-run-tests.md    for contributors
+```
 
 When adding user-facing documentation,
-put it in `concepts.md`,
-or in a new doc under `docs/` added to the README's documentation table.
-Not in `README.md`.
+decide which of the four it is before deciding where it goes,
+and add it to the matching table in the README.
+Keep each document inside its type:
+a tutorial that stops to explain links out to `explanation/` instead,
+and reference describes rather than recommends.
+
+The reference tree mirrors `src/slurm_workflows/`,
+so a module and its reference page are found the same way.
+A new public module needs a new page under `reference/`.
+
+Nothing user-facing goes in `README.md` beyond what is listed above.
 
 ### Docstrings, comments, and this file
 
@@ -75,7 +86,7 @@ Both are therefore run bare:
 generated sbatch scripts invoke it on the compute nodes,
 and users never call it directly.
 `swtop` is for users, and is documented in
-[How to use `swtop`](how-to-use-swtop.md).
+[`swtop` reference](reference/swtop.md).
 
 Deploy to clusters with `cpush`.
 See `.cpush.json5` for the `rivanna` and `ivy-hip-tricr-2` remotes.
@@ -107,6 +118,40 @@ but the executor is always given the address explicitly.
 The server and the client are versioned together.
 The floor is recorded in `pyproject.toml`,
 and the README states the server version to match.
+
+## Tools and libraries
+
+Versions and extras are pinned in `pyproject.toml`;
+this is what each one is here for.
+
+| Dependency | Used by | For |
+| --- | --- | --- |
+| `ds-service-client` (>=5.0.0) | executor, worker, `swtop` | The queue server's client and its `DsServiceServer` launcher. The one channel between coordinator and workers. The floor is where `task_search_id` arrived. |
+| `cloudpickle` | `slurm_pilot_executor`, `slurm_pilot_worker` | Serializing functions, arguments and return values, so a locally defined function can cross to a compute node. |
+| `jinja2` | `templates/` | Rendering the worker shell script and its sbatch wrapper. |
+| `json5` | `templates/` | Parsing the `{#- name: ... -#}` headers of the multi-template files. |
+| `scipy` (>=1.15) | `explore_space` | `stats.qmc.Sobol` for the exploration design. The floor is for the `rng=` argument. |
+| `textual` | `swtop_tui` | The `swtop` terminal UI. |
+| `click` | `swtop`, `slurm_pilot_worker` | Both console entry points. |
+| `psutil` | `monitors` | Host and process sampling. |
+| `platformdirs` | `slurm_pilot_executor` | Locating the per-user cache dir a run's `work_dir` defaults into. |
+| `typeguard` (>=3) | `slurm_pilot_executor` | `@typechecked` on the public surface. |
+| `numpy` | (transitive use) | Arrays behind the search spaces and results. |
+| `botorch` | `optimize_space_botorch` | The Gaussian process fit and the acquisition optimization, and `torch` underneath it. **Optional**, behind the `botorch` extra, and imported lazily so `import slurm_workflows` works without it. |
+
+Development tooling, behind the `dev` and `test` extras:
+
+| Tool | Extra | Role |
+| --- | --- | --- |
+| `pytest` | `test` | The suite. See [`how-to-run-tests.md`](how-to-run-tests.md). |
+| `botorch` | `test` | So the optimizer tests run rather than skip. |
+| `black` | `dev` | Formatting. Configured in `pyproject.toml`; run bare. |
+| `pyright` | `dev` | Type checking. Configured in `pyproject.toml`; run bare. |
+| `setuptools_scm` | build | Deriving the version from git tags, with a `1.0.0-dev` fallback. |
+| `cpush` | external | Deploying to clusters. See `.cpush.json5`. |
+
+There is no CI, and no linter beyond `pyright`.
+The three commands under [Commands](#commands) are the whole gate.
 
 ## Invariants
 
@@ -550,7 +595,7 @@ the text frames and the UI differ only in how they draw them.
 and passes `--output <work_dir>/<name>-%j-%t.out`.
 That is why the `worker_sbatch_script` template takes `name` and `work_dir`.
 Which file a worker's log ends up in is documented for users in
-[`concepts.md`](concepts.md#logs-and-troubleshooting);
+[`reference/executor.md`](reference/executor.md#logs);
 what follows is why the shell decides it rather than Python.
 
 **The `--output` is dropped for a job of exactly one task**,

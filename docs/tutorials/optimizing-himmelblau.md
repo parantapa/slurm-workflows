@@ -1,6 +1,6 @@
 # Tutorial: Optimizing Himmelblau's function
 
-[<- back to the main README](../README.md)
+[<- back to the main README](../../README.md)
 
 This tutorial searches a two-dimensional space for the minimum of
 Himmelblau's function,
@@ -11,10 +11,10 @@ The example runs on the `bii` partition of the Rivanna cluster at UVA,
 under the `bii_nssac` account.
 
 The complete program can be found at
-[`examples/example_optimize_himmelblau.py`](../examples/example_optimize_himmelblau.py).
+[`examples/example_optimize_himmelblau.py`](../../examples/example_optimize_himmelblau.py).
 
-Read [Tutorial: Computing PI on a Slurm Cluster](tutorial-computing-pi.md)
-and [Tutorial: Computing PI with a Sobol' QMC sweep](tutorial-computing-pi-qmc.md)
+Read [Tutorial: Computing PI on a Slurm Cluster](computing-pi.md)
+and [Tutorial: Computing PI with a Sobol' QMC sweep](computing-pi-qmc.md)
 first.
 They cover what this one reuses without further comment:
 the queue server, the executor, worker groups,
@@ -24,7 +24,7 @@ the `sbatch` arguments, and how a sweep is set up.
 
 This program is meant to be run from a Rivanna login node,
 set up as in
-[Installation and setup on Rivanna](installation-and-setup-instructions-for-rivanna.md),
+[How to install slurm-workflows on Rivanna](../how-to-guides/install-on-rivanna.md),
 with this repository cloned:
 
 ```sh
@@ -54,41 +54,22 @@ def himmelblau(x, y):
     return {"objective": value, "distance_from_origin": math.hypot(x, y)}
 ```
 
-Himmelblau's function has four global minima, all with `f = 0`,
-which is what makes it a fair test:
-a search that only ever walks downhill from where it started
-finds whichever minimum it happened to begin near.
+Himmelblau's function has four global minima, all with `f = 0`.
+Notice that the objective returns a mapping rather than a number:
+`"objective"` is the entry that is **minimized**,
+and every other entry is recorded but not modelled.
 
-The objective runs on a compute node, once per point,
-and its argument names have to match the keys of `SEARCH_SPACE`.
-It returns a mapping rather than a number.
-`"objective"` is the entry that is **minimized**
-(negate a score you would rather maximize),
-and every other entry is recorded but not modelled,
-which is where a runtime or an intermediate metric goes.
-
-The arithmetic here is microseconds.
-Bayesian optimization earns its overhead when one evaluation costs minutes;
-below that, the model fits dominate the runtime.
-
-## Why the run has rounds
-
-The two pi programs knew every task up front and submitted them in one go.
-A search cannot: which point is worth trying next
-depends on what the previous points returned.
-
-So the run is a sequence of **rounds**.
-Each round fits a Gaussian process to everything measured so far,
-asks it for a whole batch of points at once,
-evaluates that batch across the pool, and refits.
-The batch is what keeps the pool busy:
-a one-point-at-a-time optimizer would leave all but one worker idle.
-
-That takes two phases, because a model needs something to fit
-before it can choose anything:
+The run happens in two phases,
+because the model needs something to fit before it can choose anything:
 
 1. `ExploreSpaceSobolQMC` sweeps the space and saves what it measured.
 2. `OptimizeSpaceBotorch` is handed that file and searches on from it.
+
+The second phase then proceeds in **rounds**:
+fit a model to everything measured so far,
+propose a whole batch of points, evaluate that batch across the pool, refit.
+For why a search is shaped this way, see
+[About batch Bayesian optimization](../explanation/about-batch-bayesian-optimization.md).
 
 ## The whole program
 
@@ -254,18 +235,13 @@ The objective evaluations go to the `eval` pool, one worker per task slot.
 The model fit and the acquisition optimization go to the `opt` pool,
 as one task per round.
 
-Two groups rather than one, because the two want different nodes.
-An evaluation is a cheap single-threaded call, 80 at a time;
-the fit is a single task that wants cores and memory,
-and grows more expensive every round as the model does.
-Hence `--ntasks-per-node=1 --cpus-per-task=40` in `OPTIMIZER_SBATCH_ARGS`:
+Notice `--ntasks-per-node=1 --cpus-per-task=40` in `OPTIMIZER_SBATCH_ARGS`:
 one worker with the whole node,
-since torch threads the fit's linear algebra
-and a second worker there would sit idle all run.
-
-`optimizer_queue="eval"` would also work,
-since the fit and the evaluations never run at the same time,
-but the fit would then wait for a slot in a pool sized for the objective.
+where `EVAL_SBATCH_ARGS` asks for 40 slots per node.
+The two kinds of work want different nodes, which is why there are two
+groups and two queue arguments;
+[About batch Bayesian optimization](../explanation/about-batch-bayesian-optimization.md)
+says why.
 
 The two groups also have their own setup scripts.
 `opt` is the one that imports botorch on a compute node,
@@ -287,20 +263,16 @@ This is the QMC tutorial's program, as the opening move of a search:
 64 Sobol' points over the space, evaluated in one batch on `eval`,
 to give the model something to fit before it starts making decisions.
 
-`EXPLORATION_POINTS = 64` is a literal rather than the pool size,
-because the count is truncated down to a power of two.
-A pool of 80 asking for 80 points would evaluate 64
-and leave 16 idle for the whole sweep without saying so.
+Notice that `EXPLORATION_POINTS = 64` is a literal rather than the pool
+size of 80: the count is truncated down to a power of two,
+so a pool of 80 asking for 80 points would evaluate 64 anyway.
 Asking for 64 says what will happen.
 
-The seed is what makes the design repeatable:
+The seed makes the design repeatable:
 the same seed redraws the same starting points,
 a different one explores fresh ground.
-Left out, a seed is drawn and printed
-so the run can still be repeated afterwards.
 
-`save` is what the search reads, and what makes the run resumable:
-the pool can die here and the search still has its points.
+`save` is what the search reads in phase 2.
 
 ## Phase 2: the search
 
@@ -320,56 +292,26 @@ Its positional arguments are the space, the objective,
 the queue the evaluations go to, the queue the fit goes to,
 and the batch size.
 
-`SEARCH_PARALLELISM` is that batch size, so match it to the pool:
-a bigger batch queues behind the workers,
-a smaller one leaves workers idle.
-Here it is exactly `NUM_NODES * TASKS_PER_NODE`, so 80.
+`SEARCH_PARALLELISM` is that batch size, matched to the pool:
+here it is exactly `NUM_NODES * TASKS_PER_NODE`, so 80.
 
 The budget is counted in **rounds**, not points.
 Each round fits the model once and evaluates `SEARCH_PARALLELISM` points,
 and the search stops on whichever comes first,
-the ceiling or the early stop:
+the ceiling (`MAX_SEARCH_ITERATIONS`) or the early stop
+(`PATIENCE` stalled rounds, once past `MIN_SEARCH_ITERATIONS`).
+The four settings are described in
+[`OptimizeSpaceBotorch`](../reference/optimize-space.md#when-it-stops).
 
-| Setting | Effect |
-| --- | --- |
-| `MIN_SEARCH_ITERATIONS` | Rounds that always run, so a slow start is not mistaken for a finished search |
-| `MAX_SEARCH_ITERATIONS` | Hard ceiling, reached even while still improving |
-| `PATIENCE` | Consecutive stalled rounds that end the search; an improving round resets the count |
-| `MIN_IMPROVEMENT` | Fraction a round must beat the incumbent by to count as improving; `0.05` is 5% |
-
-Stalled rounds below the floor still count towards `PATIENCE`
-but cannot be the round that stops the search,
-so the earliest stop is `max(MIN_SEARCH_ITERATIONS, PATIENCE)` rounds.
-
-Each round is a barrier: fit, propose a batch, evaluate, refit.
-That is the cost of choosing a batch jointly,
-and the reason a round should be as wide as the pool.
-No progress reporting is needed in the driver:
+You will not need to print anything to follow the search:
 the optimizer prints the best point after every round,
 plus how long each fit and each proposal took.
-A best that stops moving while the fits keep growing
-means the budget is going to the model rather than to the search.
 
 Every task either phase submits is named on the queue server,
-so [`swtop`](how-to-use-swtop.md) shows
+so [`swtop`](../how-to-guides/watch-a-run-with-swtop.md) shows
 `himmelblau-explore-00` through `himmelblau-search-<round>-<index>`
 as the run works through them.
-
-## Resuming a search
-
-```python
-opt.save(SEARCH_RESULTS)
-```
-
-This holds only the points this run evaluated,
-so a later run passes both files and counts each point once:
-
-```python
-OptimizeSpaceBotorch(tasks, executor, [EXPLORE_RESULTS, SEARCH_RESULTS])
-```
-
-That is how a search stopped by a walltime limit
-carries on in the next job.
+Start it in another shell now and watch a round go by.
 
 ## The answer
 
@@ -390,8 +332,14 @@ its batches reached first.
 
 ## Next steps
 
-[Reference](reference.md) is the full API:
-integer, categorical and log-scaled parameters,
-several spaces searched at once,
-what a round does and how the search decides to stop,
-and the acquisition settings.
+- [How to resume a search](../how-to-guides/resume-a-search.md)
+    carries a search on across a walltime limit,
+    which is what the two saved files are for.
+- [`OptimizeSpaceBotorch`](../reference/optimize-space.md) is the full API:
+    several spaces searched at once,
+    how the search decides to stop, and the acquisition settings.
+    [Search spaces](../reference/search-space.md) covers integer,
+    categorical and log-scaled parameters.
+- [About batch Bayesian optimization](../explanation/about-batch-bayesian-optimization.md)
+    is why the search is built this way,
+    and when it is worth its overhead.

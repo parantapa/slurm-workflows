@@ -6,7 +6,7 @@ evaluates that batch across a pilot pool, refits, repeats.
 Exploration is not done here: a run starts from the results files
 `ExploreSpaceSobolQMC.save` wrote.
 
-See `docs/reference.md` for what a round does and how a search stops.
+See `docs/reference/optimize-space.md` for what a round does and how a search stops.
 """
 
 from __future__ import annotations

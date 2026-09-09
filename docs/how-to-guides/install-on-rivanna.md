@@ -1,6 +1,6 @@
-# Installation and setup on Rivanna
+# How to install slurm-workflows on Rivanna
 
-[<- back to the main README](../README.md)
+[<- back to the main README](../../README.md)
 
 These steps set up `slurm-workflows` for use on the Rivanna cluster at UVA.
 
@@ -72,4 +72,4 @@ Both must print usage text.
 
 ## Next steps
 
-Check out [Tutorial: Computing pi on a Slurm Cluster](tutorial-computing-pi.md)
+Check out [Tutorial: Computing pi on a Slurm cluster](../tutorials/computing-pi.md)

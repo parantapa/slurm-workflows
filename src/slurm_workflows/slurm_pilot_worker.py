@@ -26,7 +26,7 @@ from .monitors import (
 NEXT_TASK_RETRY_TIME_S: float = 0.1
 
 # One JSON key per worker process, keyed on its worker id.
-# Read by `swtop`; the fields are listed in `docs/concepts.md`.
+# Read by `swtop`; the fields are listed in `docs/reference/executor.md`.
 WORKER_PROCESS_INFO_PREFIX = "worker_process_info:"
 
 

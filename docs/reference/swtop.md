@@ -1,13 +1,18 @@
-# How to use `swtop`
+# `swtop`
 
-[<- back to the main README](../README.md)
+[<- back to the main README](../../README.md)
 
-`swtop` shows a live view of a `slurm-workflows` run:
+`slurm_workflows.swtop` and `slurm_workflows.swtop_tui`:
+the live view of a `slurm-workflows` run -
 the tasks, the pilot jobs and worker processes,
 and the compute nodes they are running on.
 
-Point it at the same `ds-service` address (`host:port`) the executor was given
-and watch a run from another shell on the login node:
+To watch a run with it, see
+[How to watch a run with `swtop`](../how-to-guides/watch-a-run-with-swtop.md).
+
+## Command line
+
+`swtop` takes the `ds-service` address (`host:port`) the executor was given.
 
 ```sh
 swtop 10.0.0.1:5051          # every 2 seconds
@@ -25,7 +30,7 @@ swtop 10.0.0.1:5051 --plain  # frames of text, no UI
 | `q` | Quit |
 | `r` | Poll now, rather than waiting for the next interval |
 
-`swtop` runs until you quit it or interrupt it with Ctrl-C.
+`swtop` runs until it is quit or interrupted with Ctrl-C.
 Nothing has to be started for it on the cluster side:
 the executor and the workers publish what it reads as they go.
 
@@ -65,11 +70,9 @@ eval-2   my-run.task.12  Ready
 ```
 
 Tasks are listed running first, then ready, then complete and canceled,
-and named before unnamed within each state,
-so what is happening now is at the top.
+and named before unnamed within each state.
 
-The blocks come from different places,
-which is worth knowing when one of them looks empty:
+The blocks come from different places:
 
 - **Progress** is what the driver's current `wait` or `as_completed` call
     is working through: the `desc` and `unit` it was given, how many of its
@@ -82,7 +85,7 @@ which is worth knowing when one of them looks empty:
     leaves nothing here.
 - **Task counts** are a single RPC, so they always cover every task.
     A server belongs to one executor,
-    so every task on it is a task of the run you are watching.
+    so every task on it is a task of the run being watched.
 - **Worker jobs** are the pilot jobs the executor submitted,
     published as it submitted them.
     A job appears here the moment `scale_workers` returns,
@@ -97,25 +100,16 @@ which is worth knowing when one of them looks empty:
     see [What the hosts and jobs blocks measure](#what-the-hosts-and-jobs-blocks-measure).
 - **Tasks** are all tasks on the server, named or not.
 
-Every block says why it is empty rather than showing a bare header,
-since an empty block is usually a question.
+Every block says why it is empty rather than showing a bare header.
 
-## Naming tasks so the tasks block is readable
+## Task names
 
-A task is listed under `-` unless it is named:
-
-```python
-task = executor.submit("cpu", train, config)
-executor.set_task_name(task, "train-7")
-```
-
-Names are worth setting on a run of any size,
-since `my-run.task.412` says nothing about which point it is.
+A task is listed under `-` unless
+`executor.set_task_name(task, name)` has been called for it.
 A name published after the task was submitted
 appears at the next poll.
 
-`ExploreSpaceSobolQMC` and `OptimizeSpaceBotorch` name what they submit,
-so a sweep or a search is readable here without doing anything:
+`ExploreSpaceSobolQMC` and `OptimizeSpaceBotorch` name what they submit:
 `<task>-explore-<index>` for a point of a sweep,
 `<task>-fit-<round>` and `<task>-search-<round>-<index>`
 for the two kinds of task a search round is made of.
@@ -126,13 +120,8 @@ so the names sort in submission order.
 
 Nothing has to be started for these:
 pilot workers do the sampling themselves.
-
-A node runs one worker per task slot,
-and a job spans many nodes,
-so the workers elect one of themselves per node and one per job
-(with a `ds-service` counter, first past the post)
-and only those run a sampling thread.
-Every 5 seconds each thread appends to a `ds-service` time series:
+One worker per node and one per job runs a sampling thread,
+and every 5 seconds each appends to a `ds-service` time series:
 
 | Column | What it is |
 | --- | --- |
@@ -142,21 +131,24 @@ Every 5 seconds each thread appends to a `ds-service` time series:
 | `MEMORY` | The job's cgroup total on that node: every process and thread of the job, not just the workers |
 | `CPU` | Cores the job used, averaged since the previous sample |
 
-Read `LOAD` against the node's core count
+`LOAD` reads against the node's core count
 (40 on `bii`, so 39.80 is a full node and 80 is oversubscribed twice over),
 and `CPU` against what the job asked for
 (`--nodes=1 --ntasks-per-node=40 --cpus-per-task=1` should sit near 40).
-A `/tmp` climbing towards 100% is worth catching before it arrives;
-it takes the whole node down with it, not just your job.
+A `/tmp` climbing towards 100% takes the whole node down with it,
+not just the job that filled it.
 
 A subject marked `(stale)` has no reading in the last minute,
-which means the worker that was sampling it has gone --
+which means the worker that was sampling it has gone -
 its job ended, or it was killed.
 The remaining workers do not take the job over,
 so a run that scales down loses the readings for what it gave up.
 A single measurement shown as `-` on an otherwise live row
 is one series with nothing recent in it,
 which is what a filesystem that is not mounted on that node looks like.
+
+How the sampling worker is elected, and why nothing re-elects it, is in
+[About what a run publishes](../explanation/about-what-a-run-publishes.md).
 
 ## Frames of text instead of a UI
 
@@ -174,9 +166,7 @@ explore  [##############----------]  242/400 point  61%  working
 ```
 
 On a terminal the frames replace each other;
-redirected, they are simply appended,
-so `swtop addr --plain > swtop.log` keeps a record of a run
-that can be read afterwards.
+redirected, they are appended.
 The blocks and columns are the same either way.
 
 ## When the server cannot be read

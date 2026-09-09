@@ -3,7 +3,7 @@
 One elected worker per node and one per job runs these threads
 (`PilotWorkerProcess._start_monitors`), each appending to a `ds-service`
 time series, one series per measurement per subject.
-`docs/how-to-use-swtop.md` says what the readings mean.
+`docs/reference/swtop.md` says what the readings mean.
 """
 
 from __future__ import annotations

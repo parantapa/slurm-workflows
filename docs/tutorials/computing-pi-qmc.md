@@ -1,6 +1,6 @@
 # Tutorial: Computing PI with a Sobol' QMC sweep
 
-[<- back to the main README](../README.md)
+[<- back to the main README](../../README.md)
 
 This tutorial computes $\pi$ with `ExploreSpaceSobolQMC`,
 which owns the submit-and-wait loop:
@@ -11,13 +11,13 @@ The example runs on the `bii` partition of the Rivanna cluster at UVA,
 under the `bii_nssac` account.
 
 The complete program can be found at
-[`examples/example_compute_pi_qmc.py`](../examples/example_compute_pi_qmc.py).
+[`examples/example_compute_pi_qmc.py`](../../examples/example_compute_pi_qmc.py).
 
 ## Before you start
 
 This program is meant to be run from a Rivanna login node,
 set up as in
-[Installation and setup on Rivanna](installation-and-setup-instructions-for-rivanna.md),
+[How to install slurm-workflows on Rivanna](../how-to-guides/install-on-rivanna.md),
 with this repository cloned:
 
 ```sh
@@ -127,7 +127,7 @@ if __name__ == "__main__":
     main()
 ```
 
-What happens when you run it, in order:
+What to watch for while it runs, in order:
 
 * a `ds-service` task queue starts on the login node;
 * one Slurm job is submitted, spanning `NUM_NODES` nodes;
@@ -136,7 +136,7 @@ What happens when you run it, in order:
 * the sweep draws 4096 Sobol' points over `SAMPLE_SPACE`
     and submits every one of them to the `bii` queue as a task,
     named `compute-pi-qmc-explore-0000` and up,
-    so the sweep can be followed in [`swtop`](how-to-use-swtop.md);
+    so the sweep can be followed in [`swtop`](../how-to-guides/watch-a-run-with-swtop.md);
 * `run` blocks until all of them are back;
 * `save` writes the points, the scores and the whole outputs to a file;
 * leaving the executor's block cancels the pilot job;
@@ -144,13 +144,17 @@ What happens when you run it, in order:
 
 ## Next steps
 
-[Tutorial: Optimizing Himmelblau's function](tutorial-optimize-himmelblau.md)
+[Tutorial: Optimizing Himmelblau's function](optimizing-himmelblau.md)
 takes a file like the one this run saved and searches on from it
 with `OptimizeSpaceBotorch`,
 choosing where to evaluate next
 instead of drawing every point up front.
 
-[Tutorial: Computing PI on a Slurm Cluster](tutorial-computing-pi.md)
+[Tutorial: Computing PI on a Slurm Cluster](computing-pi.md)
 computes the same number the other way round,
 submitting each piece of work itself with `submit` and `wait`,
 which is what to copy when the work is not a function over a space.
+
+[`ExploreSpaceSobolQMC`](../reference/explore-space.md) is the full API
+for a sweep: the objective contract, the methods,
+and the results file `save` writes.

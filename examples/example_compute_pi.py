@@ -1,6 +1,6 @@
 """Compute pi on Rivanna's BII cluster.
 
-Walked through in `docs/tutorial-computing-pi.md`.
+Walked through in `docs/tutorials/computing-pi.md`.
 """
 
 from ds_service_client import DsServiceServer

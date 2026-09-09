@@ -5,7 +5,7 @@ evaluates every point of every design across a pilot pool,
 and keeps what came back.
 Needs neither torch nor botorch.
 
-See `docs/reference.md` for what a sweep is for and how it behaves.
+See `docs/reference/explore-space.md` for what a sweep is for and how it behaves.
 """
 
 from __future__ import annotations
