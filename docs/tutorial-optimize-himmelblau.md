@@ -2,13 +2,13 @@
 
 [<- back to the main README](../README.md)
 
-This tutorial searches a two dimensional space for the minimum of
+This tutorial searches a two-dimensional space for the minimum of
 Himmelblau's function,
 with `ExploreSpaceSobolQMC` and `OptimizeSpaceBotorch`.
 The pool evaluates a whole batch of candidate points per round,
 and a Gaussian process fitted between rounds chooses the next batch.
-This example uses the `bii` partition of the Rivanna cluster at UVA,
-and uses the `bii_nssac` account.
+The example runs on the `bii` partition of the Rivanna cluster at UVA,
+under the `bii_nssac` account.
 
 The complete program can be found at
 [`examples/example_optimize_himmelblau.py`](../examples/example_optimize_himmelblau.py).

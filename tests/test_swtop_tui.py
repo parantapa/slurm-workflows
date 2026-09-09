@@ -24,12 +24,13 @@ from typing import cast
 
 import pytest
 from textual.app import App, ComposeResult
-from textual.widgets import DataTable, Static
+from textual.widgets import DataTable, ProgressBar, Static
 
 from slurm_workflows.swtop import (
     Collector,
     Snapshot,
     SubjectInfo,
+    ProgressInfo,
     TaskInfo,
     WorkerInfo,
     WorkerJobInfo,
@@ -67,6 +68,7 @@ def snapshot(**kwargs) -> Snapshot:
         address="host:1",
         when=datetime.now(),
         counts={"ready": 1, "running": 2, "complete": 3, "canceled": 0},
+        progress=ProgressInfo("p-1", "explore", "point", 8, 2),
         worker_jobs=[
             WorkerJobInfo("run.worker.cpu.0", "cpu", "42", "2026-09-07T11:04:57-04:00")
         ],
@@ -217,6 +219,35 @@ class TestDisplay:
                 assert rows_of(app, "workers") == []
                 empty = app.query_one("#workers").query_one(".block-empty", Static)
                 assert "no worker processes have registered" in text_of(empty)
+
+        drive(scenario)
+
+    def test_the_progress_display_is_a_bar(self):
+        async def scenario():
+            app = SwtopApp(as_collector(StubCollector()), 3600.0)
+            async with app.run_test() as pilot:
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                app.apply(snapshot())
+
+                block = app.query_one("#progress")
+                assert block.display
+                label = text_of(block.query_one(".progress-label", Static))
+                assert "explore" in label and "2/8 point" in label
+                bar = block.query_one(ProgressBar)
+                assert (bar.total, bar.progress) == (8, 2)
+
+        drive(scenario)
+
+    def test_no_display_hides_the_bar(self):
+        async def scenario():
+            app = SwtopApp(as_collector(StubCollector()), 3600.0)
+            async with app.run_test() as pilot:
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                app.apply(snapshot(progress=None))
+
+                assert not app.query_one("#progress").display
 
         drive(scenario)
 

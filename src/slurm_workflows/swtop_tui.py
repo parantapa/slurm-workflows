@@ -10,7 +10,7 @@ from datetime import datetime
 
 from textual.app import App, ComposeResult
 from textual.containers import VerticalScroll
-from textual.widgets import DataTable, Footer, Header, Static
+from textual.widgets import DataTable, Footer, Header, ProgressBar, Static
 
 from .swtop import (
     HOST_COLUMNS,
@@ -88,6 +88,28 @@ class Block(VerticalScroll):
         self.query_one(".block-empty", Static).display = not rows
 
 
+class ProgressBlock(VerticalScroll):
+    """The bar a `wait` or `as_completed` call is drawn as."""
+
+    def compose(self) -> ComposeResult:
+        yield Static("", classes="progress-label")
+        yield ProgressBar(total=100, show_eta=False)
+
+    def show(self, progress) -> None:
+        """Draw one progress display, or hide the block when there is none."""
+        self.display = progress is not None
+        if progress is None:
+            return
+
+        state = "done" if progress.done else "working"
+        self.query_one(".progress-label", Static).update(
+            f"{progress.desc}  "
+            f"{progress.completed}/{progress.total} {progress.unit}  {state}"
+        )
+        bar = self.query_one(ProgressBar)
+        bar.update(total=max(progress.total, 1), progress=progress.completed)
+
+
 class SwtopApp(App):
     """A live view of one `ds-service` server."""
 
@@ -102,6 +124,9 @@ class SwtopApp(App):
         padding: 0 1;
         color: $error;
     }
+
+    #progress { height: auto; padding: 0 1; }
+    .progress-label { color: $text-muted; }
 
     Block { height: auto; padding: 0 1; }
     /* Worker processes and tasks are the blocks that can hold thousands of
@@ -129,6 +154,7 @@ class SwtopApp(App):
         yield Header(show_clock=True)
         yield Static(id="summary")
         yield Static(id="error")
+        yield ProgressBlock(id="progress")
         yield Block(
             "worker jobs", WORKER_JOB_COLUMNS, EMPTY_WORKER_JOBS, id="worker-jobs"
         )
@@ -142,6 +168,7 @@ class SwtopApp(App):
         self.title = "swtop"
         self.sub_title = self.collector.address
         self.query_one("#error", Static).display = False
+        self.query_one("#progress", ProgressBlock).display = False
 
         self.poll_now()
         self.set_interval(self.interval, self.poll_now)
@@ -191,6 +218,7 @@ class SwtopApp(App):
         when = snapshot.when.strftime("%H:%M:%S")
         self.query_one("#summary", Static).update(f"{counts_line(snapshot)}   {when}")
 
+        self.query_one("#progress", ProgressBlock).show(snapshot.progress)
         self.query_one("#worker-jobs", Block).show(worker_job_rows(snapshot))
         self.query_one("#workers", Block).show(worker_rows(snapshot))
         self.query_one("#hosts", Block).show(host_rows(snapshot))

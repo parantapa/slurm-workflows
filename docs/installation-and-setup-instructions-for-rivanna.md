@@ -17,9 +17,9 @@ conda create -y -n slurm-workflows python=3.12
 conda activate slurm-workflows
 ```
 
-Python 3.12 is the minimum this package supports.
+Python version used must be >= 3.12.
 If `conda activate` fails with a message about `conda init`,
-source the hook first and try again:
+source conda's shell hook and try again:
 
 ```sh
 source "$(conda info --base)/etc/profile.d/conda.sh"
@@ -54,7 +54,7 @@ echo 'export PATH="$HOME/bin:$PATH"' >> ~/.bashrc
 export PATH="$HOME/bin:$PATH"
 ```
 
-v5.0.0 is the version this release of `slurm-workflows` is built against.
+This version of `slurm-workflows` requires `ds-service` >= v5.0.0.
 
 ## 5. Check the installation
 

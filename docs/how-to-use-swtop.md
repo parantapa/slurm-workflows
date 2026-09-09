@@ -2,10 +2,11 @@
 
 [<- back to the main README](../README.md)
 
-`swtop` shows a live view of a `slurm-workflows` workflow:
-the tasks, the pilot workers, the compute nodes, and  Slurm worker jobs.
+`swtop` shows a live view of a `slurm-workflows` run:
+the tasks, the pilot jobs and worker processes,
+and the compute nodes they are running on.
 
-Point it at the same `ds-service`  (`host:port`) the executor was given
+Point it at the same `ds-service` address (`host:port`) the executor was given
 and watch a run from another shell on the login node:
 
 ```sh
@@ -30,10 +31,13 @@ the executor and the workers publish what it reads as they go.
 
 ## What the screen shows
 
-A summary line of task counts, and then five blocks:
+A summary line of task counts, the progress of the wait the driver is in,
+and then five blocks:
 
 ```
 tasks  ready 118  running 40  complete 242  canceled 0  total 400
+
+explore  [##############----------]  242/400 point  61%  working
 
 worker jobs (1)
 NAME                  GROUP  JOB      SUBMITTED
@@ -67,6 +71,15 @@ so what is happening now is at the top.
 The blocks come from different places,
 which is worth knowing when one of them looks empty:
 
+- **Progress** is what the driver's current `wait` or `as_completed` call
+    is working through: the `desc` and `unit` it was given, how many of its
+    tasks have come back, and how far along that is.
+    In the terminal UI it is a bar; in the text frames, the line above.
+    It is absent until a driver waits on something,
+    and the last wait's line stays after it finishes,
+    marked `done` rather than `working`.
+    A driver that never waits, or one whose tasks are all already back,
+    leaves nothing here.
 - **Task counts** are a single RPC, so they always cover every task.
     A server belongs to one executor,
     so every task on it is a task of the run you are watching.
@@ -155,6 +168,8 @@ with a header line naming the server and the time of the reading:
 swtop  10.0.0.1:5051  2026-01-30 11:04:57
 
 tasks  ready 118  running 40  complete 242  canceled 0  total 400
+
+explore  [##############----------]  242/400 point  61%  working
 ...
 ```
 

@@ -143,8 +143,16 @@ and `save()` is what the next run reads.
 The warning is the part a caller cannot switch off,
 because `RAISE_NEVER` otherwise loses a failure entirely:
 `task.output` is the only other record, and nothing forces a caller to read it.
-It goes to stderr through `tqdm.write`,
-so it neither breaks the progress bar nor lands in a caller's stdout.
+It goes to stderr, so it does not land in a caller's stdout.
+
+**A wait publishes its progress; it does not draw it.**
+`wait` and `as_completed` write the `progress_display` key and append to
+`progress:<uuid4>` as tasks return, and `swtop` is what turns that into a
+bar. The driver prints nothing, so a run under `nohup` leaves no progress
+bar in its output file, and a run being watched from another shell shows
+one. The count is appended at most once a second, so the cost does not
+grow with the batch; the final count is appended even when the wait
+raises, since the exception says nothing about how far it got.
 
 **Only `wait` can defer.**
 `as_completed` yields results as they arrive,

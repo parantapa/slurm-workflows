@@ -60,7 +60,7 @@ def main():
                 executor.set_task_name(task, f"task-{i:04d}")
                 tasks.append(task)
 
-            executor.wait(tasks)
+            executor.wait(tasks, desc="compute-pi", unit="slice")
 
     pi = sum(task.output for task in tasks) * stepsize
     print(f"pi = {pi}")

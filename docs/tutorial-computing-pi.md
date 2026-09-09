@@ -1,11 +1,11 @@
-# Tutorial: Computing PI on a Slurm Cluster 
+# Tutorial: Computing PI on a Slurm Cluster
 
 [<- back to the main README](../README.md)
 
-This tutorial to demonstrate how to use the `slurm-workflows` package.
+This tutorial demonstrates how to use the `slurm-workflows` package.
 It numerically computes $\pi$
 by integrating over a quarter of the unit circle in parallel.
-This example uses the `bii` partition of the Rivanna cluster at UVA,
+The example runs on the `bii` partition of the Rivanna cluster at UVA,
 and uses the `bii_nssac` account.
 
 The complete program can be found at
@@ -112,7 +112,7 @@ def main():
                 executor.set_task_name(task, f"task-{i:04d}")
                 tasks.append(task)
 
-            executor.wait(tasks)
+            executor.wait(tasks, desc="compute-pi", unit="slice")
 
     pi = sum(task.output for task in tasks) * stepsize
     print(f"pi = {pi}")

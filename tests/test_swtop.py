@@ -82,14 +82,21 @@ def collector(ds_service_address):
 
 
 class CountingClient:
-    """Counts key reads, so the identity cache can be checked."""
+    """Records key reads, so the identity cache can be checked.
+
+    Keyed by prefix, because a poll reads the progress display every time
+    on top of the identities it is caching.
+    """
 
     def __init__(self, inner):
         self._inner = inner
-        self.map_gets = 0
+        self.keys_read: list[str] = []
+
+    def reads(self, prefix: str) -> int:
+        return sum(1 for key in self.keys_read if key.startswith(prefix))
 
     async def map_get(self, key):
-        self.map_gets += 1
+        self.keys_read.append(key)
         return await self._inner.map_get(key)
 
     def __getattr__(self, name):
@@ -196,6 +203,81 @@ class TestCollectTasks:
         assert states == [("a-running", "Running"), ("b-ready", "Complete")]
 
 
+class TestCollectProgress:
+    """The progress display a wait publishes, as the collector reads it."""
+
+    def publish(
+        self, ds_client, progress_id="p-1", desc="explore", unit="point", total=10
+    ):
+        ds_client.map_set(
+            "progress_display",
+            json.dumps(
+                {
+                    "progress_id": progress_id,
+                    "desc": desc,
+                    "unit": unit,
+                    "total": total,
+                }
+            ).encode(),
+        )
+
+    def test_nothing_is_shown_on_an_idle_server(self, collector):
+        assert collector.snapshot().progress is None
+
+    def test_a_published_display_is_read(self, collector, ds_client):
+        self.publish(ds_client, desc="squaring", unit="square", total=40)
+
+        progress = collector.snapshot().progress
+
+        assert progress is not None
+        assert (progress.desc, progress.unit, progress.total) == (
+            "squaring",
+            "square",
+            40,
+        )
+        assert progress.completed == 0
+
+    def test_the_count_comes_from_the_series(self, collector, ds_client):
+        self.publish(ds_client, progress_id="p-2", total=10)
+        ds_client.time_series_append("progress:p-2", 4.0, _now_utc())
+
+        progress = collector.snapshot().progress
+
+        assert progress is not None
+        assert progress.completed == 4
+        assert progress.fraction == 0.4
+        assert not progress.done
+
+    def test_the_latest_point_wins(self, collector, ds_client):
+        self.publish(ds_client, progress_id="p-3", total=10)
+        for value in (0.0, 3.0, 10.0):
+            ds_client.time_series_append("progress:p-3", value, _now_utc())
+
+        progress = collector.snapshot().progress
+
+        assert progress is not None
+        assert progress.completed == 10
+        assert progress.done
+
+    def test_a_display_that_stopped_moving_keeps_its_count(self, collector, ds_client):
+        """A finished wait writes nothing more; the last count still shows."""
+        self.publish(ds_client, progress_id="p-4", total=10)
+        ds_client.time_series_append("progress:p-4", 10.0, _now_utc())
+        collector.snapshot()
+
+        stale = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        ds_client.time_series_append("progress:p-4", 10.0, stale)
+        progress = collector.snapshot().progress
+
+        assert progress is not None
+        assert progress.completed == 10
+
+    def test_an_unreadable_display_is_ignored(self, collector, ds_client):
+        ds_client.map_set("progress_display", b"not json")
+
+        assert collector.snapshot().progress is None
+
+
 class TestCollectWorkerJobs:
     """The pilot jobs, as the executor left them in the store."""
 
@@ -253,11 +335,11 @@ class TestCollectWorkerJobs:
         counting = cast(CountingClient, bound.collector.client)
 
         bound.snapshot()
-        after_first = counting.map_gets
+        after_first = counting.reads("worker_job_info:")
         bound.snapshot()
 
         assert after_first == 1, "the whole description is one key"
-        assert counting.map_gets == after_first
+        assert counting.reads("worker_job_info:") == after_first
         bound.close()
 
 
@@ -318,11 +400,11 @@ class TestCollectWorkers:
         counting = cast(CountingClient, bound.collector.client)
 
         bound.snapshot()
-        after_first = counting.map_gets
+        after_first = counting.reads("worker_process_info:")
         bound.snapshot()
 
         assert after_first == 1, "the whole description is one key"
-        assert counting.map_gets == after_first
+        assert counting.reads("worker_process_info:") == after_first
         worker.close()
         bound.close()
 
@@ -426,6 +508,30 @@ class TestRender:
     @pytest.fixture(autouse=True)
     def _pilot_jobs(self, pilot_jobs):
         pilot_jobs("cpu")
+
+    def test_a_progress_display_is_drawn_as_a_bar(self, collector, ds_client):
+        ds_client.map_set(
+            "progress_display",
+            json.dumps(
+                {
+                    "progress_id": "p-9",
+                    "desc": "squaring",
+                    "unit": "square",
+                    "total": 8,
+                }
+            ).encode(),
+        )
+        ds_client.time_series_append("progress:p-9", 2.0, _now_utc())
+
+        out = render(collector.snapshot())
+
+        assert "squaring" in out
+        assert "2/8 square" in out
+        assert "25%" in out
+        assert "#" in out and "-" in out
+
+    def test_no_progress_line_without_a_display(self, collector):
+        assert "%" not in render(Snapshot(address="a", when=datetime.now()))
 
     def test_an_idle_server_says_so(self, collector):
         """A pilot job is submitted here, but nothing is running in it yet."""

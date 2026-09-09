@@ -56,7 +56,7 @@ class TestTaskExecution:
         run_worker(worker, expect_tasks=1)
         worker.close()
 
-        executor.wait([task])
+        executor.wait([task], desc="test")
         assert task.output == 49
 
     def test_idles_quietly_on_an_empty_queue(
@@ -86,7 +86,7 @@ class TestTaskExecution:
         run_worker(worker, expect_tasks=5)
         worker.close()
 
-        executor.wait(tasks)
+        executor.wait(tasks, desc="test")
         assert sorted(t.output for t in tasks) == [0, 1, 4, 9, 16]
 
     def test_runs_closures(self, executor, ds_service_address, tmp_path):
@@ -97,7 +97,7 @@ class TestTaskExecution:
         run_worker(worker, expect_tasks=1)
         worker.close()
 
-        executor.wait([task])
+        executor.wait([task], desc="test")
         assert task.output == 105
 
     def test_passes_args_and_kwargs(self, executor, ds_service_address, tmp_path):
@@ -110,7 +110,7 @@ class TestTaskExecution:
         run_worker(worker, expect_tasks=1)
         worker.close()
 
-        executor.wait([task])
+        executor.wait([task], desc="test")
         assert task.output == "x+y"
 
     def test_only_serves_its_own_group(
@@ -123,7 +123,7 @@ class TestTaskExecution:
         run_worker(worker, expect_tasks=1)
         worker.close()
 
-        executor.wait([cpu_task])
+        executor.wait([cpu_task], desc="test")
         assert cpu_task.output == 4
         # The other group's task is untouched.
         assert ds_client.task_get_status(gpu_task.task_id) == TaskState.Ready
@@ -143,7 +143,7 @@ class TestRemoteErrors:
         run_worker(worker, expect_tasks=1)  # must not raise
         worker.close()
 
-        executor.wait([task], raise_on_error=RaiseOnError.RAISE_NEVER)
+        executor.wait([task], raise_on_error=RaiseOnError.RAISE_NEVER, desc="test")
         assert isinstance(task.output, RemoteExecutionError)
         assert task.output.error == "task blew up"
         assert task.output.error_id.startswith("ERROR_")
@@ -159,7 +159,7 @@ class TestRemoteErrors:
         run_worker(worker, expect_tasks=2)
         worker.close()
 
-        executor.wait([bad, good], raise_on_error=RaiseOnError.RAISE_NEVER)
+        executor.wait([bad, good], raise_on_error=RaiseOnError.RAISE_NEVER, desc="test")
         assert isinstance(bad.output, RemoteExecutionError)
         assert good.output == 16
 
@@ -173,7 +173,7 @@ class TestRemoteErrors:
             run_worker(worker, expect_tasks=1)
             worker.close()
 
-        executor.wait([task], raise_on_error=RaiseOnError.RAISE_NEVER)
+        executor.wait([task], raise_on_error=RaiseOnError.RAISE_NEVER, desc="test")
         error_id = task.output.error_id
         assert error_id in caplog.text
         assert "ValueError: task blew up" in caplog.text
@@ -188,7 +188,7 @@ class TestRemoteErrors:
         run_worker(worker, expect_tasks=1)
         worker.close()
 
-        executor.wait([task], raise_on_error=RaiseOnError.RAISE_NEVER)
+        executor.wait([task], raise_on_error=RaiseOnError.RAISE_NEVER, desc="test")
         assert isinstance(task.output, RemoteExecutionError)
 
 
@@ -279,7 +279,7 @@ class TestActors:
         run_worker(worker, 1)
         worker.close()
 
-        executor.wait([task])
+        executor.wait([task], desc="test")
         assert task.output == ((1,), {"flag": True})
 
     def test_no_actor_by_default(self, ds_service_address, tmp_path):
@@ -299,7 +299,7 @@ class TestActors:
         run_worker(worker, expect_tasks=1)
         worker.close()
 
-        executor.wait([task])
+        executor.wait([task], desc="test")
         assert task.output == "hello"
 
     def test_state_persists_across_tasks(self, executor, ds_service_address, tmp_path):
@@ -311,7 +311,7 @@ class TestActors:
         run_worker(worker, expect_tasks=4)
         worker.close()
 
-        executor.wait(tasks)
+        executor.wait(tasks, desc="test")
         # Same instance served all four, so the counter accumulated.
         assert sorted(t.output for t in tasks) == [1, 2, 3, 4]
         assert len(support_actor.INSTANCES) == 1
@@ -325,7 +325,7 @@ class TestActors:
         run_worker(worker, expect_tasks=1)
         worker.close()
 
-        executor.wait([task], raise_on_error=RaiseOnError.RAISE_NEVER)
+        executor.wait([task], raise_on_error=RaiseOnError.RAISE_NEVER, desc="test")
         assert isinstance(task.output, RemoteExecutionError)
         assert task.output.error == "actor failure"
 
@@ -338,7 +338,7 @@ class TestActors:
         run_worker(worker, expect_tasks=1)
         worker.close()
 
-        executor.wait([task], raise_on_error=RaiseOnError.RAISE_NEVER)
+        executor.wait([task], raise_on_error=RaiseOnError.RAISE_NEVER, desc="test")
         assert isinstance(task.output, RemoteExecutionError)
 
     def test_close_calls_actor_close(self, ds_service_address, tmp_path):

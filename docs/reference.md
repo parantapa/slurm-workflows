@@ -11,7 +11,7 @@ The three classes a program built on `slurm-workflows` is written against:
 | `OptimizeSpaceBotorch` | The work is "find where this function is smallest" |
 
 All three, and everything they take as arguments,
-can be imported from the top level `slurm_workflows` package.
+can be imported from the top-level `slurm_workflows` package.
 
 The two space classes are built on the first:
 both take an executor and submit through it,
@@ -54,8 +54,8 @@ with SlurmPilotExecutor("my-run", address) as executor:
 | `scale_workers(name, count)` | Submit or cancel pilot jobs so the group has `count` of them. |
 | `submit(queue, fn, *args, **kwargs)` | Enqueue one task and return a `Task` straight away. `fn` is a callable, or a method name for actor workers. |
 | `set_task_name(task, name)` | Give a task a name to be read by, `swtop` included. |
-| `as_completed(tasks, desc=None, unit="task", raise_on_error=...)` | Yield tasks as their results arrive, behind a progress bar. |
-| `wait(tasks, desc=None, unit="task", raise_on_error=...)` | Block until every task is done. |
+| `as_completed(tasks, desc, unit="task", raise_on_error=...)` | Yield tasks as their results arrive. `desc` and `unit` label the progress `swtop` draws. |
+| `wait(tasks, desc, unit="task", raise_on_error=...)` | Block until every task is done, labelled the same way. |
 | `stop()` | Cancel the pilot jobs, keep the executor usable. |
 | `close()` | Cancel the pilot jobs and close the connection. |
 
@@ -67,7 +67,7 @@ with SlurmPilotExecutor("my-run", address) as executor:
     executor.scale_workers("cpu", 1)
 
     tasks = [executor.submit("cpu", square, i) for i in range(100)]
-    executor.wait(tasks)
+    executor.wait(tasks, desc="squaring")
 
 results = [task.output for task in tasks]
 ```
@@ -216,7 +216,7 @@ opt = OptimizeSpaceBotorch(tasks, executor, files, search_parallelism=None)
 
 Fits a Gaussian process to everything measured so far,
 asks it for a batch of points at once, evaluates that batch, and repeats.
-botorch is an optional dependency:
+It needs botorch, which is an optional dependency:
 
 ```sh
 pip install -U "slurm-workflows[botorch]"

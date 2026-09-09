@@ -10,6 +10,7 @@ so executor behaviour is isolated from worker behaviour.
 from __future__ import annotations
 
 import json
+import uuid
 import itertools
 import logging
 import subprocess
@@ -177,6 +178,75 @@ class TestExecutorName:
 # --------------------------------------------------------------------------
 # define_worker
 # --------------------------------------------------------------------------
+
+
+class TestProgressDisplay:
+    """What a wait publishes for `swtop` to draw."""
+
+    @pytest.fixture(autouse=True)
+    def _pilot_jobs(self, pilot_jobs):
+        pilot_jobs("cpu")
+
+    def published(self, ds_client) -> dict:
+        return json.loads(ds_client.map_get("progress_display"))
+
+    def series(self, ds_client, progress_id: str) -> list[float]:
+        points = ds_client.time_series_get(f"progress:{progress_id}")
+        return [point.value for point in points]
+
+    def test_wait_publishes_what_it_is_working_through(self, executor, ds_client):
+        tasks = [executor.submit("cpu", square, i) for i in range(3)]
+        drain(ds_client, "cpu", 3)
+
+        executor.wait(tasks, desc="squaring", unit="square")
+
+        published = self.published(ds_client)
+        assert published["desc"] == "squaring"
+        assert published["unit"] == "square"
+        assert published["total"] == 3
+        assert uuid.UUID(published["progress_id"])
+
+    def test_as_completed_publishes_too(self, executor, ds_client):
+        tasks = [executor.submit("cpu", square, i) for i in range(2)]
+        drain(ds_client, "cpu", 2)
+
+        list(executor.as_completed(tasks, desc="collecting"))
+
+        assert self.published(ds_client)["desc"] == "collecting"
+
+    def test_every_call_gets_its_own_id(self, executor, ds_client):
+        first = [executor.submit("cpu", square, 1)]
+        drain(ds_client, "cpu", 1)
+        executor.wait(first, desc="one")
+        one = self.published(ds_client)["progress_id"]
+
+        second = [executor.submit("cpu", square, 2)]
+        drain(ds_client, "cpu", 1)
+        executor.wait(second, desc="two")
+        two = self.published(ds_client)["progress_id"]
+
+        assert one != two
+
+    def test_the_series_counts_the_tasks_that_came_back(self, executor, ds_client):
+        tasks = [executor.submit("cpu", square, i) for i in range(4)]
+        drain(ds_client, "cpu", 4)
+
+        executor.wait(tasks, desc="squaring")
+
+        values = self.series(ds_client, self.published(ds_client)["progress_id"])
+        assert values[0] == 0, "the series opens at nothing done"
+        assert values[-1] == 4, "and closes at every task counted"
+        assert values == sorted(values)
+
+    def test_a_failed_wait_still_leaves_a_series(self, executor, ds_client):
+        tasks = [executor.submit("cpu", square, i) for i in range(2)]
+        fail_one(ds_client, "cpu")
+
+        with pytest.raises(RuntimeError):
+            executor.wait(tasks, desc="squaring")
+
+        values = self.series(ds_client, self.published(ds_client)["progress_id"])
+        assert values, "the display is published before anything is waited on"
 
 
 class TestDefineWorker:
@@ -634,7 +704,9 @@ class TestAsCompleted:
         tasks = [executor.submit("cpu", square, i) for i in range(5)]
         drain(ds_client, "cpu", 5)
 
-        results = {t.task_id: t.output for t in executor.as_completed(tasks)}
+        results = {
+            t.task_id: t.output for t in executor.as_completed(tasks, desc="test")
+        }
 
         assert sorted(results.values()) == [0, 1, 4, 9, 16]
 
@@ -643,7 +715,7 @@ class TestAsCompleted:
         task = executor.submit("cpu", lambda x: x * factor, 6)
         drain(ds_client, "cpu", 1)
 
-        executor.wait([task])
+        executor.wait([task], desc="test")
 
         assert task.output == 42
 
@@ -654,7 +726,7 @@ class TestAsCompleted:
         task = executor.submit("cpu", add, 1, b=41)
         drain(ds_client, "cpu", 1)
 
-        executor.wait([task])
+        executor.wait([task], desc="test")
 
         assert task.output == 42
 
@@ -662,7 +734,7 @@ class TestAsCompleted:
         tasks = [executor.submit("cpu", square, i) for i in range(3)]
         drain(ds_client, "cpu", 3)
 
-        executor.wait(tasks)
+        executor.wait(tasks, desc="test")
 
         assert sorted(t.output for t in tasks) == [0, 1, 4]
 
@@ -672,18 +744,18 @@ class TestAsCompleted:
         drain(ds_client, "cpu", 2)
 
         with time_limit(10, "as_completed waited for unfinished tasks"):
-            got = list(itertools.islice(executor.as_completed(tasks), 2))
+            got = list(itertools.islice(executor.as_completed(tasks, desc="test"), 2))
 
         assert len(got) == 2
 
     def test_already_completed_tasks_are_served_from_cache(self, executor, ds_client):
         tasks = [executor.submit("cpu", square, i) for i in range(3)]
         drain(ds_client, "cpu", 3)
-        executor.wait(tasks)
+        executor.wait(tasks, desc="test")
 
         counting = CountingClient(executor.client)
         executor.client = counting
-        again = list(executor.as_completed(tasks))
+        again = list(executor.as_completed(tasks, desc="test"))
 
         assert len(again) == 3
         assert counting.status_calls == 0, "cached tasks must not be re-polled"
@@ -694,7 +766,7 @@ class TestAsCompleted:
 
         counting = CountingClient(executor.client)
         executor.client = counting
-        executor.wait(tasks)
+        executor.wait(tasks, desc="test")
 
         assert counting.status_calls == 1
         assert counting.status_batch_sizes == [6]
@@ -704,7 +776,7 @@ class TestAsCompleted:
         # Without Undefined handling this polls forever instead of raising.
         with time_limit(10, "as_completed never terminated for an unknown task"):
             with pytest.raises(RuntimeError, match="unknown to the task queue server"):
-                list(executor.as_completed([ghost_task()]))
+                list(executor.as_completed([ghost_task()], desc="test"))
 
     def test_unknown_task_id_raises_from_wait(self, executor, time_limit):
         # `wait` gets this by delegating to `as_completed`,
@@ -712,7 +784,7 @@ class TestAsCompleted:
         # rather than resting on that delegation staying put.
         with time_limit(10, "wait never terminated for an unknown task"):
             with pytest.raises(RuntimeError, match="unknown to the task queue server"):
-                executor.wait([ghost_task()])
+                executor.wait([ghost_task()], desc="test")
 
     def test_canceled_task_raises(self, executor, ds_client, time_limit):
         # `Canceled` arrived with ds-service 4.0.0.
@@ -723,12 +795,12 @@ class TestAsCompleted:
 
         with time_limit(10, "as_completed never terminated for a canceled task"):
             with pytest.raises(RuntimeError, match="was canceled"):
-                list(executor.as_completed([task]))
+                list(executor.as_completed([task], desc="test"))
 
     def test_empty_task_list(self, executor):
         # Nothing is pending, so neither the no-worker check
         # nor the poll loop has anything to run against.
-        assert list(executor.as_completed([])) == []
+        assert list(executor.as_completed([], desc="test")) == []
 
 
 class TestRemoteErrors:
@@ -741,7 +813,7 @@ class TestRemoteErrors:
         task = executor.submit("cpu", square, 1)
         fail_one(ds_client, "cpu", error_id="ERROR_abc")
 
-        executor.wait([task], raise_on_error=RaiseOnError.RAISE_NEVER)
+        executor.wait([task], raise_on_error=RaiseOnError.RAISE_NEVER, desc="test")
 
         assert isinstance(task.output, RemoteExecutionError)
         assert task.output.error_id == "ERROR_abc"
@@ -751,14 +823,14 @@ class TestRemoteErrors:
         fail_one(ds_client, "cpu", error_id="ERROR_xyz")
 
         with pytest.raises(RuntimeError, match="ERROR_xyz"):
-            executor.wait([task])
+            executor.wait([task], desc="test")
 
     def test_the_first_failure_stops_the_wait(self, executor, ds_client):
         tasks = [executor.submit("cpu", square, i) for i in range(3)]
         fail_one(ds_client, "cpu")
 
         with pytest.raises(RuntimeError):
-            executor.wait(tasks)
+            executor.wait(tasks, desc="test")
 
         # The other two were never waited for.
         assert [t.output is NoOutput for t in tasks] == [False, True, True]
@@ -768,7 +840,7 @@ class TestRemoteErrors:
         fail_one(ds_client, "cpu")
         drain(ds_client, "cpu", 2)
 
-        executor.wait(tasks, raise_on_error=RaiseOnError.RAISE_NEVER)
+        executor.wait(tasks, raise_on_error=RaiseOnError.RAISE_NEVER, desc="test")
 
         failed = [t for t in tasks if isinstance(t.output, RemoteExecutionError)]
         assert len(failed) == 1
@@ -780,7 +852,9 @@ class TestRemoteErrors:
         drain(ds_client, "cpu", 2)
 
         with pytest.raises(RuntimeError, match="1 of 3 tasks did not succeed"):
-            executor.wait(tasks, raise_on_error=RaiseOnError.RAISE_AFTER_COMPLETED)
+            executor.wait(
+                tasks, raise_on_error=RaiseOnError.RAISE_AFTER_COMPLETED, desc="test"
+            )
 
         assert all(t.output is not NoOutput for t in tasks)
 
@@ -790,7 +864,9 @@ class TestRemoteErrors:
         fail_one(ds_client, "cpu", error_id="ERROR_two")
 
         with pytest.raises(RuntimeError) as raised:
-            executor.wait(tasks, raise_on_error=RaiseOnError.RAISE_AFTER_COMPLETED)
+            executor.wait(
+                tasks, raise_on_error=RaiseOnError.RAISE_AFTER_COMPLETED, desc="test"
+            )
 
         assert "ERROR_one" in str(raised.value)
         assert "ERROR_two" in str(raised.value)
@@ -801,7 +877,9 @@ class TestRemoteErrors:
             fail_one(ds_client, "cpu")
 
         with pytest.raises(RuntimeError, match="and 2 more"):
-            executor.wait(tasks, raise_on_error=RaiseOnError.RAISE_AFTER_COMPLETED)
+            executor.wait(
+                tasks, raise_on_error=RaiseOnError.RAISE_AFTER_COMPLETED, desc="test"
+            )
 
     @pytest.mark.parametrize(
         "policy",
@@ -818,7 +896,7 @@ class TestRemoteErrors:
         fail_one(ds_client, "cpu", error_id="ERROR_xyz")
 
         try:
-            executor.wait([task], raise_on_error=policy)
+            executor.wait([task], raise_on_error=policy, desc="test")
         except RuntimeError:
             pass
 
@@ -837,7 +915,9 @@ class TestRemoteErrors:
         with pytest.raises(RuntimeError):
             list(
                 executor.as_completed(
-                    tasks, raise_on_error=RaiseOnError.RAISE_AFTER_COMPLETED
+                    tasks,
+                    raise_on_error=RaiseOnError.RAISE_AFTER_COMPLETED,
+                    desc="test",
                 )
             )
 
@@ -847,7 +927,9 @@ class TestRemoteErrors:
         drain(ds_client, "cpu", 2)
 
         seen = list(
-            executor.as_completed(tasks, raise_on_error=RaiseOnError.RAISE_NEVER)
+            executor.as_completed(
+                tasks, raise_on_error=RaiseOnError.RAISE_NEVER, desc="test"
+            )
         )
 
         assert len(seen) == 3
@@ -940,26 +1022,26 @@ class TestNoWorkerStarted:
         task = executor.submit("cpu", square, 2)
 
         with pytest.raises(RuntimeError, match="no worker started"):
-            list(executor.as_completed([task]))
+            list(executor.as_completed([task], desc="test"))
 
     def test_a_queue_matching_no_group_is_rejected(self, executor):
         """Queue names are not validated at submit time, so a typo lands here."""
         task = executor.submit("typo-in-queue-name", square, 2)
 
         with pytest.raises(RuntimeError, match="no worker started"):
-            list(executor.as_completed([task]))
+            list(executor.as_completed([task], desc="test"))
 
     def test_the_error_names_the_queues(self, executor):
         task = executor.submit("ghost", square, 2)
 
         with pytest.raises(RuntimeError, match=r"\['ghost'\]"):
-            list(executor.as_completed([task]))
+            list(executor.as_completed([task], desc="test"))
 
     def test_wait_rejects_too(self, executor):
         task = executor.submit("ghost", square, 2)
 
         with pytest.raises(RuntimeError, match="no worker started"):
-            executor.wait([task])
+            executor.wait([task], desc="test")
 
     def test_it_raises_before_yielding_anything(
         self, executor, ds_client, setup_script
@@ -969,13 +1051,13 @@ class TestNoWorkerStarted:
         executor.scale_workers("cpu", 1)
         done = executor.submit("cpu", square, 3)
         drain(ds_client, "cpu", 1)
-        executor.wait([done])
+        executor.wait([done], desc="test")
 
         stranded = executor.submit("ghost", square, 2)
 
         yielded = []
         with pytest.raises(RuntimeError, match="no worker started"):
-            for task in executor.as_completed([done, stranded]):
+            for task in executor.as_completed([done, stranded], desc="test"):
                 yielded.append(task)
 
         assert yielded == [], "the error must come before any result"
@@ -990,7 +1072,9 @@ class TestNoWorkerStarted:
         starved = executor.submit("ghost", square, 9)
         drain(ds_client, "cpu", 3)
 
-        executor.wait(good + [starved], raise_on_error=RaiseOnError.RAISE_NEVER)
+        executor.wait(
+            good + [starved], raise_on_error=RaiseOnError.RAISE_NEVER, desc="test"
+        )
 
         assert [task.output for task in good] == [0, 1, 4]
         assert starved.output is NoOutput
@@ -1007,7 +1091,9 @@ class TestNoWorkerStarted:
 
         with pytest.raises(RuntimeError, match="1 of 4 tasks did not succeed"):
             executor.wait(
-                good + [starved], raise_on_error=RaiseOnError.RAISE_AFTER_COMPLETED
+                good + [starved],
+                raise_on_error=RaiseOnError.RAISE_AFTER_COMPLETED,
+                desc="test",
             )
 
         assert all(task.output is not NoOutput for task in good)
@@ -1024,7 +1110,9 @@ class TestNoWorkerStarted:
 
         with pytest.raises(RuntimeError, match="3 of 4 tasks did not succeed"):
             executor.wait(
-                [done] + starved, raise_on_error=RaiseOnError.RAISE_AFTER_COMPLETED
+                [done] + starved,
+                raise_on_error=RaiseOnError.RAISE_AFTER_COMPLETED,
+                desc="test",
             )
 
     def test_one_live_queue_is_enough(self, executor, ds_client, setup_script):
@@ -1035,7 +1123,7 @@ class TestNoWorkerStarted:
 
         drain(ds_client, "cpu", 1)
 
-        (result,) = list(executor.as_completed([task]))
+        (result,) = list(executor.as_completed([task], desc="test"))
         assert result.output == 16
 
     def test_finished_tasks_need_no_worker(self, executor, ds_client, setup_script):
@@ -1044,11 +1132,11 @@ class TestNoWorkerStarted:
         executor.scale_workers("cpu", 1)
         task = executor.submit("cpu", square, 5)
         drain(ds_client, "cpu", 1)
-        executor.wait([task])
+        executor.wait([task], desc="test")
 
         executor.groups.clear()  # as if this executor never started anything
 
-        assert [t.output for t in executor.as_completed([task])] == [25]
+        assert [t.output for t in executor.as_completed([task], desc="test")] == [25]
 
 
 # --------------------------------------------------------------------------
@@ -1080,7 +1168,7 @@ class TestStrandedTasks:
 
         with time_limit(10, "as_completed did not notice the dead queue"):
             with pytest.raises(RuntimeError, match="no live pilot job"):
-                list(executor.as_completed([task]))
+                list(executor.as_completed([task], desc="test"))
 
     def test_error_names_the_dead_queues(
         self, executor, fake_slurm, setup_script, check_immediately, time_limit
@@ -1092,7 +1180,7 @@ class TestStrandedTasks:
 
         with time_limit(10, "as_completed did not notice the dead queue"):
             with pytest.raises(RuntimeError, match=r"\['gpu'\]"):
-                list(executor.as_completed([task]))
+                list(executor.as_completed([task], desc="test"))
 
     def test_a_task_is_fine_while_any_of_its_queues_is_live(
         self, executor, fake_slurm, setup_script, ds_client, check_immediately
@@ -1109,7 +1197,7 @@ class TestStrandedTasks:
 
         drain(ds_client, "cpu", 1)
 
-        (done,) = list(executor.as_completed([task]))
+        (done,) = list(executor.as_completed([task], desc="test"))
         assert done.output == 9
 
     def test_wait_raises_too(
@@ -1122,7 +1210,7 @@ class TestStrandedTasks:
 
         with time_limit(10, "wait did not notice the dead queue"):
             with pytest.raises(RuntimeError, match="no live pilot job"):
-                executor.wait([task])
+                executor.wait([task], desc="test")
 
     def test_only_the_stranded_tasks_are_given_up_on(
         self, executor, fake_slurm, setup_script, ds_client, check_immediately
@@ -1144,7 +1232,9 @@ class TestStrandedTasks:
         fake_slurm.running_job_ids.remove(opt_job)
         drain(ds_client, "eval", 3)
 
-        executor.wait(working + [stranded], raise_on_error=RaiseOnError.RAISE_NEVER)
+        executor.wait(
+            working + [stranded], raise_on_error=RaiseOnError.RAISE_NEVER, desc="test"
+        )
 
         assert [task.output for task in working] == [0, 1, 4]
         assert stranded.output is NoOutput
@@ -1168,6 +1258,7 @@ class TestStrandedTasks:
             executor.wait(
                 [working] + stranded,
                 raise_on_error=RaiseOnError.RAISE_AFTER_COMPLETED,
+                desc="test",
             )
 
         assert working.output == 1
@@ -1180,11 +1271,11 @@ class TestStrandedTasks:
         executor.scale_workers("cpu", 1)
         task = executor.submit("cpu", square, 4)
         drain(ds_client, "cpu", 1)
-        executor.wait([task])
+        executor.wait([task], desc="test")
 
         fake_slurm.running_job_ids.clear()
 
-        assert [t.output for t in executor.as_completed([task])] == [16]
+        assert [t.output for t in executor.as_completed([task], desc="test")] == [16]
 
     def test_squeue_failure_does_not_abort_the_wait(
         self, executor, fake_slurm, setup_script, ds_client, check_immediately
@@ -1197,7 +1288,7 @@ class TestStrandedTasks:
 
         drain(ds_client, "cpu", 1)
 
-        (done,) = list(executor.as_completed([task]))
+        (done,) = list(executor.as_completed([task], desc="test"))
         assert done.output == 25
 
     def test_not_checked_before_the_interval_elapses(
@@ -1216,7 +1307,7 @@ class TestStrandedTasks:
         executor.scale_workers("cpu", 1)
         drain(ds_client, "cpu", 1)
 
-        (done,) = list(executor.as_completed([task]))
+        (done,) = list(executor.as_completed([task], desc="test"))
         assert done.output == 36
 
 

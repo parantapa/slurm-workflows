@@ -23,7 +23,11 @@ import click
 from ds_service_client import DsServiceClientAsync, TaskState, TaskStateError
 
 from .monitors import HOST_SERIES, JOB_SERIES
-from .slurm_pilot_executor import WORKER_JOB_INFO_PREFIX
+from .slurm_pilot_executor import (
+    PROGRESS_DISPLAY_KEY,
+    PROGRESS_SERIES_PREFIX,
+    WORKER_JOB_INFO_PREFIX,
+)
 from .slurm_pilot_worker import WORKER_PROCESS_INFO_PREFIX
 
 DEFAULT_INTERVAL_S: float = 2.0
@@ -34,6 +38,12 @@ WORKER_INFO_FIELDS = ["group", "name", "slurm_job_id", "hostname", "pid"]
 
 # The fields the executor publishes about a pilot job, likewise.
 WORKER_JOB_FIELDS = ["name", "group", "slurm_job_id", "submit_time"]
+
+# The fields of the progress display a wait publishes.
+PROGRESS_FIELDS = ["progress_id", "desc", "unit", "total"]
+
+# How far back a progress reading is still shown as live.
+PROGRESS_TAIL_S = 60.0
 
 TASK_NAME_PREFIX = "task_name:"
 
@@ -117,12 +127,32 @@ class SubjectInfo:
 
 
 @dataclass
+class ProgressInfo:
+    """What a `wait` or `as_completed` call is working through."""
+
+    progress_id: str
+    desc: str
+    unit: str
+    total: int
+    completed: int = 0
+
+    @property
+    def done(self) -> bool:
+        return self.completed >= self.total
+
+    @property
+    def fraction(self) -> float:
+        return self.completed / self.total if self.total else 1.0
+
+
+@dataclass
 class Snapshot:
     """One poll's worth of server state."""
 
     address: str
     when: datetime
     counts: dict[str, int] = field(default_factory=dict)
+    progress: ProgressInfo | None = None
     worker_jobs: list[WorkerJobInfo] = field(default_factory=list)
     workers: list[WorkerInfo] = field(default_factory=list)
     tasks: list[TaskInfo] = field(default_factory=list)
@@ -143,13 +173,17 @@ class Collector:
         self.address = address
         self._worker_jobs: dict[str, WorkerJobInfo] = {}
         self._workers: dict[str, WorkerInfo] = {}
+        # The last count read for a progress id, so a display that has
+        # stopped moving is still drawn where it stopped.
+        self._progress_seen: dict[str, int] = {}
         self._task_names: dict[str, str] = {}
 
     async def snapshot(self) -> Snapshot:
-        # None of these five needs an answer from another,
+        # None of these six needs an answer from another,
         # so they go out together and the poll waits once.
-        counts, worker_jobs, workers, hosts, jobs = await asyncio.gather(
+        counts, progress, worker_jobs, workers, hosts, jobs = await asyncio.gather(
             self.client.task_get_count_by_state(),
+            self._collect_progress(),
             self._collect_worker_jobs(),
             self._collect_workers(),
             self._collect_subjects(HOST_SERIES),
@@ -168,6 +202,7 @@ class Collector:
                 "complete": counts.complete,
                 "canceled": counts.canceled,
             },
+            progress=progress,
             worker_jobs=worker_jobs,
             workers=workers,
             tasks=tasks,
@@ -181,6 +216,31 @@ class Collector:
         except KeyError:
             return UNKNOWN
         return value.decode("utf-8", errors="replace")
+
+    async def _collect_progress(self) -> ProgressInfo | None:
+        """The progress display a wait published, and how far it has got."""
+        text = await self._text(PROGRESS_DISPLAY_KEY)
+        try:
+            published = json.loads(text)
+            info = ProgressInfo(
+                progress_id=str(published["progress_id"]),
+                desc=str(published["desc"]),
+                unit=str(published["unit"]),
+                total=int(published["total"]),
+            )
+        except (ValueError, TypeError, KeyError):
+            return None
+
+        since = (
+            datetime.now(timezone.utc) - timedelta(seconds=PROGRESS_TAIL_S)
+        ).isoformat()
+        points = await self.client.time_series_get(
+            f"{PROGRESS_SERIES_PREFIX}{info.progress_id}", start_time=since
+        )
+        if points:
+            self._progress_seen[info.progress_id] = int(points[-1].value)
+        info.completed = self._progress_seen.get(info.progress_id, 0)
+        return info
 
     async def _collect_worker_jobs(self) -> list[WorkerJobInfo]:
         """Every pilot job the executor has published, cached like the rest."""
@@ -400,6 +460,22 @@ JOB_COLUMNS = ["JOB", "MEMORY", "CPU"]
 TASK_COLUMNS = ["NAME", "TASK ID", "STATE", "WORKER"]
 
 
+def progress_line(snapshot: Snapshot, width: int = 24) -> str:
+    """The progress display as one line, or "" when nothing published one."""
+    progress = snapshot.progress
+    if progress is None:
+        return ""
+
+    filled = round(progress.fraction * width)
+    bar = "#" * filled + "-" * (width - filled)
+    state = "done" if progress.done else "working"
+    return (
+        f"{progress.desc}  [{bar}]  "
+        f"{progress.completed}/{progress.total} {progress.unit}  "
+        f"{progress.fraction:.0%}  {state}"
+    )
+
+
 def counts_line(snapshot: Snapshot) -> str:
     """The task counts, as one line."""
     counts = snapshot.counts
@@ -491,6 +567,11 @@ def render(snapshot: Snapshot) -> str:
 
     lines.append(counts_line(snapshot))
     lines.append("")
+
+    progress = progress_line(snapshot)
+    if progress:
+        lines.append(progress)
+        lines.append("")
 
     blocks = [
         (

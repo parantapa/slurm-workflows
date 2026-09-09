@@ -717,7 +717,7 @@ class TestAcquisition:
         # Against the task's own setting rather than a literal:
         # the default lives in the dataclass,
         # and pinning its value here would only mean editing this test
-        # whenever it is retuned.
+        # whenever it is returned.
         assert timeouts == [opt.tasks[0].acqf_timeout_s] * 2
         assert timeouts[0] is not None
 

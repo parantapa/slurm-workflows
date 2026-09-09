@@ -21,14 +21,14 @@ and what to read when a run misbehaves.
 ## Concepts
 
 **Setup script.** A shell script snippet that every worker runs before starting.
-    This is used to setup the environment (`module load`, `conda activate`)
+    This is used to set up the environment (`module load`, `conda activate`)
     on the compute node.
     The shell script **text** is inlined into each generated worker script.
 
-**Worker group.** A named recipe for staring a worker:
+**Worker group.** A named recipe for starting a worker:
     sbatch arguments, optional setup script, optional actor class.
     Defining a group does not launch workers.
-    `scale_workers` method is used to start/stop workers.
+    The `scale_workers` method starts and stops them.
 
 **Queue.** Tasks are submitted to a named queue,
 and **a worker group pulls from the queue matching its own name**.
@@ -118,8 +118,8 @@ generated scripts and all logs land there.
 | `define_worker(name, sbatch_args, ...)` | Register a worker group. Idempotent - redefining a group identically is a no-op, redefining it differently asserts. |
 | `scale_workers(name, count)` | Submit or cancel pilot jobs so the group has `count` jobs. |
 | `submit(queue, fn, *args, **kwargs) -> Task` | Enqueue a task. `queue` is a group name or a list of them; `fn` is a callable, or a method name (`str`) for actor workers. |
-| `as_completed(tasks, desc=None, unit="task", raise_on_error=...)` | Yield tasks as their results arrive, wrapped in a tqdm bar. Raises `RuntimeError` rather than blocking forever on a task that can never finish - see below. |
-| `wait(tasks, desc=None, unit="task", raise_on_error=...)` | Same, but discards the iterator - just block until all are done. |
+| `as_completed(tasks, desc, unit="task", raise_on_error=...)` | Yield tasks as their results arrive. Raises `RuntimeError` rather than blocking forever on a task that can never finish - see below. |
+| `wait(tasks, desc, unit="task", raise_on_error=...)` | Same, but discards the iterator - just block until all are done. |
 | `set_task_name(task, name)` | Name a task, on the queue server as well as locally. |
 | `stop()` | Cancel all pilot jobs, keep the executor usable. |
 | `close()` | Cancel all pilot jobs and close the queue-server connection. |
@@ -139,6 +139,32 @@ with SlurmPilotExecutor(name="demo", server_address=address) as executor:
 
 Leaving the block calls `close()`, so the executor is spent afterwards.
 An exception raised inside the block still propagates.
+
+### Watching a wait
+
+`desc` is required, and `unit` names what is being counted,
+because neither call prints a progress bar of its own:
+they publish what they are working through to the queue server instead,
+where [`swtop`](how-to-use-swtop.md) draws it.
+
+Each call writes the key `progress_display`, a JSON object holding
+
+| Field | Value |
+| --- | --- |
+| `progress_id` | A fresh UUID4, one per call |
+| `desc` | The `desc` given to the call |
+| `unit` | The `unit` given to the call |
+| `total` | How many tasks were handed in |
+
+and appends the count that have come back so far
+to the time series `progress:<progress_id>`,
+opening at 0 and closing at the number that returned.
+The count is appended at most once a second while tasks arrive,
+so a batch of thousands does not cost an append apiece.
+
+The key is overwritten by the next call,
+so the server holds the display for the most recent wait,
+and the series holds the history of each.
 
 ### Waiting on tasks nothing can run
 
@@ -316,7 +342,7 @@ since the value the server orders by was sent when the task was enqueued.
 What `as_completed` and `wait` do about a task that fails.
 A failure is any of: a task whose worker raised
 (its `output` is a `RemoteExecutionError`),
-a task canceled on the queue server,
+a task cancelled on the queue server,
 a task the server does not know,
 or a pending task whose queues have no pilot job left to run them.
 Only the tasks that cannot finish are given up on;
@@ -353,7 +379,7 @@ failed = [t for t in tasks if isinstance(t.output, RemoteExecutionError)]
 never_ran = [t for t in tasks if t.output is NoOutput]
 ```
 
-`output` stays `NoOutput` for a task that was canceled,
+`output` stays `NoOutput` for a task that was cancelled,
 is unknown to the server,
 or was still pending when the last pilot job went away.
 
@@ -543,7 +569,7 @@ Common failure modes:
 - **`RuntimeError: Task ... was canceled on the task queue server`.**
     Somebody cancelled the task through the `ds-service` client directly
     -- nothing in this library does.
-    A canceled task is never dispatched again
+    A cancelled task is never dispatched again
     and never produces an output,
     so waiting on it is reported rather than retried.
     Resubmit it if you still want it run.

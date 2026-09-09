@@ -19,7 +19,6 @@ classifiers = [
 
 dependencies = [
     "click",
-    "tqdm",
     "jinja2",
     "json5",
     "platformdirs",

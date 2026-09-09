@@ -9,19 +9,19 @@ import re
 import sys
 import time
 import json
+import uuid
 import pickle
 import logging
 import subprocess
 from enum import Enum, auto
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import Callable, Iterable, Any, cast
 
 import platformdirs
 import cloudpickle
 from typeguard import typechecked
-from tqdm import tqdm
 from ds_service_client import DsServiceClient, TaskState
 
 from .slurm_utils import (
@@ -44,6 +44,15 @@ NoOutput = object()
 # One JSON key per submitted pilot job, keyed on the worker name.
 # Read by `swtop`; the fields are listed in `docs/concepts.md`.
 WORKER_JOB_INFO_PREFIX = "worker_job_info:"
+
+# What `wait` and `as_completed` are working through, for `swtop` to draw.
+# The key is overwritten by each call; the series under the id it carries
+# holds the count completed so far.
+PROGRESS_DISPLAY_KEY = "progress_display"
+PROGRESS_SERIES_PREFIX = "progress:"
+
+# How often the count is appended while tasks come back.
+PROGRESS_INTERVAL_S: float = 1.0
 
 
 class RaiseOnError(Enum):
@@ -110,6 +119,31 @@ class WorkerGroup:
     python_paths: list[str]
     workers: dict[str, SlurmJob] = field(default_factory=dict, compare=False)
     next_worker_index: int = field(default=0, compare=False)
+
+
+@dataclass
+class _Progress:
+    """One `wait` or `as_completed` call, counted into a time series."""
+
+    client: DsServiceClient
+    progress_id: str
+    total: int
+    _last_sent: float = field(default=0.0, compare=False)
+
+    def record(self, done: int) -> None:
+        """Append `done` if the series has not been written to recently."""
+        now = time.monotonic()
+        if done < self.total and now - self._last_sent < PROGRESS_INTERVAL_S:
+            return
+        self.append(done)
+
+    def append(self, done: int) -> None:
+        self._last_sent = time.monotonic()
+        self.client.time_series_append(
+            f"{PROGRESS_SERIES_PREFIX}{self.progress_id}",
+            float(done),
+            datetime.now(timezone.utc).isoformat(),
+        )
 
 
 class SlurmPilotExecutor:
@@ -385,7 +419,7 @@ class SlurmPilotExecutor:
 
     def _warn(self, message: str) -> None:
         """Report one failure on stderr as it happens."""
-        tqdm.write(f"warning: {message}", file=sys.stderr)
+        print(f"warning: {message}", file=sys.stderr, flush=True)
 
     def _as_completed(
         self, tasks: list[Task], raise_on_error: RaiseOnError
@@ -487,31 +521,71 @@ class SlurmPilotExecutor:
     def as_completed(
         self,
         tasks: Iterable[Task],
-        desc: str | None = None,
+        desc: str,
         unit: str = "task",
         raise_on_error: RaiseOnError = RaiseOnError.RAISE_ON_FIRST_ERROR,
     ) -> Iterable[Task]:
+        """Yield tasks as their results arrive.
+
+        `desc` and `unit` label the progress `swtop` draws for this call.
+        """
         tasks = list(tasks)
         if raise_on_error is RaiseOnError.RAISE_AFTER_COMPLETED:
             raise_on_error = RaiseOnError.RAISE_ON_FIRST_ERROR
 
-        iterable = self._as_completed(tasks, raise_on_error)
-        iterable = tqdm(iterable, total=len(tasks), desc=desc, unit=unit)
-        return iterable
+        progress = self._publish_progress(desc, unit, len(tasks))
+        return self._counted(self._as_completed(tasks, raise_on_error), progress)
 
     @typechecked
     def wait(
         self,
         tasks: Iterable[Task],
-        desc: str | None = None,
+        desc: str,
         unit: str = "task",
         raise_on_error: RaiseOnError = RaiseOnError.RAISE_ON_FIRST_ERROR,
     ) -> None:
+        """Block until every task is done.
+
+        `desc` and `unit` label the progress `swtop` draws for this call.
+        """
         tasks = list(tasks)
+        progress = self._publish_progress(desc, unit, len(tasks))
         # Not through `as_completed`, which cannot defer an exception.
-        iterable = self._as_completed(tasks, raise_on_error)
-        for _ in tqdm(iterable, total=len(tasks), desc=desc, unit=unit):
+        for _ in self._counted(self._as_completed(tasks, raise_on_error), progress):
             pass
+
+    def _publish_progress(self, desc: str, unit: str, total: int) -> _Progress:
+        """Announce what this call is working through, and start its series."""
+        progress = _Progress(
+            client=self.client,
+            progress_id=str(uuid.uuid4()),
+            total=total,
+        )
+        self.client.map_set(
+            PROGRESS_DISPLAY_KEY,
+            json.dumps(
+                {
+                    "progress_id": progress.progress_id,
+                    "desc": desc,
+                    "unit": unit,
+                    "total": total,
+                }
+            ).encode("utf-8"),
+        )
+        progress.append(0)
+        return progress
+
+    @staticmethod
+    def _counted(tasks: Iterable[Task], progress: _Progress) -> Iterable[Task]:
+        """Pass tasks through, recording how many have come back."""
+        done = 0
+        try:
+            for task in tasks:
+                done += 1
+                progress.record(done)
+                yield task
+        finally:
+            progress.append(done)
 
     def _live_queues(self, queues: Iterable[str] | None = None) -> set[str]:
         """Queues `squeue` still lists a job for, pending or running.
