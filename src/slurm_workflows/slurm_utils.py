@@ -9,7 +9,8 @@ from functools import cache
 
 from .templates import render_template
 
-COMMAND_TIMEOUT = 120
+# Seconds any one Slurm command may take before it is abandoned.
+COMMAND_TIMEOUT: int = 120
 SBATCH_OUTPUT_REGEX = re.compile(r"Submitted batch job (?P<id>\S*)")
 
 SBATCH_EXE = "sbatch"
@@ -19,9 +20,11 @@ SCANCEL_EXE = "scancel"
 
 @cache
 def get_clean_environ() -> dict[str, str]:
-    """Create environment dict without SLURM set variables.
+    """The environment, less every Slurm-set variable.
 
-    This is an issue when submitting Slurm jobs from within Slurm jobs.
+    Drops `SLURM_`, `SLURMD_`, `PMI_` and `SRUN_`,
+    which is what lets a coordinator running inside an allocation
+    submit jobs of its own.
     """
     sanitized_env: dict[str, str] = {}
     for k, v in os.environ.items():
@@ -39,7 +42,11 @@ def get_clean_environ() -> dict[str, str]:
 
 
 def get_running_jobids() -> set[int]:
-    """Get the running Slurm job IDs for the given Slurm user."""
+    """The ids of this user's Slurm jobs, pending or running.
+
+    Raises `subprocess.CalledProcessError` if `squeue` fails,
+    and `subprocess.TimeoutExpired` if it does not answer in time.
+    """
     cmd = [SQUEUE_EXE, "--all", "--me", "--noheader", "--format", "%A"]
 
     proc = subprocess.run(
@@ -59,8 +66,12 @@ def cancel_jobs(
     term: bool = False,
     batch: bool = False,
     full: bool = False,
-):
-    """Run scancel command for the given job ids."""
+) -> None:
+    """Cancel the given jobs. An empty list is a no-op.
+
+    `term`, `batch` and `full` add `scancel`'s `--signal=TERM`,
+    `--batch` and `--full` respectively.
+    """
     if not job_ids:
         return
 
@@ -96,11 +107,13 @@ def submit_sbatch_job(
     script: str,
     work_dir: Path,
 ) -> SlurmJob:
-    """Submit a sbatch job."""
-    # Figure out the output and error file names.
+    """Submit one job, and return it with its id and output file resolved.
+
+    Writes `<name>.sbatch` into `work_dir` and makes it executable.
+    Raises `RuntimeError` if `sbatch` succeeds but its output holds no job id.
+    """
     output_file = str(work_dir / f"{name}-%j.out")
 
-    # Create the sbatch script
     script_path = work_dir / f"{name}.sbatch"
     script_text = render_template(
         "slurm_utils:script_template",
@@ -112,7 +125,6 @@ def submit_sbatch_job(
     script_path.write_text(script_text)
     os.chmod(script_path, mode=0o755)
 
-    # Run sbatch
     proc = subprocess.run(
         [SBATCH_EXE, str(script_path)],
         check=True,
@@ -129,7 +141,7 @@ def submit_sbatch_job(
     job_id = match.group("id")
     job_id = int(job_id)
 
-    # Resolve the file names
+    # Slurm expands %j itself; do the same here so the caller has a real path.
     output_file = Path(output_file.replace("%j", str(job_id)))
 
     return SlurmJob(

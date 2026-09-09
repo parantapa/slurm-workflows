@@ -1,7 +1,8 @@
 """Tests for the host and Slurm job monitors.
 
-The samplers read this machine, so the assertions are about shape and
-plausibility rather than exact numbers.
+The samplers read this machine,
+so the assertions are about shape and plausibility
+rather than exact numbers.
 The cgroup reader is pointed at files written by the test,
 which is the only way to assert on values a kernel decides.
 """

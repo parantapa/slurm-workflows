@@ -113,8 +113,8 @@ Paths are relative to [`tests/`](../tests).
   They are stochastic
   (torch's global RNG is left unseeded, so each run is a fresh sample),
   and their margins were chosen from measured spreads:
-  the monotone case has a *median* search point of 0.00 against a 0.5
-  threshold, where flipping the sign puts it at 0.97+,
+  the monotone case has a *median* search point of 0.00 against a 0.5 threshold,
+  where flipping the sign puts it at 0.97+,
   and `test_search_beats_random_search` won 12/12 with a 4.6x margin.
   Assert on that median rather than the max: `qLogNoisyExpectedImprovement`
   deliberately probes away from the incumbent, so single points reach 1.0

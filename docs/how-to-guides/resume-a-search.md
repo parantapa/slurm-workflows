@@ -41,8 +41,8 @@ The saved points are re-checked against the space the task declares.
 A parameter missing or one too many,
 or a range since narrowed past a saved point,
 is reported rather than fitted on.
-Widening a range is safe; narrowing one past points you have already
-measured is not.
+Widening a range is safe;
+narrowing one past points you have already measured is not.
 
 ## Related
 

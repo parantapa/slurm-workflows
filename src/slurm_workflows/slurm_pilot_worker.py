@@ -1,4 +1,8 @@
-"""Pilot workers for Slurm pilot."""
+"""The pilot worker: the process that runs tasks on a compute node.
+
+Started by the generated worker script inside a pilot job,
+never constructed by user code.
+"""
 
 import os
 import sys
@@ -31,6 +35,12 @@ WORKER_PROCESS_INFO_PREFIX = "worker_process_info:"
 
 
 class PilotWorkerProcess:
+    """One worker process, pulling tasks from its group's queue and running them.
+
+    Runs on a compute node inside a pilot job, started by the generated
+    worker script rather than constructed by user code.
+    """
+
     def __init__(
         self,
         group: str,
@@ -42,7 +52,14 @@ class PilotWorkerProcess:
         hostname: str,
         pid: int,
         monitor_interval: float = DEFAULT_MONITOR_INTERVAL_S,
-    ):
+    ) -> None:
+        """Register this worker on the queue server and build its actor.
+
+        Publishes the worker's identity before constructing the actor,
+        so a worker that dies in the constructor has still recorded where.
+        Whatever the actor's constructor raises propagates, after this
+        worker's own monitors and client have been closed.
+        """
         self.group = group
         self.name = name
         self.server_address = server_address
@@ -102,10 +119,9 @@ class PilotWorkerProcess:
     def _start_monitors(
         self, hostname: str, slurm_job_id: int, interval: float
     ) -> None:
-        """Take on monitoring this node and this job, if nobody else has.
-
-        The worker a counter answers 1 to takes the subject, for good.
-        """
+        """Take on monitoring this node and this job, if nobody else has."""
+        # The counter hands out distinct values, so exactly one worker
+        # is told 1 and takes the subject.
         if self.client.counter_get_next_value(f"host_monitor:{hostname}") == 1:
             self.logger.info("Monitoring host %s", hostname)
             self.monitors.append(
@@ -141,7 +157,11 @@ class PilotWorkerProcess:
             monitor.stop()
         self.monitors.clear()
 
-    def close(self):
+    def close(self) -> None:
+        """Stop the monitors, close the connection, and close the actor.
+
+        Calls the actor's own `close()` if it has one.
+        """
         # Before the client, whose channel they are using.
         self._stop_monitors()
 
@@ -151,7 +171,16 @@ class PilotWorkerProcess:
                 self.actor_instance.close()
             self.actor_instance = None
 
-    def main(self):
+    def main(self) -> None:
+        """Pull tasks from the group's queue and run them, forever.
+
+        Never returns of its own accord:
+        a worker lives until its Slurm job ends.
+        Every `Exception` a task raises is caught,
+        logged under a generated `error_id`,
+        and returned to the caller as a `RemoteExecutionError`,
+        so one bad task cannot end the worker.
+        """
         self.logger.info("Starting worker: %s" % self.worker_id)
 
         while True:
@@ -227,7 +256,7 @@ def slurm_pilot_worker(
     server_address: str,
     work_dir: Path,
     python_paths_json: str,
-):
+) -> None:
     """Start a slurm pilot worker."""
     slurm_job_id = int(os.environ.get("SLURM_JOB_ID", -1))
     hostname = socket.gethostname()

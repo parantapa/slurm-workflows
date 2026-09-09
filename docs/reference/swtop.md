@@ -42,7 +42,7 @@ and then five blocks:
 ```
 tasks  ready 118  running 40  complete 242  canceled 0  total 400
 
-explore  [##############----------]  242/400 point  61%  working
+explore  [###############---------]  242/400 point  60%  working
 
 worker jobs (1)
 NAME                  GROUP  JOB      SUBMITTED
@@ -75,8 +75,10 @@ and named before unnamed within each state.
 The blocks come from different places:
 
 - **Progress** is what the driver's current `wait` or `as_completed` call
-    is working through: the `desc` and `unit` it was given, how many of its
-    tasks have come back, and how far along that is.
+    is working through:
+    the `desc` and `unit` it was given,
+    how many of its tasks have come back,
+    and how far along that is.
     In the terminal UI it is a bar; in the text frames, the line above.
     It is absent until a driver waits on something,
     and the last wait's line stays after it finishes,
@@ -152,8 +154,8 @@ How the sampling worker is elected, and why nothing re-elects it, is in
 
 ## Frames of text instead of a UI
 
-Output that is not a terminal --- a pipe, a file, `--plain` --- gets frames
-of text instead, one per poll,
+Output that is not a terminal --- a pipe, a file, `--plain` ---
+gets frames of text instead, one per poll,
 with a header line naming the server and the time of the reading:
 
 ```
@@ -161,7 +163,7 @@ swtop  10.0.0.1:5051  2026-01-30 11:04:57
 
 tasks  ready 118  running 40  complete 242  canceled 0  total 400
 
-explore  [##############----------]  242/400 point  61%  working
+explore  [###############---------]  242/400 point  60%  working
 ...
 ```
 

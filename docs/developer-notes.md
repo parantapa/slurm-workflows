@@ -56,9 +56,10 @@ Each kind of prose has one job:
 | This file | Why the code is the way it is: the invariants, the trade-offs, the alternatives that were tried | |
 
 A private helper's docstring is a line saying what it does.
-Its reasoning belongs under [Invariants](#invariants), where one reader
-looking for the design finds all of it, instead of in a comment that the
-next person to touch that function has to rediscover.
+Its reasoning belongs under [Invariants](#invariants),
+where one reader looking for the design finds all of it,
+instead of in a comment
+that the next person to touch that function has to rediscover.
 
 A design decision written in both places will be changed in one of them.
 
@@ -110,8 +111,9 @@ See `.cpush.json5` for the `rivanna` and `ivy-hip-tricr-2` remotes.
 The coordinator and the workers never talk to each other directly,
 only through the `ds-service` server,
 via `DsServiceClient` from the external `ds-service-client` package
-(`swtop` uses `DsServiceClientAsync`, the asyncio client of the same
-package and the same API, for the reason given under Monitoring).
+(`swtop` uses `DsServiceClientAsync`,
+the asyncio client of the same package and the same API,
+for the reason given under Monitoring).
 `DsServiceServer` (same package) can launch a local server process,
 but the executor is always given the address explicitly.
 
@@ -126,7 +128,7 @@ this is what each one is here for.
 
 | Dependency | Used by | For |
 | --- | --- | --- |
-| `ds-service-client` (>=5.0.0) | executor, worker, `swtop` | The queue server's client and its `DsServiceServer` launcher. The one channel between coordinator and workers. The floor is where `task_search_id` arrived. |
+| `ds-service-client` (>=5.1.0) | executor, worker, `swtop` | The queue server's client and its `DsServiceServer` launcher. The one channel between coordinator and workers. `task_search_id`, which is how `swtop` lists the tasks on a server, needs at least 5.0.0. |
 | `cloudpickle` | `slurm_pilot_executor`, `slurm_pilot_worker` | Serializing functions, arguments and return values, so a locally defined function can cross to a compute node. |
 | `jinja2` | `templates/` | Rendering the worker shell script and its sbatch wrapper. |
 | `json5` | `templates/` | Parsing the `{#- name: ... -#}` headers of the multi-template files. |
@@ -175,8 +177,8 @@ says nothing about a task on another group's queue.
 Abandoning the rest of `pending` loses results the server already has,
 silently under `RAISE_NEVER`,
 and breaks what `RAISE_AFTER_COMPLETED` promises.
-The failure count in the deferred exception counts *tasks* for the same
-reason: one message covers every task on a dead queue.
+The failure count in the deferred exception counts *tasks* for the same reason:
+one message covers every task on a dead queue.
 
 **What came back is recorded even when the batch failed.**
 Both drivers wait with `RAISE_AFTER_COMPLETED` and then record;
@@ -191,13 +193,16 @@ because `RAISE_NEVER` otherwise loses a failure entirely:
 It goes to stderr, so it does not land in a caller's stdout.
 
 **A wait publishes its progress; it does not draw it.**
-`wait` and `as_completed` write the `progress_display` key and append to
-`progress:<uuid4>` as tasks return, and `swtop` is what turns that into a
-bar. The driver prints nothing, so a run under `nohup` leaves no progress
-bar in its output file, and a run being watched from another shell shows
-one. The count is appended at most once a second, so the cost does not
-grow with the batch; the final count is appended even when the wait
-raises, since the exception says nothing about how far it got.
+`wait` and `as_completed` write the `progress_display` key
+and append to `progress:<uuid4>` as tasks return,
+and `swtop` is what turns that into a bar.
+The driver prints nothing,
+so a run under `nohup` leaves no progress bar in its output file,
+and a run being watched from another shell shows one.
+The count is appended at most once a second,
+so the cost does not grow with the batch;
+the final count is appended even when the wait raises,
+since the exception says nothing about how far it got.
 
 **Only `wait` can defer.**
 `as_completed` yields results as they arrive,
@@ -482,11 +487,12 @@ each against its own `patience`, floor and ceiling.
 - **Ranges clamp in `unstandardize`**,
   because `optimize_acqf` can return a point a hair outside the bounds.
 - **Never import this module eagerly from the package `__init__.py`.**
-  `OptimizeSpaceBotorch` and `OptimizationTask` are importable from the
-  package root, but through the `__getattr__` there, which imports this
-  module on first use, so `import slurm_workflows` still works without
-  botorch installed. An import at the top of `__init__.py` would make
-  botorch a hard dependency of the whole package.
+  `OptimizeSpaceBotorch` and `OptimizationTask` are importable
+  from the package root, but through the `__getattr__` there,
+  which imports this module on first use,
+  so `import slurm_workflows` still works without botorch installed.
+  An import at the top of `__init__.py`
+  would make botorch a hard dependency of the whole package.
 - `optimize_acqf`, `fit_gpytorch_mll`, `qLogNoisyExpectedImprovement`
   and `fit_and_propose` are called through module globals.
   The tests monkeypatch those to assert what was asked for,
@@ -494,8 +500,8 @@ each against its own `patience`, floor and ceiling.
   That works because `LocalExecutor` runs the submitted task inline,
   in the test's own process, so patching reaches the fit
   only for as long as that stays true.
-- **`test_search_moves_toward_the_minimum` asserts the *median* search
-  point**, not the max and not `best_point()`.
+- **`test_search_moves_toward_the_minimum` asserts the *median* search point**,
+  not the max and not `best_point()`.
   Neither of those works.
   qLogNEI explores away from the incumbent,
   so the max hits 1.0 on correct runs,

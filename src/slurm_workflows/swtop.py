@@ -14,7 +14,7 @@ from __future__ import annotations
 import sys
 import json
 import asyncio
-from typing import cast, AsyncIterator
+from typing import Callable, cast, AsyncIterator
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 from contextlib import asynccontextmanager
@@ -123,6 +123,7 @@ class SubjectInfo:
 
     @property
     def stale(self) -> bool:
+        """Whether nothing recent was read, which is a dead monitor."""
         return not self.values
 
 
@@ -138,10 +139,12 @@ class ProgressInfo:
 
     @property
     def done(self) -> bool:
+        """Whether the wait this describes has finished."""
         return self.completed >= self.total
 
     @property
     def fraction(self) -> float:
+        """How far along the wait is, in `[0, 1]`. Empty waits are done."""
         return self.completed / self.total if self.total else 1.0
 
 
@@ -162,23 +165,27 @@ class Snapshot:
 
 
 class Collector:
-    """Turns the server's RPCs into a `Snapshot`.
-
-    Caches the identities it has read, which are written once and never
-    change, so a steady state re-reads only what is new.
-    """
+    """Turns the server's RPCs into a `Snapshot`."""
 
     def __init__(self, client: DsServiceClientAsync, address: str) -> None:
         self.client = client
         self.address = address
+        # Identities are written once and never change, so they are read
+        # once: a steady state re-reads only what is new.
         self._worker_jobs: dict[str, WorkerJobInfo] = {}
         self._workers: dict[str, WorkerInfo] = {}
-        # The last count read for a progress id, so a display that has
-        # stopped moving is still drawn where it stopped.
+        # The last count read for a progress id,
+        # so a display that has stopped moving is still drawn where it stopped.
         self._progress_seen: dict[str, int] = {}
         self._task_names: dict[str, str] = {}
 
     async def snapshot(self) -> Snapshot:
+        """One poll of the server, as a `Snapshot`.
+
+        A key the server does not hold reads as `UNKNOWN` rather than raising,
+        but a server that cannot be reached raises:
+        it is the caller that decides whether to keep polling.
+        """
         # None of these six needs an answer from another,
         # so they go out together and the poll waits once.
         counts, progress, worker_jobs, workers, hosts, jobs = await asyncio.gather(
@@ -211,6 +218,7 @@ class Collector:
         )
 
     async def _text(self, key: str) -> str:
+        """One key's value as text, or `UNKNOWN` if the server does not hold it."""
         try:
             value = await self.client.map_get(key)
         except KeyError:
@@ -272,6 +280,7 @@ class Collector:
         return WorkerJobInfo(**fields)
 
     async def _collect_workers(self) -> list[WorkerInfo]:
+        """Every worker process that has registered, cached like the rest."""
         worker_ids = [
             key[len(WORKER_PROCESS_INFO_PREFIX) :]
             for key in await self.client.map_search_key(
@@ -283,8 +292,9 @@ class Collector:
         missing = [w for w in worker_ids if w not in self._workers]
         read = await asyncio.gather(*(self._worker_info(w) for w in missing))
         for worker_id, info in zip(missing, read):
+            # An unreadable description is not cached:
+            # the read may have landed in the middle of the write.
             if info is not None:
-                # Not cached: it may be a write this read landed in the middle of.
                 self._workers[worker_id] = info
 
         listed = [
@@ -305,6 +315,7 @@ class Collector:
         return WorkerInfo(worker_id=worker_id, **fields)
 
     async def _collect_tasks(self, workers: list[WorkerInfo]) -> list[TaskInfo]:
+        """Every task on the server, in the order the tasks block lists them."""
         # Which tasks there are, and which of them have been named:
         # two searches, neither of which needs the other's answer.
         task_ids, name_keys = await asyncio.gather(
@@ -425,6 +436,7 @@ def _unknown_worker_job(name: str) -> WorkerJobInfo:
 
 
 def _state_rank(state: str) -> int:
+    """Where a state sorts, with any state `STATE_ORDER` omits placed last."""
     try:
         return STATE_ORDER.index(state)
     except ValueError:
@@ -445,7 +457,7 @@ def _subject(info: SubjectInfo) -> str:
     return info.subject if not info.stale else f"{info.subject} (stale)"
 
 
-def _cell(values: dict[str, float], name: str, fmt) -> str:
+def _cell(values: dict[str, float], name: str, fmt: Callable[[float], str]) -> str:
     """One measurement, or a dash where the series had nothing recent."""
     if name not in values:
         return "-"

@@ -112,7 +112,8 @@ which is the prefix length at which a Sobol' sequence is balanced.
 ## The results file
 
 Read a saved file back with `load_results(paths)`,
-which merges several files by task name.
+which merges several files by task name
+into a `dict[str, SavedResults]`.
 The file is a gzipped plain pickle - measurements, not code -
 keyed by task name, each holding `points`, `values` and `outputs`
 as index-aligned lists in submission order:

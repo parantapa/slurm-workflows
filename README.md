@@ -9,10 +9,10 @@ It provides an interface inspired by
 that launches long-lived **pilot workers** and dispatches tasks to them,
 so that Slurm's queueing latency is paid once per worker instead of once per task.
 
-Reach for it when you have many Python tasks to run on one cluster
-allocation, when a sweep or a calibration has to spread across a pool of
-nodes, or when per-worker state is expensive enough that you want it kept
-warm between tasks.
+Reach for it when you have many Python tasks to run on one cluster allocation,
+when a sweep or a calibration has to spread across a pool of nodes,
+or when per-worker state is expensive enough
+that you want it kept warm between tasks.
 
 ## Features
 
@@ -33,7 +33,7 @@ warm between tasks.
 
 - Python >= 3.12
 - Access to a Slurm cluster (`sbatch`, `squeue`, `scancel` on `PATH`)
-- A running [`ds-service`](https://github.com/parantapa/ds-service) server, v5.0.0 or later
+- A running [`ds-service`](https://github.com/parantapa/ds-service) server, v5.1.0 or later
 
 ## Installation
 
@@ -84,9 +84,10 @@ with DsServiceServer(interface="ib0") as ds_service:
 print(sum(task.output for task in tasks))
 ```
 
-`sbatch_args` are passed straight through to `sbatch`, so any Slurm option
-works. Tasks may be submitted before the workers exist: they queue up and
-are picked up as pilot jobs start running.
+`sbatch_args` are passed straight through to `sbatch`,
+so any Slurm option works.
+Tasks may be submitted before the workers exist:
+they queue up and are picked up as pilot jobs start running.
 
 ## Documentation
 

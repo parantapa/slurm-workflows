@@ -1169,10 +1169,34 @@ class TestPartialFailure:
 
         return objective
 
+    @staticmethod
+    def fails_every_other():
+        """An objective that raises on every second point it is handed.
+
+        A threshold on `x` cannot be used for a *partial* failure here.
+        The acquisition decides where a round's points land,
+        and torch's global RNG is left unseeded,
+        so a round can land wholly on either side of any threshold
+        --- which either loses the failure the test needs
+        or loses the successes it checks were kept.
+        Counting the calls splits the round whatever the search proposes,
+        and `LocalExecutor` runs them inline in submission order.
+        """
+        seen = 0
+
+        def objective(x, y):
+            nonlocal seen
+            seen += 1
+            if seen % 2 == 0:
+                raise ValueError("objective blew up")
+            return {"objective": x * x + y * y}
+
+        return objective
+
     def test_the_points_that_came_back_are_kept(self, tmp_path):
         opt, _ = make_opt(
             tmp_path,
-            objective=self.fails_at(0.0),
+            objective=self.fails_every_other(),
             prior_objective=sphere,
             explore=8,
             iterations=1,
@@ -1183,8 +1207,9 @@ class TestPartialFailure:
             opt.run()
 
         result = opt.results["test"]
-        assert result.values, "the successful points were thrown away"
-        assert all(p["x"] <= 0.0 for p in result.points)
+        # Half the round raised, so exactly the other half is on record:
+        # the failures were dropped and nothing else was.
+        assert len(result.values) == 4, "the successful points were thrown away"
         assert len(result.points) == len(result.values) == len(result.outputs)
 
     def test_a_task_whose_points_all_worked_keeps_its_round(self, tmp_path):
@@ -1222,7 +1247,7 @@ class TestPartialFailure:
     def test_a_saved_round_is_resumable_after_a_failure(self, tmp_path):
         opt, _ = make_opt(
             tmp_path,
-            objective=self.fails_at(0.0),
+            objective=self.fails_every_other(),
             prior_objective=sphere,
             explore=8,
             iterations=1,
@@ -1234,6 +1259,7 @@ class TestPartialFailure:
         opt.save(tmp_path / "search.pkl.gz")
 
         saved = load_results([tmp_path / "search.pkl.gz"])
+        assert saved["test"].values, "a round that saved nothing proves nothing"
         assert saved["test"].values == opt.results["test"].values
 
 

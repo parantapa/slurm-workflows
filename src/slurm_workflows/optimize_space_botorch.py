@@ -29,7 +29,7 @@ from gpytorch.mlls import ExactMarginalLogLikelihood
 
 from .slurm_pilot_executor import SlurmPilotExecutor, RaiseOnError, Task
 from .search_space import SearchSpace, space_dim, to_params, to_unit
-from .explore_space import load_results
+from .explore_space import SavedResults, load_results
 from .utils import (
     RemoteExecutionError,
     format_mapping,
@@ -58,15 +58,14 @@ PROPOSE_SECONDS_KEY = "propose_seconds"
 class OptimizationTask:
     """One space to optimize, and everything needed to optimize it.
 
-    name: names this task. Keys its results, and has to be the name
-        its observations were measured under in the results files.
-    space: the search space.
-    objective: the function to minimize.
+    name: keys its results, and has to be the name its observations
+        were measured under in the results files.
+    objective: minimized.
         Its argument names must match the keys of `space`,
         and it returns a mapping carrying `objective_key`.
-    objective_queue: queue(s) the objective evaluations are submitted to.
-    optimizer_queue: queue(s) the model fit and acquisition optimization
-        are submitted to, one task per round.
+    optimizer_queue: where the model fit and acquisition optimization run,
+        one task per round. Its workers need botorch; the objective's
+        workers do not.
     search_parallelism: points evaluated per round.
         Taken from the search when None.
 
@@ -87,12 +86,11 @@ class OptimizationTask:
 
     The rest tune the fit and the acquisition optimization:
 
-    num_restarts: multi-start count for `optimize_acqf`.
-    raw_samples: candidates `optimize_acqf` draws
-        to pick those starting points from.
+    num_restarts: multi-start count for the acquisition optimization.
+    raw_samples: candidates drawn to pick those starting points from.
     mc_samples: quasi-MC draws used to estimate the acquisition value
         at a candidate.
-    acqf_timeout_s: wall-clock budget for one `optimize_acqf` call.
+    acqf_timeout_s: wall-clock budget for one proposal.
         Hitting it is not an error: the best candidates so far are returned.
 
     extra_objective_kwargs: extra keyword arguments for the objective.
@@ -145,7 +143,12 @@ def fit_and_propose(
     mc_samples: int,
     timeout_s: float,
 ) -> dict[str, Any]:
-    """Fit the GP and optimize the acquisition, returning `batch` unit points."""
+    """Fit the GP and optimize the acquisition over the unit cube.
+
+    Returns the `batch` proposed unit points under `CANDIDATES_KEY`,
+    and how long each half took under `FIT_SECONDS_KEY`
+    and `PROPOSE_SECONDS_KEY`.
+    """
     train_x = torch.tensor(unit_points, dtype=DTYPE)
 
     # Botorch maximizes and the objective is minimized, so the model
@@ -202,14 +205,14 @@ class OptimizeSpaceBotorch:
         executor: SlurmPilotExecutor,
         files: Iterable[Path | str],
         search_parallelism: int | None = None,
-    ):
-        """Initialize.
+    ) -> None:
+        """Validate every task and load the observations it starts from.
 
-        tasks: the spaces to optimize, one `OptimizationTask` each,
-            all of them run together.
-        executor: executor for parallelizing objective execution.
-        files: results files to start from, as written by
-            `ExploreSpaceSobolQMC.save` or by this class's own `save`.
+        The tasks all run together, in the same rounds, and each drops out
+        when it meets its own stopping rule.
+        files: results files to start from,
+            as written by `ExploreSpaceSobolQMC.save`
+            or by this class's own `save`.
             A task is modelled on every observation they hold under its name,
             and a task with none of them raises.
         search_parallelism: batch size for tasks that do not carry their own.
@@ -303,7 +306,9 @@ class OptimizeSpaceBotorch:
         return replace(task, space=dict(task.space), search_parallelism=parallelism)
 
     @staticmethod
-    def _observed(task: OptimizationTask, saved) -> OptimizationResult:
+    def _observed(
+        task: OptimizationTask, saved: SavedResults | None
+    ) -> OptimizationResult:
         """A task's starting observations, standardized into its own space."""
         if saved is None or not saved.values:
             raise RuntimeError(
@@ -400,8 +405,9 @@ class OptimizeSpaceBotorch:
         each on its own patience and ceiling.
         Called again, it runs another set of rounds from where this stopped.
 
-        The tasks of a round are named `<task>-fit-<round>` and
-        `<task>-search-<round>-<index>` on the queue server.
+        The tasks of a round are named
+        `<task>-fit-<round>` and `<task>-search-<round>-<index>`
+        on the queue server.
         """
         active = list(self.tasks)
         stalled = {task.name: 0 for task in self.tasks}
@@ -624,7 +630,7 @@ class OptimizeSpaceBotorch:
                     if isinstance(submission.output, RemoteExecutionError)
                 }
             )
-            # Empty when nothing came back at all, a canceled task say,
+            # Empty when nothing came back at all, a cancelled task say,
             # in which case the cause is in the exception this chains to.
             named = f" of {failed}" if failed else ""
             raise RuntimeError(f"{what} failed during {desc}{named}") from e

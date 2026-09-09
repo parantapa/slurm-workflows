@@ -31,8 +31,7 @@ belongs in `extra_objective_kwargs` rather than in the space.
 Every parameter is mapped into `[0, 1]` before a model sees it
 and mapped back for the objective,
 which is what lets one model span all the kinds at once.
-Integer and categorical parameters come back by rounding
-a continuous proposal.
+Integer and categorical parameters come back by rounding a continuous proposal.
 What is recorded is where the objective actually ran, after rounding,
 not the continuous proposal.
 

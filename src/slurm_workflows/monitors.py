@@ -1,8 +1,8 @@
 """Background sampling of a compute node and of a Slurm job.
 
-One elected worker per node and one per job runs these threads
-(`PilotWorkerProcess._start_monitors`), each appending to a `ds-service`
-time series, one series per measurement per subject.
+One elected worker per node and one per job runs these threads,
+each appending to a `ds-service` time series,
+one series per measurement per subject.
 `docs/reference/swtop.md` says what the readings mean.
 """
 
@@ -73,6 +73,7 @@ class CgroupSampler:
         self._last: tuple[float, float] | None = None
 
     def sample(self) -> dict[str, float]:
+        """One reading: total memory in bytes, and cores used since the last."""
         now = time.monotonic()
         reading = self._read_cgroup()
         if reading is None:

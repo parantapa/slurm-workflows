@@ -107,8 +107,9 @@ they wait on the queue until something pulls them.
 | `add_cwd_to_python_path` | `True` | Also add the coordinator's cwd. |
 | `worker_exe` | `"slurm-pilot-worker"` | Worker entry point, if you've wrapped or renamed it. |
 
-The actor arguments are cloudpickled and put in the `ds-service` key value
-store, under `actor_class_args:<name>` and `actor_class_kwargs:<name>`,
+The actor arguments are cloudpickled
+and put in the `ds-service` key value store,
+under `actor_class_args:<name>` and `actor_class_kwargs:<name>`,
 where `<name>` is the worker group's name.
 Each worker reads them back at startup.
 They must be picklable,
@@ -250,8 +251,8 @@ the rest of the batch is still waited for.
 | `RAISE_AFTER_COMPLETED` | Wait for every task that can still finish, then raise once for all the failures together. `as_completed` treats this as `RAISE_ON_FIRST_ERROR`. |
 | `RAISE_NEVER` | Report and return. |
 
-**Every failure is warned about on stderr as it is met**, whichever value
-is used; the value decides only whether an exception follows.
+**Every failure is warned about on stderr as it is met**, whichever value is used;
+the value decides only whether an exception follows.
 The warning carries the task id and,
 for a worker that raised,
 the `error_id` that appears beside the traceback in that worker's log.
@@ -262,7 +263,7 @@ With `RAISE_NEVER` the caller reads the outcome off the tasks:
 from slurm_workflows import RaiseOnError, RemoteExecutionError
 from slurm_workflows.slurm_pilot_executor import NoOutput
 
-executor.wait(tasks, raise_on_error=RaiseOnError.RAISE_NEVER)
+executor.wait(tasks, desc="squaring", raise_on_error=RaiseOnError.RAISE_NEVER)
 
 failed = [t for t in tasks if isinstance(t.output, RemoteExecutionError)]
 never_ran = [t for t in tasks if t.output is NoOutput]
@@ -321,8 +322,8 @@ elected between them with the `host_monitor:<hostname>`
 and `slurm_job_monitor:<job-id>` counters.
 [`swtop`](swtop.md) displays the result.
 
-Why a run is published in these two halves rather than one, and why a key
-is written once and never updated, is in
+Why a run is published in these two halves rather than one,
+and why a key is written once and never updated, is in
 [About what a run publishes](../explanation/about-what-a-run-publishes.md).
 
 ## Logs

@@ -580,7 +580,7 @@ class TestCli:
 
         Invoked directly rather than through click's CliRunner,
         which swaps the process streams for buffers of its own
-        -- these tests assert on what the command does to those streams,
+        --- these tests assert on what the command does to those streams,
         so it must not.
         """
         args = {

@@ -47,7 +47,7 @@ executor.scale_workers("gpu", 2)
 
 ```python
 tasks = [executor.submit("gpu", "predict", item) for item in dataset]
-executor.wait(tasks)
+executor.wait(tasks, desc="predict")
 ```
 
 ## If the class takes constructor arguments

@@ -12,8 +12,9 @@ For the options, the blocks and the columns, see
 
 ## Watch a run from another shell
 
-Point it at the same `ds-service` address (`host:port`) the executor was
-given, from another shell on the login node:
+Point it at the same `ds-service` address (`host:port`)
+the executor was given,
+from another shell on the login node:
 
 ```sh
 swtop 10.0.0.1:5051

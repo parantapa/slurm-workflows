@@ -8,8 +8,8 @@ Submitting one Slurm job per unit of work makes you pay the queue
 once per unit of work.
 On a busy cluster that latency dominates everything else
 as soon as the individual tasks are small,
-and a sweep of a few thousand short evaluations can spend most of its
-wall clock waiting rather than computing.
+and a sweep of a few thousand short evaluations
+can spend most of its wall clock waiting rather than computing.
 
 The pilot-job model inverts that.
 A small number of long-lived jobs are submitted once,
@@ -22,8 +22,7 @@ what the program sees is something close to
 
 ## The vocabulary
 
-**Setup script.** A shell script snippet that every worker runs before
-starting.
+**Setup script.** A shell script snippet that every worker runs before starting.
 This is used to set up the environment (`module load`, `conda activate`)
 on the compute node.
 The shell script **text** is inlined into each generated worker script.
@@ -86,8 +85,9 @@ can still submit pilot jobs.
 
 ## Why one executor per server
 
-A `ds-service` server holds one run's tasks, worker registrations and
-actor arguments in a single flat namespace with no executor name in it.
+A `ds-service` server holds one run's tasks,
+worker registrations and actor arguments
+in a single flat namespace with no executor name in it.
 Point two executors at one server and they share that namespace:
 same-named worker groups serve each other's tasks,
 and same-named groups overwrite each other's actor arguments.
@@ -116,7 +116,7 @@ in increasing order of how much of the loop they own:
 The two space classes are built on the first:
 both take an executor and submit through it,
 so a program always starts by building one.
-The difference between them is not capability but who owns the
-submit-and-wait loop.
+The difference between them is not capability
+but who owns the submit-and-wait loop.
 Work that is not a function over a space has to own that loop itself,
 which is what `submit` and `wait` are for.

@@ -16,7 +16,10 @@ from typing import Any, Mapping, Sequence
 
 @dataclass
 class IntRange:
-    """Integer range."""
+    """Integer range, inclusive of both bounds.
+
+    `max` must be greater than `min`.
+    """
 
     min: int
     max: int
@@ -37,12 +40,11 @@ class IntRange:
 
 @dataclass
 class FloatRange:
-    """Floating point range.
+    """Floating point range, inclusive of both bounds.
 
-    if log_range is true,
-    the space is first scaled into a logarithmic space,
-    the sample is generated in that space
-    and then scaled back.
+    `max` must be greater than `min`.
+    With `log_range`, the range is searched in log space, so every decade
+    gets an equal share of the budget, and `min` must be above zero.
     """
 
     min: float
@@ -58,6 +60,8 @@ class FloatRange:
     def standardize(self, x: float) -> float:
         """Move from [min, max] range to [0, 1] range."""
         if self.log_range:
+            # Both ends and the value into log space, so the mapping back
+            # in `unstandardize` is the exact inverse.
             lo, hi, x = math.log(self.min), math.log(self.max), math.log(x)
         else:
             lo, hi = self.min, self.max
@@ -76,6 +80,7 @@ class FloatRange:
 class CategoricalRange:
     """Categorical range, standardized as an index in `[0, n - 1]`.
 
+    `num_categories` must be at least 1.
     `num_categories=1` is accepted, unlike a degenerate `IntRange`,
     but is a dead dimension: prefer `extra_objective_kwargs` for it.
     """
@@ -87,7 +92,7 @@ class CategoricalRange:
             raise ValueError(f"num_categories must be >= 1, got {self.num_categories}")
 
     def standardize(self, x: int) -> float:
-        """Move from [0, num_categories -1] range to [0, 1] range."""
+        """Move from [0, num_categories - 1] range to [0, 1] range."""
         if self.num_categories == 1:
             return 0.0
         return x / (self.num_categories - 1)

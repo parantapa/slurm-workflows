@@ -37,12 +37,9 @@ ObjectiveFunction = Callable[..., ObjectiveOutput]
 class ExplorationTask:
     """One space to explore, and everything needed to explore it.
 
-    name: names this task. Keys its results; unique within a sweep.
-    space: the search space.
-    objective: the function to evaluate.
-        Its argument names must match the keys of `space`,
+    name: keys its results; unique within a sweep.
+    objective: its argument names must match the keys of `space`,
         and it returns a mapping carrying `objective_key`.
-    objective_queue: queue(s) the evaluations are submitted to.
     num_exploration_points: number of points to sample,
         truncated to the nearest lower power of two.
         Taken from the sweep when None.
@@ -143,15 +140,13 @@ class ExploreSpaceSobolQMC:
         tasks: list[ExplorationTask],
         executor: SlurmPilotExecutor,
         num_exploration_points: int | None = None,
-    ):
-        """Initialize.
+    ) -> None:
+        """Validate every task and fill in what it left to the sweep.
 
-        tasks: the spaces to explore, one `ExplorationTask` each,
-            all of them run together.
-        executor: executor for parallelizing objective execution.
-        num_exploration_points: point count for tasks that do not carry their own.
-            A task with neither raises.
-
+        The tasks all run together,
+        so a small sweep does not wait on a large one.
+        `num_exploration_points` is the count for tasks that do not carry
+        their own; a task with neither raises.
         Every task is validated here rather than when it runs.
         `self.tasks` holds copies with the point count and seed filled in;
         the caller's own objects are left alone.
@@ -293,7 +288,7 @@ class ExploreSpaceSobolQMC:
                     if isinstance(submission.output, RemoteExecutionError)
                 }
             )
-            # Empty when nothing came back at all, a canceled task say,
+            # Empty when nothing came back at all, a cancelled task say,
             # in which case the cause is in the exception this chains to.
             named = f" of {failed}" if failed else ""
             raise RuntimeError(
@@ -346,7 +341,7 @@ class ExploreSpaceSobolQMC:
         return min(range(len(values)), key=values.__getitem__)
 
     def best_point(self, name: str) -> tuple[dict[str, Any], float]:
-        """Returns a task's best point (params, objective value) so far."""
+        """A task's best point (params, objective value) so far."""
         best = self._best_index(name)
         result = self.results[name]
         return dict(result.points[best]), result.values[best]
@@ -361,11 +356,7 @@ class ExploreSpaceSobolQMC:
         The file holds one dict keyed by task name,
         each entry holding `points`, `values` and `outputs`,
         index-aligned and in submission order.
-        Read it back with `load_results`, or with:
-
-            with gzip.open(path, "rb") as fobj:
-                results = pickle.load(fobj)
-
+        Read it back with `load_results`.
         Plain `pickle`, so an objective's result has to be plainly picklable.
         Overwrites `path`, and writes empty lists if nothing was evaluated.
         """

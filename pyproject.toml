@@ -30,9 +30,9 @@ dependencies = [
     "textual",
     # 1.15 is where `qmc.Sobol` took `rng=`, the seed argument used here.
     "scipy>=1.15",
-    # 5.0.0 is where `task_search_id` arrived,
-    # which is how `swtop` lists the tasks on a server.
-    "ds-service-client>=5.0.0"
+    # `task_search_id`, which is how `swtop` lists the tasks on a server,
+    # needs at least 5.0.0.
+    "ds-service-client>=5.1.0"
 ]
 
 [project.optional-dependencies]

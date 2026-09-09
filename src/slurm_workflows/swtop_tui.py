@@ -14,6 +14,7 @@ from textual.widgets import DataTable, Footer, Header, ProgressBar, Static
 
 from .swtop import (
     HOST_COLUMNS,
+    ProgressInfo,
     JOB_COLUMNS,
     TASK_COLUMNS,
     WORKER_COLUMNS,
@@ -95,7 +96,7 @@ class ProgressBlock(VerticalScroll):
         yield Static("", classes="progress-label")
         yield ProgressBar(total=100, show_eta=False)
 
-    def show(self, progress) -> None:
+    def show(self, progress: ProgressInfo | None) -> None:
         """Draw one progress display, or hide the block when there is none."""
         self.display = progress is not None
         if progress is None:

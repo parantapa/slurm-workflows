@@ -2,8 +2,8 @@
 
 [<- back to the main README](../../README.md)
 
-This tutorial searches a two-dimensional space for the minimum of
-Himmelblau's function,
+This tutorial searches a two-dimensional space
+for the minimum of Himmelblau's function,
 with `ExploreSpaceSobolQMC` and `OptimizeSpaceBotorch`.
 The pool evaluates a whole batch of candidate points per round,
 and a Gaussian process fitted between rounds chooses the next batch.
@@ -238,8 +238,8 @@ as one task per round.
 Notice `--ntasks-per-node=1 --cpus-per-task=40` in `OPTIMIZER_SBATCH_ARGS`:
 one worker with the whole node,
 where `EVAL_SBATCH_ARGS` asks for 40 slots per node.
-The two kinds of work want different nodes, which is why there are two
-groups and two queue arguments;
+The two kinds of work want different nodes,
+which is why there are two groups and two queue arguments;
 [About batch Bayesian optimization](../explanation/about-batch-bayesian-optimization.md)
 says why.
 
@@ -263,8 +263,8 @@ This is the QMC tutorial's program, as the opening move of a search:
 64 Sobol' points over the space, evaluated in one batch on `eval`,
 to give the model something to fit before it starts making decisions.
 
-Notice that `EXPLORATION_POINTS = 64` is a literal rather than the pool
-size of 80: the count is truncated down to a power of two,
+Notice that `EXPLORATION_POINTS = 64` is a literal rather than the pool size of 80:
+the count is truncated down to a power of two,
 so a pool of 80 asking for 80 points would evaluate 64 anyway.
 Asking for 64 says what will happen.
 
@@ -327,8 +327,8 @@ so this is an ordinary local value.
 
 The program then reports which of the four known minima it landed nearest.
 Which one that is depends on the seed:
-all four are equally good, and the search settles on whichever
-its batches reached first.
+all four are equally good,
+and the search settles on whichever its batches reached first.
 
 ## Next steps
 

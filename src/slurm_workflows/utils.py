@@ -11,15 +11,23 @@ from typing import Any, Mapping
 
 
 def gen_random_string(k: int = 32) -> str:
+    """A random string of `k` lowercase letters and digits."""
     return "".join(random.choices(string.ascii_lowercase + string.digits, k=k))
 
 
 def gen_error_id() -> str:
+    """A fresh id to file one failure's traceback under."""
     return "ERROR_" + gen_random_string()
 
 
 @dataclass
 class RemoteExecutionError:
+    """What a task's `output` holds when its worker raised.
+
+    `error` is the formatted exception. `error_id` appears verbatim beside
+    the full traceback in that worker's log, under the executor's work dir.
+    """
+
     error: str
     error_id: str
 
@@ -27,9 +35,11 @@ class RemoteExecutionError:
 def objective_value(
     name: str, objective_key: str, params: Mapping[str, Any], output: Any
 ) -> float:
-    """The value to rank one evaluation by, or a `RuntimeError` saying why not.
+    """The value to rank one evaluation by.
 
-    Every rejection names what came back and at which point.
+    Raises `RuntimeError`, naming what came back and at which point,
+    if the result is not a mapping, lacks `objective_key`,
+    or holds a value there that is not a finite float.
     """
     if not isinstance(output, Mapping):
         raise RuntimeError(
@@ -60,7 +70,10 @@ def objective_value(
 
 
 def floor_power_of_two(n: int) -> int:
-    """Largest power of two <= n."""
+    """Largest power of two <= n.
+
+    Raises `ValueError` if `n` is below 1.
+    """
     if n < 1:
         raise ValueError(f"expected a positive integer, got {n}")
     return 1 << (n.bit_length() - 1)
@@ -82,4 +95,4 @@ def format_mapping(mapping: Mapping[str, Any]) -> str:
 
 
 LOG_FORMAT: str = "%(asctime)s:%(name)s:%(levelname)s:%(message)s"
-LOG_LEVEL = logging.INFO
+LOG_LEVEL: int = logging.INFO

@@ -61,9 +61,8 @@ is in
 
 ## When it stops
 
-A round is *stalled* when it fails to improve
-the best value by `min_improvement`, a fraction of the incumbent's
-magnitude.
+A round is *stalled* when it fails to improve the best value by `min_improvement`,
+a fraction of the incumbent's magnitude.
 `patience` stalled rounds **in a row** end the search,
 and an improving round resets the streak.
 `min_search_iterations` is a floor on rounds *run*, not on rounds counted:

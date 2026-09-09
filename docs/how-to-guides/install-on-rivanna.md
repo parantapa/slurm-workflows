@@ -43,7 +43,7 @@ Put it somewhere on your `PATH`:
 ```sh
 mkdir -p ~/bin
 curl -L -o ~/bin/ds-service \
-    https://github.com/parantapa/ds-service/releases/download/v5.0.0/ds-service
+    https://github.com/parantapa/ds-service/releases/download/v5.1.0/ds-service
 chmod +x ~/bin/ds-service
 ```
 
@@ -54,7 +54,7 @@ echo 'export PATH="$HOME/bin:$PATH"' >> ~/.bashrc
 export PATH="$HOME/bin:$PATH"
 ```
 
-This version of `slurm-workflows` requires `ds-service` >= v5.0.0.
+This version of `slurm-workflows` requires `ds-service` >= v5.1.0.
 
 ## 5. Check the installation
 

@@ -59,36 +59,40 @@ which is the only cleanup there is.
 and append the completed count to a time series as tasks return.
 They print nothing themselves.
 
-A driver that drew its own progress bar would be useless in the two
-places these runs usually live: under `nohup`, where a bar becomes
-megabytes of control characters in an output file, and inside a batch job,
-where nobody is watching the terminal at all.
-Publishing instead means the same run shows a bar when somebody is
-watching from another shell and leaves a clean log when nobody is.
+A driver that drew its own progress bar would be useless
+in the two places these runs usually live:
+under `nohup`, where a bar becomes megabytes of control characters
+in an output file,
+and inside a batch job, where nobody is watching the terminal at all.
+Publishing instead means the same run shows a bar
+when somebody is watching from another shell
+and leaves a clean log when nobody is.
 
 The count is appended at most once a second rather than once per task,
 so a batch of thousands does not cost an append apiece.
-The key is overwritten by the next call, so the server holds the display
-for the most recent wait; the series holds the history of each.
+The key is overwritten by the next call,
+so the server holds the display for the most recent wait;
+the series holds the history of each.
 
 ## Why sampling is elected, and never re-elected
 
 Host and job readings are sampled by the workers themselves,
 so nothing extra has to be started on the cluster.
 But a node runs one worker per task slot and a job spans many nodes,
-so most workers must not sample, or every reading would be duplicated
-forty times over.
+so most workers must not sample,
+or every reading would be duplicated forty times over.
 
 The election uses a `ds-service` counter.
 `counter_get_next_value` hands out distinct, gap-free values,
 so the worker told 1 for `host_monitor:<hostname>` takes the node
 and the one told 1 for `slurm_job_monitor:<job-id>` takes the job.
-No lock, no designated rank, and no need for the workers to know each
-other exist.
+No lock, no designated rank,
+and no need for the workers to know each other exist.
 
 Nothing hands a subject back when that worker dies.
-The series simply stops, and a reader that sees no point in the last
-minute calls the subject `(stale)`.
+The series simply stops,
+and a reader that sees no point in the last minute
+calls the subject `(stale)`.
 Re-electing would need a heartbeat and a lease,
 which is a substantial amount of machinery for a monitoring convenience,
 so the trade made here is that a run which scales down
@@ -96,19 +100,21 @@ loses the readings for what it gave up.
 
 Sampling threads are daemons that swallow their own errors,
 for the same reason a worker swallows a bad task's exception:
-a worker killed at the end of its walltime must not be held open by a
-monitor, and a node briefly unreachable should leave a gap in the series
-rather than end it.
+a worker killed at the end of its walltime
+must not be held open by a monitor,
+and a node briefly unreachable
+should leave a gap in the series rather than end it.
 
 ## Why a monitor draws a failed poll instead of raising
 
-A monitor that exits when the server blinks takes the screen down with
-it, usually at the least convenient moment.
+A monitor that exits when the server blinks
+takes the screen down with it,
+usually at the least convenient moment.
 So an unreachable server is reported above the tables and polling
 continues, with the last good reading left on screen.
-The same behaviour is what lets `swtop` be started before the server
-exists: there is no meaningful difference between a server that has not
-come up yet and one that is briefly away.
+The same behaviour is what lets `swtop` be started before the server exists:
+there is no meaningful difference between a server that has not come up yet
+and one that is briefly away.
 
 ## The limits of what can be shown
 
