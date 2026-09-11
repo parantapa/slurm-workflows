@@ -4,23 +4,24 @@
 
 ## First, find the right log
 
-Everything for a run lives under the executor's `work_dir`,
-printed as `executor.work_dir`.
-Which file holds what is listed in
-[Logs](../reference/executor.md#logs).
+Everything for a run lives under the executor's `work_dir`.
+The executor prints that path at startup, and `executor.work_dir` holds it.
+[Logs](../reference/executor.md#logs) lists which file holds what.
 
 Two shortcuts:
 
-- **A job that died immediately** - read the generated scripts,
+- If a job died immediately, read the generated scripts,
     `<worker-name>.sh` and `<worker-name>.sbatch`.
-- **A task that raised** - the `error_id` inside the `RemoteExecutionError`
-    appears verbatim next to the traceback.
-    Grep for it across the work dir to find the failing task's stack.
+- If a task raised, grep the work dir for the `error_id`
+    inside the `RemoteExecutionError`.
+    The same id appears next to the traceback of the failing task.
 
-Note which file a worker's own log goes to:
-with the default `is_batch_worker=False` it is the per-task file
-`<worker-name>-<jobid>-<task>.out`, not the batch file.
-That catches people out, because a failed setup script lands there too.
+With the default `is_batch_worker=False`,
+a worker's own log goes to the per-task file.
+That file is `<worker-name>-<jobid>-<task>.out`, not the batch file.
+A failed setup script lands in that same file.
+A job of exactly one task is the exception:
+it keeps no per-task file, and writes to `<worker-name>-<jobid>.out`.
 
 ## Tasks never complete, but jobs are running
 
@@ -30,39 +31,42 @@ Check the worker's `-<jobid>-<task>.out` file.
 
 ## `RuntimeError: ... tasks are on queues with no worker started`
 
-Raised as soon as you wait,
-because `scale_workers` was never called for those queues.
-Either the group was never scaled,
-or the queue name is a typo - it is not checked at `submit` time,
+The executor raises this error as soon as you wait,
+because you never called `scale_workers` for those queues.
+Either you never scaled the group, or the queue name is a typo.
+The executor does not check the queue name at `submit` time,
 so compare it against your `define_worker` names.
 
 ## `RuntimeError: ... tasks are on queues with no live pilot job`
 
-Raised while waiting: the group *was* scaled,
-but its jobs have since left the cluster -
-time limit reached, cancelled, or exited before draining the queue.
-The worker's `.out` file will say which.
-Scale the group back up and resubmit.
+The executor raises this error while you wait.
+You scaled the group, but its jobs then left the cluster.
+The cause is the time limit, a cancellation,
+or an exit before the queue drained.
+The worker's `.out` file says which.
+Scale the group back up.
+Then submit the tasks again.
 
 ## `RuntimeError: Task ... was canceled on the task queue server`
 
-Somebody cancelled the task through the `ds-service` client directly;
-nothing in this library does.
-A cancelled task is never dispatched again
-and never produces an output.
-Resubmit it if you still want it run.
+Somebody canceled the task through the `ds-service` client directly.
+Nothing in this library cancels a task.
+
+CAUTION: If you still want the output, submit the task again.
+The server never dispatches a canceled task a second time,
+so the output of that task is lost.
 
 ## `RuntimeError: Task ... is unknown to the task queue server`
 
-In practice a `Task` built by hand,
-or one left over from a server that has since been restarted.
+Two cases produce this error.
+The first is a `Task` you built by hand.
+The second is a `Task` from a server that restarted since then.
 
 ## Jobs start and exit within seconds
 
 The setup script failed.
-It runs inside the worker script,
-so its trace is in the same `.out` file as the worker's log -
-not the batch one.
+The worker script runs it,
+so the traceback goes to the worker's `.out` file, not to the batch file.
 
 ## `ModuleNotFoundError` on a worker
 
@@ -75,10 +79,11 @@ or install it into the environment the setup script activates.
 Run [`swtop`](watch-a-run-with-swtop.md) against the same server address
 from another shell.
 An empty worker-processes block against a populated worker-jobs block
-means the jobs are queued or their setup scripts have not finished.
+has two possible causes.
+The jobs wait in the queue, or their setup scripts did not finish.
 
 ## Related
 
 - [`RaiseOnError`](../reference/executor.md#raiseonerror),
-    for collecting every failure in a batch instead of stopping at the first
+    which collects every failure in a batch, rather than the first one alone
 - [Errors that end a wait](../reference/executor.md#errors-that-end-a-wait)

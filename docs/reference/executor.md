@@ -7,15 +7,16 @@ the coordinator that runs on the login node,
 the `Task` handle it returns,
 and the `RaiseOnError` policy that decides what a failure does.
 
-Everything public is importable from the package root:
+Everything public is importable from the package root,
+except `NoOutput`:
 
 ```python
 from slurm_workflows import SlurmPilotExecutor, RaiseOnError, RemoteExecutionError
 ```
 
 The botorch names, `OptimizeSpaceBotorch` and `OptimizationTask`,
-import from there too,
-but are resolved on first use rather than when the package is imported,
+import from there too.
+The package resolves them on first use rather than at import time,
 so `import slurm_workflows` still works without botorch installed.
 
 ## `SlurmPilotExecutor(name, server_address, work_dir=None)`
@@ -30,17 +31,19 @@ executor = SlurmPilotExecutor(name, server_address, work_dir=None)
 It prefixes every task id (`<name>.task.<n>`)
 and every worker's Slurm job name (`<name>.worker.<group>.<index>`),
 and it names the executor's log.
-Two executors on one cluster must have two names:
-a shared one collides on all three,
-whether or not they are talking to the same server.
+Two executors on one cluster must have two names.
+A shared one collides on all three,
+whether or not they talk to the same server.
+
 It must start with a letter
-and hold only letters, digits, `_` and `-` (`[A-Za-z][A-Za-z0-9_-]*`),
-and be at least 3 characters long; anything else raises `ValueError`.
+and hold only letters, digits, `_` and `-` (`[A-Za-z][A-Za-z0-9_-]*`).
+It must also be at least 3 characters long.
+Anything else raises `ValueError`.
 
 `server_address` is the `host:port` of the `ds-service` server.
 Each executor must have a server of its own.
-A server holds one run's tasks, worker registrations and actor arguments,
-and everything on it is taken to belong to the executor that is using it.
+A server holds one run's tasks, worker registrations and actor arguments.
+The library assumes everything on it belongs to the executor that uses it.
 Two executors pointed at one server share a queue namespace:
 same-named worker groups serve each other's tasks,
 and same-named groups overwrite each other's actor arguments.
@@ -48,8 +51,8 @@ and same-named groups overwrite each other's actor arguments.
 `work_dir` defaults to a timestamped directory under
 `<platform cache dir>/slurm-workflows/<name>`
 (`XDG_CACHE_HOME`-driven on Linux),
-so one executor's runs sit together;
-generated scripts and all logs land there.
+so one executor's runs sit together.
+Generated scripts and all logs land there.
 
 | Method | What it does |
 | --- | --- |
@@ -63,8 +66,8 @@ generated scripts and all logs land there.
 | `close()` | Cancel all pilot jobs and close the queue-server connection. |
 
 It is also a context manager.
-Leaving the block calls `close()`,
-so every pilot job is cancelled and the executor is spent afterwards.
+When you leave the block, Python calls `close()`.
+That call cancels every pilot job, and the executor is spent afterward.
 An exception raised inside the block still propagates:
 
 ```python
@@ -72,7 +75,7 @@ with SlurmPilotExecutor(name="demo", server_address=address) as executor:
     executor.define_worker(name="cpu", sbatch_args=[...])
     executor.scale_workers("cpu", 4)
     ...
-# close() has run: every pilot job is cancelled
+# close() has run: every pilot job is canceled
 # and the queue connection is shut.
 ```
 
@@ -89,9 +92,9 @@ with SlurmPilotExecutor("my-run", address) as executor:
 results = [task.output for task in tasks]
 ```
 
-`sbatch_args` are passed straight through to `sbatch`,
+The executor passes `sbatch_args` straight through to `sbatch`,
 so any Slurm option works.
-Tasks may be submitted before any worker exists:
+You can submit tasks before any worker exists:
 they wait on the queue until something pulls them.
 
 ## `define_worker` options
@@ -107,19 +110,20 @@ they wait on the queue until something pulls them.
 | `add_cwd_to_python_path` | `True` | Also add the coordinator's cwd. |
 | `worker_exe` | `"slurm-pilot-worker"` | Worker entry point, if you've wrapped or renamed it. |
 
-The actor arguments are cloudpickled
-and put in the `ds-service` key value store,
-under `actor_class_args:<name>` and `actor_class_kwargs:<name>`,
+The executor cloudpickles the actor arguments
+and puts them in the `ds-service` key value store.
+The keys are `actor_class_args:<name>` and `actor_class_kwargs:<name>`,
 where `<name>` is the worker group's name.
 Each worker reads them back at startup.
-They must be picklable,
-and anything they refer to has to be importable on the compute node,
+
+They must be picklable.
+Anything they refer to must be importable on the compute node,
 exactly as for the actor class itself.
 They are not part of the group's identity,
-so redefining a group with different ones is allowed,
-unlike differing `sbatch_args`.
-Only the workers started after that call read the new values:
-an actor is constructed once, when its worker starts.
+so you can redefine a group with different ones.
+`sbatch_args` are part of it, and a different value asserts.
+Only the workers started after that call read the new values.
+A worker constructs its actor once, when it starts.
 
 For the task-side view of actors, see
 [How to keep per-worker state with actors](../how-to-guides/keep-per-worker-state-with-actors.md).
@@ -141,12 +145,12 @@ which is what a multi-node (MPI or UPC++) task needs.
 
 ## Watching a wait
 
-`desc` is required, and `unit` names what is being counted.
-Neither call prints a progress bar of its own:
-they publish what they are working through to the queue server,
+Both calls require `desc`, and `unit` names what the call counts.
+Neither call prints a progress bar of its own.
+They publish what they work through to the queue server,
 where [`swtop`](swtop.md) draws it.
 
-Each call writes the key `progress_display`, a JSON object holding
+Each call writes the key `progress_display`, a JSON object with these fields:
 
 | Field | Value |
 | --- | --- |
@@ -155,53 +159,55 @@ Each call writes the key `progress_display`, a JSON object holding
 | `unit` | The `unit` given to the call |
 | `total` | How many tasks were handed in |
 
-and appends the count that have come back so far
-to the time series `progress:<progress_id>`,
-opening at 0 and closing at the number that returned.
-The count is appended at most once a second while tasks arrive.
+Each call also appends the number of tasks that came back so far
+to the time series `progress:<progress_id>`.
+The series opens at 0 and closes at the number that returned.
+The call appends the count at most once a second while tasks arrive.
 
-The key is overwritten by the next call,
-so the server holds the display for the most recent wait,
+The next call overwrites the key.
+The server therefore holds the display for the most recent wait,
 and the series holds the history of each.
 
 ## Errors that end a wait
 
-A task whose queues have no worker can never finish,
-so `as_completed` and `wait` raise `RuntimeError` naming those queues
-rather than blocking. They check this twice.
+A task whose queues have no worker can never finish.
+`as_completed` and `wait` therefore do not block on such a task.
+They raise `RuntimeError` and name those queues.
+They check this twice.
 
-**Before waiting at all**, and without asking Slurm,
-they require that `scale_workers` has been called
+**Before the first wait**, and without a call to Slurm,
+they require that you called `scale_workers`
 for at least one of each pending task's queues.
-Queue names are not validated at `submit` time,
-so this is where a mistyped queue name is reported.
-The error is raised before any result is yielded.
+`submit` does not check queue names,
+so this check is where a mistyped queue name appears.
+They raise the error before they yield any result.
 
 **Then once a minute while blocked**,
 they ask `squeue` whether each pending task's queues
-still have a job on the cluster,
-which covers an allocation that ended, jobs that were cancelled,
-and jobs that died before draining their queue.
+still have a job on the cluster.
+That check covers an allocation that ended, jobs that were canceled,
+and jobs that died before they drained their queue.
 The first of these checks is a minute in, not immediate.
-A `squeue` that cannot be reached leaves liveness unknown rather than dead,
-and is logged and retried instead of ending the wait.
+A `squeue` they cannot reach leaves liveness unknown rather than dead.
+They log it, retry it, and do not end the wait.
 
 Both checks only know about workers **this executor** started.
-An executor that submits to a queue served by pilot jobs
-some other process launched will be refused.
+They refuse an executor that submits to a queue
+where another process launched the pilot jobs.
 
-Two more states end a wait, both read straight off the queue server:
+Two more states end a wait,
+and the executor reads both straight off the queue server:
 
 - **the server does not know the task id** -
   `RuntimeError: Task ... is unknown to the task queue server`.
-  In practice a `Task` built by hand,
-  or one left over from a server that has since been restarted.
-- **the task was cancelled** -
+  In practice this is a `Task` built by hand,
+  or one left over from a server that restarted in the meantime.
+- **the task was canceled** -
   `RuntimeError: Task ... was canceled on the task queue server`.
   Nothing in this library cancels a task,
   so this means somebody called `task_cancel` through the `ds-service`
   client directly.
-  A cancelled task is never dispatched again.
+  `ds-service` never dispatches a canceled task again.
 
 For what to do about each, see
 [How to troubleshoot a failing run](../how-to-guides/troubleshoot-a-failing-run.md).
@@ -210,40 +216,46 @@ For what to do about each, see
 
 `submit` returns a `Task` with `task_id`, `queue`, `priority`, `function`,
 `input`, and `output`.
-`output` is a sentinel until the task completes;
-after that it holds the return value -
+`output` is a sentinel until the task completes.
+After that it holds the return value,
 or a `RemoteExecutionError(error, error_id)` if the worker raised.
 `wait` and `as_completed` are what fill it in.
 
-`task_name` is a read-only property, `None` until
-`executor.set_task_name(task, name)` is called.
+`task_name` is a read-only property, and it is `None`
+until you call `executor.set_task_name(task, name)`.
 That call stores the name on the queue server, under `task_name:<task_id>`,
-as UTF-8 rather than a pickle, so anything reading the store can read it too,
-and updates the `Task` to match.
-Nothing in this library dispatches on the name;
-it is read by whoever is looking at the queue,
+as UTF-8 rather than a pickle.
+Anything that reads the store can therefore read it too.
+The call also updates the `Task` to match.
+
+Nothing in this library dispatches on the name.
+Whoever looks at the queue reads it,
 which in practice means [`swtop`](swtop.md).
 `ExploreSpaceSobolQMC` and `OptimizeSpaceBotorch` call it themselves
 for every task they submit.
 
-`priority` is assigned by `submit` and orders the queue.
+`submit` assigns `priority`, and `priority` orders the queue.
 `ds-service` dispatches the highest value first,
 and `submit` sets it from a negated wall clock,
-so tasks on one queue are served **oldest first**.
-It is recorded on the `Task` for inspection;
-changing it there has no effect,
-since the value the server orders by was sent when the task was enqueued.
+so one queue serves its tasks **oldest first**.
+The `Task` records it for inspection.
+A change there has no effect,
+because `submit` sent the value the server orders by
+when it enqueued the task.
 
 ## `RaiseOnError`
 
 What `as_completed` and `wait` do about a task that fails.
-A failure is any of: a task whose worker raised
-(its `output` is a `RemoteExecutionError`),
-a task cancelled on the queue server,
-a task the server does not know,
-or a pending task whose queues have no pilot job left to run them.
-Only the tasks that cannot finish are given up on;
-the rest of the batch is still waited for.
+A failure is any of these:
+
+- A task whose worker raised. Its `output` is a `RemoteExecutionError`.
+- A task canceled on the queue server.
+- A task the server does not know.
+- A pending task whose queues have no pilot job left to run them.
+
+Both calls give up only on the tasks that cannot finish.
+Unless the policy raises at once,
+they still wait for the rest of the batch.
 
 | Value | Effect |
 | --- | --- |
@@ -251,10 +263,11 @@ the rest of the batch is still waited for.
 | `RAISE_AFTER_COMPLETED` | Wait for every task that can still finish, then raise once for all the failures together. `as_completed` treats this as `RAISE_ON_FIRST_ERROR`. |
 | `RAISE_NEVER` | Report and return. |
 
-**Every failure is warned about on stderr as it is met**, whichever value is used;
-the value decides only whether an exception follows.
-The warning carries the task id and,
-for a worker that raised,
+**Both calls warn about every failure on stderr as they meet it**,
+whichever value you use.
+The value decides only whether an exception follows.
+The warning carries the task id
+and, for a worker that raised,
 the `error_id` that appears beside the traceback in that worker's log.
 
 With `RAISE_NEVER` the caller reads the outcome off the tasks:
@@ -269,15 +282,15 @@ failed = [t for t in tasks if isinstance(t.output, RemoteExecutionError)]
 never_ran = [t for t in tasks if t.output is NoOutput]
 ```
 
-`output` stays `NoOutput` for a task that was cancelled,
+`output` stays `NoOutput` for a task that was canceled,
 is unknown to the server,
 or was still pending when the last pilot job went away.
 
 ## What a run publishes
 
-Inside a task, these environment variables are set:
+Inside a task, these environment variables exist:
 
-- `PILOT_WORKER_NAME` - e.g. `demo.worker.cpu.0`
+- `PILOT_WORKER_NAME` - for example `demo.worker.cpu.0`
 - `PILOT_WORKER_GROUP` - the group name
 - `DS_SERVER_ADDRESS` - the queue server address
 - plus the usual Slurm variables (`SLURM_JOB_ID`, ...)
@@ -292,7 +305,7 @@ under `worker_job_info:<worker-name>`, as a JSON object:
 | `slurm_job_id` | The job `sbatch` returned |
 | `submit_time` | When it was submitted, an ISO 8601 timestamp with an offset |
 
-**Each worker process publishes where it is running when it starts**,
+**Each worker process publishes where it runs when it starts**,
 under `worker_process_info:<worker-id>`,
 where the worker id is `<worker-name>.<slurm-job-id>.<hostname>.<pid>`.
 The value is a JSON object, not a pickle,
@@ -307,24 +320,28 @@ so anything can read it:
 | `pid` | Its process id on that node |
 
 The worker id is the handle the queue server hands out
-(`task_get_worker_id` says which worker took a task),
-so this is how you get from a task
-to the process and node that ran it.
+(`task_get_worker_id` says which worker took a task).
+This is how you get from a task to the process and node that ran it.
 Nothing removes the key when a worker exits.
 
-Workers also sample the node they run on and the Slurm job they belong to,
-appending to `ds-service` time series every 5 seconds
-(`host_free_memory:<hostname>`, `host_load_average:<hostname>`,
-`host_dev_shm_used:<hostname>`, `host_tmp_used:<hostname>`,
-`slurm_job_memory:<job-id>` and `slurm_job_cpu:<job-id>`).
-One worker per node and one per job does this,
-elected between them with the `host_monitor:<hostname>`
+Workers also sample the node they run on and the Slurm job they belong to.
+Every 5 seconds they append to these `ds-service` time series:
+
+- `host_free_memory:<hostname>`
+- `host_load_average:<hostname>`
+- `host_dev_shm_used:<hostname>`
+- `host_tmp_used:<hostname>`
+- `slurm_job_memory:<job-id>`
+- `slurm_job_cpu:<job-id>`
+
+One worker per node and one per job does this.
+The workers elect them with the `host_monitor:<hostname>`
 and `slurm_job_monitor:<job-id>` counters.
 [`swtop`](swtop.md) displays the result.
 
-Why a run is published in these two halves rather than one,
-and why a key is written once and never updated, is in
+Why a run publishes in these two halves rather than one is in
 [About what a run publishes](../explanation/about-what-a-run-publishes.md).
+That page also says why nothing updates a key after the first write.
 
 ## Logs
 
@@ -342,8 +359,9 @@ Everything for a run lives under the executor's `work_dir`
 which is also the Slurm job name, so `squeue` shows which run a job belongs to.
 The work dir itself defaults to `<cache dir>/slurm-workflows/<executor-name>/<timestamp>`.
 
-Slurm writes those files; the worker process does not redirect its own output.
-Which of the two holds a worker's log depends on how the group was defined:
+Slurm writes those files.
+The worker process does not redirect its own output.
+Which of the two holds a worker's log depends on how you defined the group:
 
 - **`is_batch_worker=False`** (the default) runs the worker under `srun`,
     which fans out over every task in the allocation.
@@ -354,15 +372,15 @@ Which of the two holds a worker's log depends on how the group was defined:
     which in practice means `srun`'s own errors.
 
     The exception is a job of exactly one task -
-    `--ntasks=1`, or `--nodes=1` with nothing else said about tasks.
+    `--ntasks=1`, or `--nodes=1` and nothing else about tasks.
     It keeps `srun` but drops the `--output`
     and writes to `<worker-name>-<jobid>.out` like a batch worker.
     The count is per *job*, not per node:
     `--nodes=4 --ntasks-per-node=1` is four tasks
     and still gets four per-task files.
 
-    Which way a job went is recorded:
-    the batch file opens with the task count the job decided on
+    The batch file records which way a job went.
+    It opens with the task count the job decided on
     (`Num tasks: 4`), says so when it redirects,
     and traces the `srun` command it ran.
 - **`is_batch_worker=True`** runs one worker directly on the batch node,

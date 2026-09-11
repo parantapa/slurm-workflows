@@ -2,15 +2,16 @@
 
 Two deliberate choices here:
 
-* **ds-service is real.** Each test gets its own server process,
-    so task-queue semantics (states, batched status, output retrieval)
-    are exercised against the actual implementation
-    rather than a stand-in that can drift from it.
-* **Slurm is mocked.** `sbatch` / `squeue` / `scancel` are intercepted
-    at the `subprocess` boundary inside `slurm_utils`,
-    so everything above that ---
-    script rendering, job-id parsing, environment scrubbing ---
-    is the real code path.
+* **ds-service is real.** Each test gets its own server process.
+    The test exercises task-queue semantics
+    (states, batched status, output retrieval)
+    against the actual implementation,
+    rather than against a stand-in that can drift from it.
+* **Slurm is mocked.** The `fake_slurm` fixture intercepts three commands,
+    `sbatch`, `squeue` and `scancel`,
+    at the `subprocess` boundary inside `slurm_utils`.
+    Everything above that boundary is the real code path.
+    That covers script rendering, job-id parsing and environment scrubbing.
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ from ds_service_client import DsServiceClient, DsServiceServer
 from slurm_workflows import slurm_utils
 from slurm_workflows.slurm_pilot_executor import SlurmPilotExecutor
 
-# Test-support modules (e.g. support_actor) must be importable by name,
+# Test-support modules (for example, support_actor) must be importable by name,
 # both for `import` here
 # and for the worker's importlib-based actor lookup.
 sys.path.insert(0, str(Path(__file__).parent))
@@ -40,10 +41,10 @@ sys.path.insert(0, str(Path(__file__).parent))
 # --------------------------------------------------------------------------
 #
 # Both the executor's result polling and the worker's main loop
-# run until a condition is met.
+# run until a condition holds.
 # A regression in either turns a failing test into a hanging one,
-# which is far worse in CI,
-# so tests are bounded by a wall-clock alarm.
+# which is far worse in CI.
+# For this reason, a wall-clock alarm bounds every test.
 
 
 @contextmanager
@@ -62,7 +63,7 @@ def _time_limit(seconds: float, message: str):
 
 @pytest.fixture
 def time_limit():
-    """Bound a block that could spin forever if the code under test regresses."""
+    """Bound a block that can spin forever if the code under test regresses."""
 
     return _time_limit
 
@@ -83,10 +84,10 @@ def _hang_guard():
 def _srun_lines(script: str) -> list[str]:
     """The `srun` command lines in a generated script, in the order rendered.
 
-    Stripped before matching,
+    This function strips each line before the match,
     because the non-batch worker script indents its `srun` calls
     inside the shell `if` that chooses between them.
-    Matched line by line rather than searched for in the whole text,
+    It tests each line on its own rather than the whole text,
     since a path baked into the script can itself contain "srun".
     """
 
@@ -95,7 +96,7 @@ def _srun_lines(script: str) -> list[str]:
 
 @pytest.fixture
 def srun_lines():
-    """Pull the `srun` command lines out of a generated script."""
+    """Extract the `srun` command lines from a generated script."""
 
     return _srun_lines
 
@@ -113,11 +114,11 @@ def ds_service_address() -> Generator[str]:
     so a fresh process per test means no state leaks between tests.
     Startup is ~10ms.
 
-    `DsServiceServer` owns finding the binary, picking a free port,
-    waiting for the socket and shutting the process down,
-    so none of that is reimplemented here.
-    Bound to the loopback interface rather than a routable one:
-    nothing outside this machine should reach a test's queue.
+    `DsServiceServer` finds the binary, picks a free port,
+    waits for the socket and shuts the process down.
+    This fixture does none of that itself.
+    The server binds to the loopback interface rather than a routable one,
+    so nothing outside this machine can reach a test's queue.
     """
     try:
         server = DsServiceServer(interface="lo")
@@ -136,7 +137,7 @@ def ds_service_address() -> Generator[str]:
 
 @pytest.fixture
 def ds_client(ds_service_address: str):
-    """A directly-usable client against the test's ds-service."""
+    """A directly usable client against the test's ds-service."""
     client = DsServiceClient(ds_service_address)
     yield client
     client.close()
@@ -149,7 +150,7 @@ def ds_client(ds_service_address: str):
 
 @dataclass
 class Submission:
-    """One captured `sbatch` invocation."""
+    """One captured `sbatch` call."""
 
     job_id: int
     script_path: Path
@@ -165,7 +166,7 @@ class Submission:
 
     @property
     def sbatch_directives(self) -> list[str]:
-        """`#SBATCH` lines, minus the name/output ones the library adds."""
+        """`#SBATCH` lines, minus the name and output ones the library adds."""
         out = []
         for line in self.script_text.splitlines():
             if not line.startswith("#SBATCH "):
@@ -180,9 +181,9 @@ class Submission:
 class FakeSlurm:
     """Stands in for the `subprocess` module inside `slurm_utils`.
 
-    Implements just `run()` for the three Slurm commands
-    and delegates everything else (exception types, etc.)
-    to the real `subprocess`.
+    This class implements `run()` for the three Slurm commands.
+    For every other attribute, such as an exception type,
+    it uses the real `subprocess`.
     """
 
     def __init__(self) -> None:
@@ -261,10 +262,10 @@ class FakeSlurm:
 
 @pytest.fixture
 def fake_slurm(monkeypatch: pytest.MonkeyPatch) -> Generator[FakeSlurm]:
-    """Intercept Slurm commands; no cluster required."""
+    """Intercept Slurm commands, so a test needs no cluster."""
     fake = FakeSlurm()
     monkeypatch.setattr(slurm_utils, "subprocess", fake)
-    # get_clean_environ is @cache'd; clear it so each test sees its own env.
+    # get_clean_environ is @cache'd. Clear it so each test sees its own env.
     slurm_utils.get_clean_environ.cache_clear()
     yield fake
     slurm_utils.get_clean_environ.cache_clear()
@@ -290,12 +291,11 @@ def pilot_jobs(executor):
     """Declare that pilot jobs exist for the named groups.
 
     `as_completed` refuses to wait on a queue
-    this executor never started a worker for,
-    so any test that waits has to say a pilot job was submitted
-    --- even when the thing that actually drains the queue is `drain()`
-    or a worker running in-process.
-    The Slurm job stands in for the allocation;
-    those stand in for the process inside it.
+    this executor never started a worker for.
+    Any test that waits must therefore declare a pilot job,
+    even where `drain()` or an in-process worker is what drains the queue.
+    The Slurm job stands in for the allocation.
+    `drain()` and the in-process worker stand in for the process inside it.
 
     Use as `pilot_jobs("cpu")` in a test, or once in an autouse fixture.
     """

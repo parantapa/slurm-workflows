@@ -1,4 +1,4 @@
-"""Tests for the Slurm command wrappers (sbatch/squeue/scancel are mocked)."""
+"""Tests for the Slurm command wrappers, with mocked sbatch, squeue and scancel."""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ class TestGetCleanEnviron:
     def test_keeps_variables_merely_containing_slurm(
         self, monkeypatch: pytest.MonkeyPatch
     ):
-        """Only the documented prefixes are stripped, not substrings."""
+        """`get_clean_environ` strips only the documented prefixes, not substrings."""
         monkeypatch.setenv("MY_SLURM_HELPER", "keep-me")
         get_clean_environ.cache_clear()
 
@@ -92,7 +92,7 @@ class TestSubmitSbatchJob:
     def test_submits_with_scrubbed_environment(
         self, fake_slurm, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        """Submitting from inside a Slurm job must not leak SLURM_* through."""
+        """A submission from inside a Slurm job must not leak SLURM_* through."""
         monkeypatch.setenv("SLURM_JOB_ID", "999")
         monkeypatch.setenv("KEEP_ME", "yes")
         slurm_utils.get_clean_environ.cache_clear()
@@ -108,8 +108,9 @@ class TestSubmitSbatchJob:
     def test_finds_the_job_id_after_a_banner(self, fake_slurm, tmp_path: Path):
         """Sites put warnings and banners on sbatch's stdout.
 
-        The job id line is searched for rather than matched at the start,
-        so anything printed ahead of it is skipped
+        `submit_sbatch_job` searches the whole output for the job id line,
+        and does not require it at the start.
+        It therefore skips whatever a site printed ahead of that line,
         instead of failing a submission that in fact succeeded.
         """
         fake_slurm.sbatch_stdout_override = (

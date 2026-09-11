@@ -1,10 +1,10 @@
 """Tests for SlurmPilotExecutor.
 
-Slurm is mocked; the task queue is a real ds-service.
+Slurm is mocked. The task queue is a real ds-service.
 Where a test needs a task to finish,
 it plays the worker's part with `drain()`
-rather than launching one,
-so executor behaviour is isolated from worker behaviour.
+rather than launching one.
+The test then isolates executor behavior from worker behavior.
 """
 
 from __future__ import annotations
@@ -114,7 +114,7 @@ def square(x):
 
 
 class TestExecutorName:
-    """The name identifies the executor, so it has to be usable everywhere."""
+    """The name identifies the executor, so it must be usable everywhere."""
 
     def test_it_prefixes_task_ids(self, executor):
         task = executor.submit("cpu", square, 5)
@@ -340,7 +340,7 @@ class TestDefineWorker:
         executor.define_worker(name="cpu", actor_class_args=[1], **common)
 
         # The arguments are not part of the group's identity,
-        # so this is not the conflict that differing sbatch_args would be.
+        # so this is not a conflict. Differing `sbatch_args` are one.
         executor.define_worker(name="cpu", actor_class_args=[2], **common)
 
         assert num_groups(executor) == 1
@@ -428,7 +428,7 @@ class TestScaleWorkers:
             executor.scale_workers("nope", 1)
 
     def test_a_submitted_job_is_published(self, defined, ds_client, fake_slurm):
-        """`swtop` reads the jobs from the store; nothing else announces them."""
+        """`swtop` reads the jobs from the store. Nothing else announces them."""
         defined.scale_workers("cpu", 1)
 
         (worker_name,) = defined.groups["cpu"].workers
@@ -437,7 +437,7 @@ class TestScaleWorkers:
         assert published["name"] == worker_name
         assert published["group"] == "cpu"
         assert published["slurm_job_id"] == fake_slurm.submissions[0].job_id
-        # An offset-aware ISO timestamp, so a reader knows what it is looking at.
+        # An offset-aware ISO timestamp, so a reader knows which zone it is in.
         assert datetime.fromisoformat(published["submit_time"]).tzinfo is not None
 
     def test_every_job_is_published_under_its_own_key(self, defined, ds_client):
@@ -451,7 +451,7 @@ class TestScaleWorkers:
         }
 
     def test_a_canceled_job_keeps_its_key(self, defined, ds_client):
-        """Nothing deletes it: the store is the record of what was submitted."""
+        """Nothing deletes it: the store records what the executor submitted."""
         defined.scale_workers("cpu", 2)
         defined.scale_workers("cpu", 0)
 
@@ -518,7 +518,7 @@ class TestScaleWorkers:
         assert sorted(fake_slurm.cancelled_job_ids) == sorted(job_ids)
 
     def test_already_finished_jobs_are_not_cancelled(self, defined, fake_slurm):
-        """A worker whose job already exited should not be scancel'd."""
+        """Nothing scancels a worker whose job already exited."""
         defined.scale_workers("cpu", 2)
         fake_slurm.running_job_ids.clear()  # both jobs finished on their own
 
@@ -565,9 +565,9 @@ class TestScaleWorkers:
         batch_cmds = srun_lines(batch_script.script_text)
         fanout_cmds = srun_lines(fanout_script.script_text)
         assert batch_cmds == []
-        # Two, because the choice is the job's to make when it starts:
-        # a one-task job writes to the batch file,
-        # anything larger takes a file per task
+        # Two, because the choice is the job's to make when it starts.
+        # A one-task job writes to the batch file.
+        # Anything larger takes a file per task
         # instead of interleaving them all into that one.
         assert len(fanout_cmds) == 2
         assert all(cmd.endswith(".sh'") for cmd in fanout_cmds)
@@ -619,7 +619,7 @@ class TestSubmit:
             executor.submit(42, square, 1)
 
     def test_serializes_closures_and_lambdas(self, executor, ds_client):
-        """The captured variable has to survive the trip to the queue."""
+        """The captured variable must survive the trip to the queue."""
         factor = 7
         task = executor.submit("cpu", lambda x: x * factor, 6)
 
@@ -629,11 +629,12 @@ class TestSubmit:
         assert cloudpickle.loads(ds_client.task_get_output(drained)) == 42
 
     def test_submission_order_is_dispatch_order(self, executor, ds_client):
-        """Tasks are served oldest first.
+        """ds-service serves tasks oldest first.
 
-        ds-service dispatches the highest priority first,
-        so a priority that rises with time would hand out
-        the most recently submitted task and leave the oldest until last.
+        ds-service dispatches the highest priority first.
+        For this reason,
+        a priority that rises with time hands out the most recently submitted task,
+        and leaves the oldest until last.
         """
         tasks = [executor.submit("cpu", square, i) for i in range(6)]
 
@@ -642,7 +643,7 @@ class TestSubmit:
         assert served == [t.task_id for t in tasks]
 
     def test_an_earlier_task_outranks_a_later_one(self, executor):
-        """The ordering above, read off the priorities themselves."""
+        """The same ordering, read off the priorities themselves."""
         first = executor.submit("cpu", square, 1)
         second = executor.submit("cpu", square, 2)
 
@@ -780,16 +781,16 @@ class TestAsCompleted:
 
     def test_unknown_task_id_raises_from_wait(self, executor, time_limit):
         # `wait` gets this by delegating to `as_completed`,
-        # so the guarantee is pinned to both entry points
-        # rather than resting on that delegation staying put.
+        # so the test pins the guarantee to both entry points
+        # rather than trusting the delegation to stay.
         with time_limit(10, "wait never terminated for an unknown task"):
             with pytest.raises(RuntimeError, match="unknown to the task queue server"):
                 executor.wait([ghost_task()], desc="test")
 
     def test_canceled_task_raises(self, executor, ds_client, time_limit):
         # `Canceled` arrived with ds-service 4.0.0.
-        # Nothing here cancels, so this is an out-of-band cancellation,
-        # and a state the poll loop does not name waits forever.
+        # Nothing here cancels, so this cancel arrives out of band.
+        # A state the poll loop does not name waits forever.
         task = executor.submit("cpu", square, 3)
         assert ds_client.task_cancel(task.task_id)
 
@@ -809,7 +810,7 @@ class TestRemoteErrors:
         pilot_jobs("cpu")
 
     def test_a_worker_exception_comes_back_as_the_output(self, executor, ds_client):
-        """It never propagates out of the worker; the policy decides the rest."""
+        """The exception never leaves the worker. The policy decides the rest."""
         task = executor.submit("cpu", square, 1)
         fail_one(ds_client, "cpu", error_id="ERROR_abc")
 
@@ -832,7 +833,7 @@ class TestRemoteErrors:
         with pytest.raises(RuntimeError):
             executor.wait(tasks, desc="test")
 
-        # The other two were never waited for.
+        # Nothing waited for the other two.
         assert [t.output is NoOutput for t in tasks] == [False, True, True]
 
     def test_raise_never_returns_the_failure_as_a_result(self, executor, ds_client):
@@ -907,7 +908,7 @@ class TestRemoteErrors:
     def test_as_completed_cannot_defer_and_says_so_by_raising(
         self, executor, ds_client
     ):
-        """There is no "after" once results are being handed out."""
+        """There is no "after" once the wait hands out results."""
         tasks = [executor.submit("cpu", square, i) for i in range(3)]
         fail_one(ds_client, "cpu")
         drain(ds_client, "cpu", 2)
@@ -965,7 +966,7 @@ class TestLiveQueues:
         executor.scale_workers("gpu", 1)
         gpu_job = fake_slurm.submissions[-1].job_id
 
-        # The gpu job ends; its group has nothing left on the cluster.
+        # The gpu job ends, so its group has nothing left on the cluster.
         fake_slurm.running_job_ids.remove(gpu_job)
 
         assert executor._live_queues() == {"cpu"}
@@ -999,7 +1000,7 @@ class TestLiveQueues:
         assert executor._live_queues(["cpu", "nope"]) == {"cpu"}
 
     def test_squeue_failure_propagates(self, executor, fake_slurm, setup_script):
-        """Unknown liveness must not be reported as "nothing is live"."""
+        """`_live_queues` must not report unknown liveness as "nothing is live"."""
         executor.define_worker("cpu", [], setup_script)
         executor.scale_workers("cpu", 1)
         fake_slurm.fail_command("squeue")
@@ -1025,7 +1026,7 @@ class TestNoWorkerStarted:
             list(executor.as_completed([task], desc="test"))
 
     def test_a_queue_matching_no_group_is_rejected(self, executor):
-        """Queue names are not validated at submit time, so a typo lands here."""
+        """`submit` does not validate queue names, so a typo lands here."""
         task = executor.submit("typo-in-queue-name", square, 2)
 
         with pytest.raises(RuntimeError, match="no worker started"):
@@ -1127,7 +1128,7 @@ class TestNoWorkerStarted:
         assert result.output == 16
 
     def test_finished_tasks_need_no_worker(self, executor, ds_client, setup_script):
-        """Nothing is pending, so there is nothing a worker could still run."""
+        """Nothing is pending, so there is nothing a worker can still run."""
         executor.define_worker("cpu", [], setup_script)
         executor.scale_workers("cpu", 1)
         task = executor.submit("cpu", square, 5)
@@ -1148,8 +1149,9 @@ class TestNoWorkerStarted:
 def check_immediately(monkeypatch):
     """Collapse the liveness interval so one poll triggers a check.
 
-    The real 60s gap exists so that submitting before scaling workers keeps
-    working; these tests are about what happens once the gap has elapsed.
+    The real 60s gap exists
+    so that a submit before a scale_workers call still works.
+    These tests are about what happens after the gap elapsed.
     """
 
     monkeypatch.setattr(spe, "LIVE_QUEUE_CHECK_INTERVAL_S", 0.0)
@@ -1215,10 +1217,10 @@ class TestStrandedTasks:
     def test_only_the_stranded_tasks_are_given_up_on(
         self, executor, fake_slurm, setup_script, ds_client, check_immediately
     ):
-        """One group reaching its walltime must not discard another's work.
+        """A group that reaches its walltime must not discard another's work.
 
         The shape of a real run: a one-job `opt` pool dies
-        while the `eval` pool is still working through its round.
+        while the `eval` pool still works through its round.
         """
         executor.define_worker("eval", [], setup_script)
         executor.define_worker("opt", [], setup_script)
@@ -1298,7 +1300,7 @@ class TestStrandedTasks:
 
         This is the pattern the README documents:
         submit first, scale workers after.
-        Without the initial delay it would raise instead of waiting.
+        Without the initial delay, `as_completed` raises instead of waiting.
         """
         executor.define_worker("cpu", [], setup_script)
         task = executor.submit("cpu", square, 6)
@@ -1319,21 +1321,22 @@ class TestStrandedTasks:
 class TestLogging:
     """One executor, one log file.
 
-    The logger is named after the executor
-    because a name shared between them collects a handler per executor,
-    and every line then lands in every work dir opened in this process.
-    That makes the name the identity here too,
-    so each test below uses its own
-    rather than inheriting the logger a previous test left in the registry.
+    Each executor names its logger after itself.
+    A logger shared between two executors collects a handler for each one.
+    Every line then lands in every work dir this process opened.
+    The name is therefore the identity here too.
+    Each test here uses its own name,
+    rather than the logger a previous test left in the registry.
     """
 
     @staticmethod
     def file_handlers(ex) -> list[logging.Handler]:
         """The executor's own handlers.
 
-        Filtered, because the logging module's registry is global
-        and pytest's capture plugin puts handlers of its own on loggers
-        while a test runs.
+        This method filters the list,
+        because the logging module's registry is global.
+        While a test runs,
+        pytest's capture plugin puts handlers of its own on loggers.
         """
         return [h for h in ex.logger.handlers if isinstance(h, logging.FileHandler)]
 
@@ -1347,7 +1350,7 @@ class TestLogging:
             "sharedB", ds_service_address, work_dir=tmp_path / "second"
         )
 
-        # scale_workers is what logs; anything that writes a record will do.
+        # scale_workers is what logs. Anything that writes a record will do.
         second.define_worker("cpu", [], setup_script)
         second.scale_workers("cpu", 1)
 
@@ -1435,7 +1438,7 @@ class TestLifecycle:
 
         assert sorted(fake_slurm.cancelled_job_ids) == sorted(job_ids)
         assert num_workers(executor) == 0
-        # The client is still open, so the executor can be reused.
+        # The client is still open, so a test can reuse the executor.
         assert executor.submit("cpu", square, 2) is not None
 
     def test_close_cancels_all_groups(self, executor, fake_slurm, setup_script):
@@ -1451,7 +1454,7 @@ class TestLifecycle:
         assert num_workers(executor) == 0
 
     def test_close_tolerates_squeue_failure(self, executor, fake_slurm, setup_script):
-        """Cleanup must not explode if the cluster is unreachable."""
+        """Cleanup must not raise when the cluster is unreachable."""
         executor.define_worker("a", [], setup_script)
         executor.scale_workers("a", 1)
         fake_slurm.fail_command("squeue")
@@ -1481,7 +1484,7 @@ class TestLifecycle:
     def test_context_manager_closes_after_an_exception(
         self, executor, fake_slurm, setup_script
     ):
-        """The jobs still get cancelled, and the exception still escapes."""
+        """The executor still cancels the jobs, and the exception still escapes."""
         with pytest.raises(ValueError, match="boom"):
             with executor:
                 executor.define_worker("a", [], setup_script)

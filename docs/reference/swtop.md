@@ -3,16 +3,16 @@
 [<- back to the main README](../../README.md)
 
 `slurm_workflows.swtop` and `slurm_workflows.swtop_tui`:
-the live view of a `slurm-workflows` run -
-the tasks, the pilot jobs and worker processes,
-and the compute nodes they are running on.
+the live view of a `slurm-workflows` run.
+It shows the tasks, the pilot jobs and worker processes,
+and the compute nodes they run on.
 
 To watch a run with it, see
 [How to watch a run with `swtop`](../how-to-guides/watch-a-run-with-swtop.md).
 
 ## Command line
 
-`swtop` takes the `ds-service` address (`host:port`) the executor was given.
+`swtop` takes the `ds-service` address (`host:port`) you gave the executor.
 
 ```sh
 swtop 10.0.0.1:5051          # every 2 seconds
@@ -30,9 +30,9 @@ swtop 10.0.0.1:5051 --plain  # frames of text, no UI
 | `q` | Quit |
 | `r` | Poll now, rather than waiting for the next interval |
 
-`swtop` runs until it is quit or interrupted with Ctrl-C.
-Nothing has to be started for it on the cluster side:
-the executor and the workers publish what it reads as they go.
+`swtop` runs until you quit it or interrupt it with Ctrl-C.
+You start nothing for it on the cluster side.
+The executor and the workers publish what it reads as they go.
 
 ## What the screen shows
 
@@ -69,94 +69,100 @@ eval-2   my-run.task.12  Ready
 -        my-run.task.13  Ready
 ```
 
-Tasks are listed running first, then ready, then complete and canceled,
+`swtop` lists tasks running first, then ready,
+then complete, canceled and undefined,
 and named before unnamed within each state.
 
 The blocks come from different places:
 
 - **Progress** is what the driver's current `wait` or `as_completed` call
-    is working through:
-    the `desc` and `unit` it was given,
-    how many of its tasks have come back,
+    works through.
+    It gives the `desc` and `unit` you gave it,
+    how many of its tasks came back,
     and how far along that is.
-    In the terminal UI it is a bar; in the text frames, the line above.
-    It is absent until a driver waits on something,
-    and the last wait's line stays after it finishes,
+    In the terminal UI it is a bar.
+    In the text frames it is the line above.
+    It is absent until a driver waits on something.
+    The last wait's line stays after it finishes,
     marked `done` rather than `working`.
-    A driver that never waits, or one whose tasks are all already back,
-    leaves nothing here.
+    A driver that never waits leaves nothing here.
 - **Task counts** are a single RPC, so they always cover every task.
     A server belongs to one executor,
-    so every task on it is a task of the run being watched.
-- **Worker jobs** are the pilot jobs the executor submitted,
-    published as it submitted them.
+    so every task on it is a task of the run `swtop` watches.
+- **Worker jobs** are the pilot jobs the executor submitted.
+    The executor publishes each one as it submits it.
     A job appears here the moment `scale_workers` returns,
-    whether or not Slurm has started it.
-- **Worker processes** are the ones that have registered themselves,
+    whether or not Slurm started it.
+- **Worker processes** are the ones that registered themselves,
     which each pilot worker does when it starts.
-    A job in the block above with no process against it
-    is one that is still queued, or whose setup script has not finished.
+    A job in the worker jobs block with no process against it
+    is still queued, or its setup script did not finish.
     One job usually holds many processes, one per task slot,
     so the two counts differ by design.
-- **Hosts and Slurm jobs** are sampled every 5 seconds by worker threads:
+- **Hosts and Slurm jobs** are what worker threads sample every 5 seconds:
     see [What the hosts and jobs blocks measure](#what-the-hosts-and-jobs-blocks-measure).
 - **Tasks** are all tasks on the server, named or not.
 
-Every block says why it is empty rather than showing a bare header.
+Every block says why it is empty, and never shows a bare header.
+A worker job or worker process whose description the collector
+cannot read yet shows `?` in the fields it could not read.
 
 ## Task names
 
-A task is listed under `-` unless
-`executor.set_task_name(task, name)` has been called for it.
-A name published after the task was submitted
+`swtop` lists a task under `-`
+unless you called `executor.set_task_name(task, name)` for it.
+A name you publish after you submit the task
 appears at the next poll.
 
-`ExploreSpaceSobolQMC` and `OptimizeSpaceBotorch` name what they submit:
-`<task>-explore-<index>` for a point of a sweep,
-`<task>-fit-<round>` and `<task>-search-<round>-<index>`
-for the two kinds of task a search round is made of.
-The index is zero padded to the width of the batch,
+`ExploreSpaceSobolQMC` and `OptimizeSpaceBotorch` name what they submit.
+A point of a sweep gets `<task>-explore-<index>`.
+The two kinds of task in a search round get
+`<task>-fit-<round>` and `<task>-search-<round>-<index>`.
+They zero pad the index to the width of the batch,
 so the names sort in submission order.
 
 ## What the hosts and jobs blocks measure
 
-Nothing has to be started for these:
-pilot workers do the sampling themselves.
+You start nothing for these.
+The pilot workers sample the nodes and jobs themselves.
 One worker per node and one per job runs a sampling thread,
 and every 5 seconds each appends to a `ds-service` time series:
 
 | Column | What it is |
 | --- | --- |
-| `FREE MEM` | Memory available on the node, not counting cache |
+| `FREE MEM` | Memory available on the node, including the cache the kernel can reclaim |
 | `LOAD` | The node's 1 minute load average, over all its cpus |
 | `/dev/shm`, `/tmp` | How full each node-local scratch filesystem is |
 | `MEMORY` | The job's cgroup total on that node: every process and thread of the job, not just the workers |
 | `CPU` | Cores the job used, averaged since the previous sample |
 
-`LOAD` reads against the node's core count
-(40 on `bii`, so 39.80 is a full node and 80 is oversubscribed twice over),
-and `CPU` against what the job asked for
-(`--nodes=1 --ntasks-per-node=40 --cpus-per-task=1` should sit near 40).
-A `/tmp` climbing towards 100% takes the whole node down with it,
-not just the job that filled it.
+`LOAD` reads against the node's core count.
+`bii` has 40 cores,
+so 39.80 is a full node and 80 is oversubscribed twice over.
+`CPU` reads against what the job asked for,
+so `--nodes=1 --ntasks-per-node=40 --cpus-per-task=1` sits near 40.
+The first reading of a job is 0,
+since the monitor has no earlier sample to difference against.
+A `/tmp` that climbs toward 100% takes the whole node down with it,
+not only the job that filled it.
 
-A subject marked `(stale)` has no reading in the last minute,
-which means the worker that was sampling it has gone -
-its job ended, or it was killed.
-The remaining workers do not take the job over,
+A subject marked `(stale)` has no reading in the last minute.
+The worker that sampled it is gone:
+its job ended, or something killed it.
+The remaining workers do not take over the job,
 so a run that scales down loses the readings for what it gave up.
-A single measurement shown as `-` on an otherwise live row
-is one series with nothing recent in it,
-which is what a filesystem that is not mounted on that node looks like.
+A single `-` on an otherwise live row
+is one series with nothing recent in it.
+That is what a filesystem the node does not mount looks like.
 
-How the sampling worker is elected, and why nothing re-elects it, is in
+How the workers elect the sampling worker, and why nothing re-elects it, is in
 [About what a run publishes](../explanation/about-what-a-run-publishes.md).
 
 ## Frames of text instead of a UI
 
-Output that is not a terminal --- a pipe, a file, `--plain` ---
-gets frames of text instead, one per poll,
-with a header line naming the server and the time of the reading:
+Output that is not a terminal (a pipe, a file, `--plain`)
+gets frames of text instead, one per poll.
+A header line names the server and the time of the reading:
 
 ```
 swtop  10.0.0.1:5051  2026-01-30 11:04:57
@@ -167,15 +173,16 @@ explore  [###############---------]  242/400 point  60%  working
 ...
 ```
 
-On a terminal the frames replace each other;
-redirected, they are appended.
+On a terminal the frames replace each other.
+When you redirect the output, `swtop` appends them instead.
 The blocks and columns are the same either way.
 
 ## When the server cannot be read
 
-If the server is unreachable,
-`swtop` says so above the tables and keeps polling rather than exiting.
-The last good reading stays on the screen,
-so a server being restarted does not blank the display.
-This is also what starting `swtop` before the server looks like:
+If the server is unreachable, `swtop` says so above the tables.
+It continues to poll rather than exit.
+In the terminal UI the last good reading stays on the screen,
+so a server restart does not blank the display.
+A text frame carries the message in place of the blocks.
+`swtop` also looks like this when you start it before the server:
 it waits, and fills in once there is something to read.

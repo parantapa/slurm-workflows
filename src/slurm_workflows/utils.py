@@ -24,8 +24,9 @@ def gen_error_id() -> str:
 class RemoteExecutionError:
     """What a task's `output` holds when its worker raised.
 
-    `error` is the formatted exception. `error_id` appears verbatim beside
-    the full traceback in that worker's log, under the executor's work dir.
+    `error` is the formatted exception.
+    `error_id` appears verbatim beside the full traceback in that worker's log,
+    under the executor's work dir.
     """
 
     error: str
@@ -37,9 +38,10 @@ def objective_value(
 ) -> float:
     """The value to rank one evaluation by.
 
-    Raises `RuntimeError`, naming what came back and at which point,
-    if the result is not a mapping, lacks `objective_key`,
-    or holds a value there that is not a finite float.
+    Raises `RuntimeError` in three cases.
+    The result is not a mapping, or it lacks `objective_key`,
+    or it holds a value there that is not a finite float.
+    The message names what came back and at which point.
     """
     if not isinstance(output, Mapping):
         raise RuntimeError(

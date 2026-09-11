@@ -19,24 +19,24 @@ It needs botorch, which is an optional dependency:
 pip install -U "slurm-workflows[botorch]"
 ```
 
-`tasks` is a **list**, as for a sweep:
-several spaces are searched in the same rounds,
+`tasks` is a **list**, as for a sweep.
+`OptimizeSpaceBotorch` searches several spaces in the same rounds,
 and each drops out when it meets its own stopping rule.
 
 It never explores.
-`files` are results files to start from, as written by
-`ExploreSpaceSobolQMC.save` or by this class's own `save`,
-and a task is modelled on the observations they hold **under its name**,
+`files` are results files to start from,
+which `ExploreSpaceSobolQMC.save` or this class's own `save` wrote.
+`OptimizeSpaceBotorch` models a task
+on the observations they hold **under its name**,
 so an optimization task must carry the name its exploration ran under.
-Passing the exploration file and every search file since
-is how a run is resumed;
-see [How to resume a search](../how-to-guides/resume-a-search.md).
+To resume a run, pass the exploration file and every search file since.
+See [How to resume a search](../how-to-guides/resume-a-search.md).
 
 A task with nothing under its name in any file is an error.
-The points are re-checked against the space the task declares:
-a parameter missing or one too many,
+`OptimizeSpaceBotorch` re-checks the points against the space the task declares.
+It reports a parameter missing, one too many,
 or a range since narrowed past a saved point,
-is reported rather than fitted on.
+rather than fit on them.
 
 The objective contract is the same as for a sweep:
 see [The objective](explore-space.md#the-objective).
@@ -44,18 +44,19 @@ see [The objective](explore-space.md#the-objective).
 ## What a round is
 
 `run()` starts rounds until the search stops improving.
-Each round fits a `SingleTaskGP` to every point measured so far,
-asks `qLogNoisyExpectedImprovement` for the whole batch in one call,
+Each round fits a `SingleTaskGP` to every point measured so far.
+Then it asks `qLogNoisyExpectedImprovement` for the whole batch in one call,
 submits all of it, and waits.
-The batch is chosen jointly rather than a point at a time.
-`qLogNoisyExpectedImprovement` reads its incumbent off the posterior
-at the points already evaluated,
-and carries every point measured so far,
-so a fit costs more every round.
-`run()` can be called again for another set of rounds,
-modelling everything the earlier calls measured.
+It chooses the batch jointly rather than a point at a time.
 
-Why the batch is chosen jointly, and why the fit runs on a worker,
+`qLogNoisyExpectedImprovement` reads its incumbent off the posterior
+at the points already evaluated.
+It carries every point measured so far, so a fit costs more every round.
+
+You can call `run()` again for another set of rounds.
+The new rounds model everything the earlier calls measured.
+
+Why a round chooses the whole batch at once, and why the fit runs on a worker,
 is in
 [About batch Bayesian optimization](../explanation/about-batch-bayesian-optimization.md).
 
@@ -65,33 +66,36 @@ A round is *stalled* when it fails to improve the best value by `min_improvement
 a fraction of the incumbent's magnitude.
 `patience` stalled rounds **in a row** end the search,
 and an improving round resets the streak.
-`min_search_iterations` is a floor on rounds *run*, not on rounds counted:
-a stalled round below it still counts towards `patience`,
-it just cannot be the round that ends the search,
-so the earliest stop is `max(min_search_iterations, patience)` rounds
-and a search that never improves stops at the floor exactly.
-`max_search_iterations` is reached even while still improving.
-Each round reports which bound is binding and how far it has to go.
+
+`min_search_iterations` is a floor on rounds *run*, not on rounds counted.
+A stalled round below it still counts toward `patience`,
+but it cannot be the round that ends the search.
+The earliest stop is therefore `max(min_search_iterations, patience)` rounds,
+and a search that never improves stops there exactly.
+`max_search_iterations` stops the search even while it still improves.
+Each stalled round reports how far it has to go,
+under whichever bound is further away.
 
 ## Where the work runs
 
 Nothing heavy runs on the driver.
-A round is two kinds of task on two queues,
-each kind submitted for every task at once and waited for once:
+A round is two kinds of task on two queues.
+`OptimizeSpaceBotorch` submits each kind for every task at once,
+and waits for it once:
 
 | Queue | Tasks per round | Needs |
 | --- | --- | --- |
 | `objective_queue` | `search_parallelism` evaluations | whatever the objective needs |
 | `optimizer_queue` | one fit-and-propose: the GP fit and the acquisition optimization | botorch, cores, and memory for a GP over every point measured so far |
 
-Pointing both at one queue is supported and cannot deadlock,
-since a round never has both kinds in flight at once.
+You can point both at one queue, and that cannot deadlock,
+because a round never has both kinds in flight at once.
 
 botorch must be importable on the driver
 and in the `optimizer_queue` workers' environment.
-Workers serving only `objective_queue` need neither botorch nor torch.
-A fit that fails to import it raises on the driver naming the queue,
-with the traceback in a worker log under `executor.work_dir`.
+Workers that serve only `objective_queue` need neither botorch nor torch.
+A fit that fails to import it raises on the driver and names the queue.
+The traceback is in a worker log under `executor.work_dir`.
 
 ## `OptimizationTask`
 
@@ -134,17 +138,17 @@ params, value = opt.best_point("sweep")
 ```
 
 `save` writes only what this instance evaluated,
-so passing an earlier file alongside it counts every point once.
-`opt.results[name]` is that same set of points as lists
-and `opt.prior[name]` is what the files held, in the same shape;
+so you can pass an earlier file alongside it and count every point once.
+`opt.results[name]` is that same set of points as lists,
+and `opt.prior[name]` is what the files held, in the same shape.
 `best_point` and `observations` cover both.
 `opt.tasks` is the task list with the parallelism filled in.
 
 ## Tuning the proposal
 
 Four task arguments tune the acquisition optimization.
-They are settings of one run, kept on the task
-and passed to every fit:
+They are settings of one run.
+`OptimizeSpaceBotorch` keeps them on the task and passes them to every fit:
 
 | Argument | Default | What it controls |
 | --- | --- | --- |
@@ -157,7 +161,7 @@ and passed to every fit:
 OptimizationTask(..., num_restarts=20, acqf_timeout_s=60.0)
 ```
 
-The run reports itself as it goes:
-the best point after every round,
+The run reports itself as it goes.
+It gives the best point after every round,
 how long each fit and each proposal took,
 and why a task stopped.

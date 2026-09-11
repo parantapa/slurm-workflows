@@ -1,6 +1,7 @@
 """The coordinator: worker groups, pilot jobs, and the tasks they run.
 
-One executor per `ds-service` server; see `docs/explanation/about-the-pilot-job-model.md`.
+One executor per `ds-service` server.
+`docs/explanation/about-the-pilot-job-model.md` explains the model.
 """
 
 from __future__ import annotations
@@ -43,16 +44,17 @@ from .templates import render_template
 NoOutput = object()
 
 # One JSON key per submitted pilot job, keyed on the worker name.
-# Read by `swtop`; the fields are listed in `docs/reference/executor.md`.
+# `swtop` reads it.
+# `docs/reference/executor.md` lists the fields.
 WORKER_JOB_INFO_PREFIX = "worker_job_info:"
 
-# What `wait` and `as_completed` are working through, for `swtop` to draw.
-# The key is overwritten by each call; the series under the id it carries
-# holds the count completed so far.
+# What `wait` and `as_completed` work through, for `swtop` to draw.
+# Each call overwrites the key.
+# The series under the id it carries holds the count completed so far.
 PROGRESS_DISPLAY_KEY = "progress_display"
 PROGRESS_SERIES_PREFIX = "progress:"
 
-# How often the count is appended while tasks come back.
+# How often the executor appends the count while tasks come back.
 PROGRESS_INTERVAL_S: float = 1.0
 
 
@@ -60,11 +62,12 @@ class RaiseOnError(Enum):
     """What `as_completed` and `wait` do about a task that fails.
 
     A failure is a task whose worker raised,
-    one cancelled on the queue server,
-    one the server does not know,
-    or a pending task whose queues have no pilot job left to run them.
-    Every failure is warned about as it is met, whichever value is chosen;
-    the value decides only whether an exception follows.
+    one canceled on the queue server,
+    or one the server does not know.
+    A pending task is also a failure
+    when its queues have no pilot job left to run it.
+    The executor reports every failure as it meets one, whatever the value.
+    The value decides only whether an exception follows.
     """
 
     # Stop at the first failure.
@@ -74,14 +77,15 @@ class RaiseOnError(Enum):
     # `as_completed` treats this as RAISE_ON_FIRST_ERROR.
     RAISE_AFTER_COMPLETED = auto()
 
-    # Report the failures and return; the caller reads `task.output`.
+    # Report the failures and return.
+    # The caller reads `task.output`.
     RAISE_NEVER = auto()
 
 
 # How many failures a deferred exception names before it stops listing them.
 MAX_REPORTED_ERRORS = 5
 
-# What an executor may be called:
+# What you can name an executor:
 # the intersection of what is safe in a task id, a logger name,
 # a directory name and a Slurm job name.
 EXECUTOR_NAME_REGEX = re.compile(r"[A-Za-z][A-Za-z0-9_-]*")
@@ -89,8 +93,9 @@ MIN_EXECUTOR_NAME_LEN: int = 3
 
 POLL_INTERVAL_S: float = 0.1
 
-# How often `_as_completed` re-checks that pending tasks still have a pilot
-# job. Well above POLL_INTERVAL_S: each check costs an `squeue` call.
+# How often `_as_completed` re-checks that pending tasks still have a pilot job.
+# The interval is well above POLL_INTERVAL_S:
+# each check costs an `squeue` call.
 LIVE_QUEUE_CHECK_INTERVAL_S: float = 60.0
 
 
@@ -98,8 +103,9 @@ LIVE_QUEUE_CHECK_INTERVAL_S: float = 60.0
 class Task:
     """A submitted task, and what it returned once it finished.
 
-    `output` is `NoOutput` until then, and afterwards holds the return
-    value, or a `RemoteExecutionError` if the worker raised.
+    `output` is `NoOutput` until then.
+    Afterward `output` holds the return value,
+    or a `RemoteExecutionError` if the worker raised.
     """
 
     task_id: str
@@ -112,7 +118,7 @@ class Task:
 
     @property
     def task_name(self) -> str | None:
-        """The name given by `SlurmPilotExecutor.set_task_name`, or None."""
+        """The name `SlurmPilotExecutor.set_task_name` set, or None."""
         return self._task_name
 
 
@@ -120,8 +126,8 @@ class Task:
 class WorkerGroup:
     """A named recipe for starting workers, and the queue they serve.
 
-    The name is also the queue name: a task submitted to `name` is only
-    served by workers of this group.
+    The name is also the queue name:
+    only workers of this group serve a task on the queue `name`.
     """
 
     name: str
@@ -145,14 +151,14 @@ class _Progress:
     _last_sent: float = field(default=0.0, compare=False)
 
     def record(self, done: int) -> None:
-        """Append `done` if the series has not been written to recently."""
+        """Append `done`, unless the series took a value recently."""
         now = time.monotonic()
         if done < self.total and now - self._last_sent < PROGRESS_INTERVAL_S:
             return
         self.append(done)
 
     def append(self, done: int) -> None:
-        """Append `done` to the series now, whenever it was last written."""
+        """Append `done` to the series now, and ignore the interval."""
         self._last_sent = time.monotonic()
         self.client.time_series_append(
             f"{PROGRESS_SERIES_PREFIX}{self.progress_id}",
@@ -165,9 +171,9 @@ class SlurmPilotExecutor:
     """Runs Python callables on a Slurm cluster through a pool of pilot workers.
 
     Give each executor a `ds-service` server of its own:
-    everything on a server is taken to belong to one run.
-    Use it as a context manager, or call `close()`,
-    so that pilot jobs are cancelled when the run ends.
+    everything on a server belongs to one run.
+    Use the executor as a context manager, or call `close()`,
+    so the executor cancels the pilot jobs when the run ends.
     """
 
     @typechecked
@@ -181,10 +187,11 @@ class SlurmPilotExecutor:
 
         `name` prefixes task ids, worker job names and the log,
         so two executors on one cluster need two names.
-        It must match `[A-Za-z][A-Za-z0-9_-]*` and be at least
-        `MIN_EXECUTOR_NAME_LEN` characters; anything else raises `ValueError`.
-        `work_dir` defaults to a timestamped directory in the user cache,
-        and is created if it does not exist.
+        `name` must match `[A-Za-z][A-Za-z0-9_-]*`
+        and hold at least `MIN_EXECUTOR_NAME_LEN` characters.
+        Anything else raises `ValueError`.
+        `work_dir` defaults to a timestamped directory in the user cache.
+        The executor creates that directory if it does not exist.
         """
         if len(name) < MIN_EXECUTOR_NAME_LEN:
             raise ValueError(
@@ -241,15 +248,15 @@ class SlurmPilotExecutor:
         python_paths: list[str | Path] | None = None,
         add_cwd_to_python_path: bool = True,
     ) -> None:
-        """Register a worker group. Submits nothing; `scale_workers` does that.
+        """Register a worker group. `scale_workers` submits the jobs.
 
         `name` is also the queue name.
-        `setup_script` is shell text, not a path, and is inlined into each
-        generated worker script.
+        `setup_script` is shell text, not a path.
+        The executor inlines it into each generated worker script.
         The actor arguments need an `actor_class_name` to construct,
         and raise `ValueError` without one.
-        Redefining a group identically is a no-op;
-        redefining it with different `sbatch_args` asserts.
+        A second, identical definition of a group does nothing.
+        A definition that differs from the first one raises `AssertionError`.
         """
         python_str_paths: list[str] = []
         if python_paths is not None:
@@ -281,8 +288,8 @@ class SlurmPilotExecutor:
         else:
             self.groups[group.name] = group
 
-        # Cloudpickled into the store, keyed on the group name,
-        # and read back by each worker at startup.
+        # These go into the store, cloudpickled and keyed on the group name.
+        # Each worker reads them at startup.
         if actor_class_args is not None:
             self.client.map_set(
                 f"actor_class_args:{name}",
@@ -360,7 +367,7 @@ class SlurmPilotExecutor:
     def scale_workers(self, name: str, count: int) -> None:
         """Submit or cancel pilot jobs so the group holds `count` of them.
 
-        Returns as soon as the jobs are submitted, not when they start.
+        Returns as soon as `sbatch` accepts the jobs, not when they start.
         """
         assert name in self.groups, "Unknown worker type"
 
@@ -418,7 +425,7 @@ class SlurmPilotExecutor:
     ) -> Task:
         """Enqueue one task on the given queues and return its handle."""
         # Negated: ds-service serves the highest priority first,
-        # and a queue is served oldest first.
+        # and serves one queue oldest first.
         priority = -time.time()
         function_bytes = cloudpickle.dumps(fn, protocol=pickle.HIGHEST_PROTOCOL)
         input_bytes = cloudpickle.dumps(
@@ -450,7 +457,8 @@ class SlurmPilotExecutor:
     def set_task_name(self, task: Task, name: str) -> None:
         """Give `task` a name, on the queue server as well as locally.
 
-        The name is for whoever reads the queue; nothing here dispatches on it.
+        The name is for whoever reads the queue.
+        Nothing here dispatches on it.
         """
         # Server first: a failed write leaves the task unnamed on both sides.
         self.client.map_set(f"task_name:{task.task_id}", name.encode("utf-8"))
@@ -463,9 +471,9 @@ class SlurmPilotExecutor:
         """Enqueue one task and return its handle immediately.
 
         `fn` is a callable, or a method name for a group with an actor.
-        The queue name is not checked here; a task on a queue no group
-        serves is reported when it is waited on.
-        Tasks on one queue are served oldest first.
+        This method does not check the queue name.
+        `wait` and `as_completed` report a task on a queue no group serves.
+        The queue server dispatches tasks on one queue oldest first.
         """
         if isinstance(queue, str):
             queue = [queue]
@@ -479,7 +487,7 @@ class SlurmPilotExecutor:
     def _as_completed(
         self, tasks: list[Task], raise_on_error: RaiseOnError
     ) -> Iterable[Task]:
-        """Yield tasks as they finish, applying `raise_on_error` to failures."""
+        """Yield tasks as they finish, and apply `raise_on_error` to failures."""
         pending: list[Task] = []
         finished: list[Task] = []
         for task in tasks:
@@ -488,7 +496,8 @@ class SlurmPilotExecutor:
             else:
                 finished.append(task)
 
-        # Every failure met on the way, read only by a deferred raise.
+        # Every failure met on the way.
+        # Only a deferred raise reads this list.
         errors: list[str] = []
         # Tasks, not messages: one message can cover a whole queue's worth.
         failures = 0
@@ -508,7 +517,7 @@ class SlurmPilotExecutor:
             unrunnable_ids = {task.task_id for task in unrunnable}
             return [task for task in pending if task.task_id not in unrunnable_ids]
 
-        # Before anything is yielded.
+        # Before the first yield.
         if pending:
             starved, message = self._starved_tasks(pending)
             if starved:
@@ -516,12 +525,14 @@ class SlurmPilotExecutor:
 
         yield from finished
 
-        # One interval away, not immediate: submitting before any worker
-        # exists is supported, so a queue with no job yet is normal.
+        # One interval away, not immediate:
+        # a caller can submit before any worker exists,
+        # so a queue with no job yet is normal.
         next_liveness_check = time.monotonic() + LIVE_QUEUE_CHECK_INTERVAL_S
 
         while pending:
-            # One request for every pending task, answered in the order sent.
+            # One request for every pending task.
+            # The server answers in the order sent.
             states = self.client.task_get_status([t.task_id for t in pending])
             states = cast(list[TaskState], states)
 
@@ -533,7 +544,8 @@ class SlurmPilotExecutor:
                     task.output = cloudpickle.loads(output)
                     completed += 1
                     if isinstance(task.output, RemoteExecutionError):
-                        # The task finished; what it produced is the failure.
+                        # The task finished.
+                        # What it produced is the failure.
                         failed(
                             f"Task {task.task_id} failed on its worker: "
                             f"{task.output.error} "
@@ -541,7 +553,8 @@ class SlurmPilotExecutor:
                         )
                     yield task
                 elif state == TaskState.Canceled:
-                    # Cancelled out of band, and never dispatched again.
+                    # Something outside this run canceled the task.
+                    # The server never dispatches it again.
                     failed(
                         f"Task {task.task_id} was canceled on the task queue "
                         f"server, so it will never produce an output"
@@ -567,7 +580,7 @@ class SlurmPilotExecutor:
 
     @staticmethod
     def _error_summary(errors: list[str], failures: int, num_tasks: int) -> str:
-        """One message naming a few failures and counting the tasks."""
+        """One message that names a few failures and counts the tasks."""
         shown = "; ".join(errors[:MAX_REPORTED_ERRORS])
         if len(errors) > MAX_REPORTED_ERRORS:
             shown += f"; and {len(errors) - MAX_REPORTED_ERRORS} more"
@@ -611,7 +624,7 @@ class SlurmPilotExecutor:
             pass
 
     def _publish_progress(self, desc: str, unit: str, total: int) -> _Progress:
-        """Announce what this call is working through, and start its series."""
+        """Announce what this call works through, and start its series."""
         progress = _Progress(
             client=self.client,
             progress_id=str(uuid.uuid4()),
@@ -633,7 +646,7 @@ class SlurmPilotExecutor:
 
     @staticmethod
     def _counted(tasks: Iterable[Task], progress: _Progress) -> Iterable[Task]:
-        """Pass tasks through, recording how many have come back."""
+        """Pass tasks through, and count how many come back."""
         done = 0
         try:
             for task in tasks:
@@ -652,8 +665,8 @@ class SlurmPilotExecutor:
 
         groups = self.groups.values()
         if queues is not None:
-            # Restricted to the names given;
-            # a name no group has is simply absent from the answer.
+            # Only the names given.
+            # A name no group has is absent from the answer.
             wanted = set(queues)
             groups = [g for g in groups if g.name in wanted]
 
@@ -664,9 +677,9 @@ class SlurmPilotExecutor:
         }
 
     def _starved_tasks(self, pending: list[Task]) -> tuple[list[Task], str]:
-        """Pending tasks no worker has ever been started for, and a message."""
+        """Pending tasks with no worker ever started for them, and a message."""
         # This executor's own bookkeeping, not a question to the cluster:
-        # the check has to work before any job could have started.
+        # the check must work before any job can start.
         started = {name for name, group in self.groups.items() if group.workers}
 
         starved = [task for task in pending if not set(task.queue) & started]
@@ -687,7 +700,7 @@ class SlurmPilotExecutor:
             live = self._live_queues({q for task in pending for q in task.queue})
         except (subprocess.SubprocessError, OSError):
             # Unreachable `squeue` leaves liveness unknown, not dead,
-            # so nothing is given up on and the next interval retries.
+            # so this gives up no task, and the next interval retries.
             self.logger.warning(
                 "Could not check whether queues are still live; "
                 "will retry at the next interval",
@@ -751,7 +764,7 @@ class SlurmPilotExecutor:
         if handler is None:
             return
 
-        # Cleared first, so a failure below cannot double-close it.
+        # Cleared first, so a later failure cannot double-close it.
         self._log_handler = None
         self.logger.removeHandler(handler)
         handler.close()
@@ -759,7 +772,8 @@ class SlurmPilotExecutor:
     def close(self) -> None:
         """Cancel every pilot job and close the queue-server connection.
 
-        The executor is spent afterwards. Called on leaving a `with` block.
+        The executor is spent afterward.
+        Python calls this at the end of a `with` block.
         """
         self._cleanup_all_workers()
         for group in self.groups.values():
@@ -769,7 +783,7 @@ class SlurmPilotExecutor:
         self._close_log_handler()
 
     def stop(self) -> None:
-        """Cancel every pilot job, leaving the executor usable."""
+        """Cancel every pilot job, and leave the executor usable."""
         self._cleanup_all_workers()
         for group in self.groups.values():
             group.workers.clear()

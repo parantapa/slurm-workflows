@@ -4,41 +4,42 @@
 
 ## The problem it solves
 
-Submitting one Slurm job per unit of work makes you pay the queue
+One Slurm job per unit of work makes you pay the queue
 once per unit of work.
 On a busy cluster that latency dominates everything else
-as soon as the individual tasks are small,
-and a sweep of a few thousand short evaluations
-can spend most of its wall clock waiting rather than computing.
+as soon as the individual tasks are small.
+A sweep of a few thousand short evaluations
+can spend most of its wall clock in the queue rather than on the work.
 
 The pilot-job model inverts that.
-A small number of long-lived jobs are submitted once,
-each starting worker processes that stay alive,
-and the actual work is dispatched to those workers over a queue.
-Slurm's latency is paid once per worker instead of once per task.
-What the cluster sees is a handful of ordinary jobs;
-what the program sees is something close to
+The coordinator submits a few long-lived jobs once,
+and each job starts worker processes that stay alive.
+The coordinator then dispatches the actual work to those workers over a queue.
+You pay Slurm's latency once per worker instead of once per task.
+The cluster sees a handful of ordinary jobs.
+The program sees something close to
 [`concurrent.futures`](https://docs.python.org/3/library/concurrent.futures.html).
 
 ## The vocabulary
 
-**Setup script.** A shell script snippet that every worker runs before starting.
-This is used to set up the environment (`module load`, `conda activate`)
+**Setup script.** A shell script snippet that every worker runs before it starts.
+Use it to set up the environment (`module load`, `conda activate`)
 on the compute node.
-The shell script **text** is inlined into each generated worker script.
+The executor inlines the text of that script, not a path to it,
+into each generated worker script.
 
 **Worker group.** A named recipe for starting a worker:
 sbatch arguments, optional setup script, optional actor class.
-Defining a group does not launch workers.
+`define_worker` does not launch workers.
 The `scale_workers` method starts and stops them.
 
-**Queue.** Tasks are submitted to a named queue,
-and **a worker group pulls from the queue matching its own name**.
-So `submit("gpu", ...)` is served by workers from the group named `gpu`.
+**Queue.** You submit a task to a named queue.
+A worker group pulls from the queue that matches its own name.
+So workers from the group named `gpu` serve `submit("gpu", ...)`.
 
-The queue-equals-group rule is what keeps groups isolated
-without any routing configuration:
-a task submitted to `cpu` cannot be picked up by a `gpu` worker,
+The queue-equals-group rule keeps groups isolated
+without any routing configuration.
+A `gpu` worker cannot take a task from the `cpu` queue,
 because a worker only ever asks its own queue for work.
 
 ## The three processes
@@ -51,55 +52,54 @@ because a worker only ever asks its own queue for work.
 
 `scale_workers` renders a shell script and an sbatch wrapper
 from Jinja templates and submits them.
-Each job sources your setup script and launches `slurm-pilot-worker`,
-which loops forever: fetch a task from its group's queue,
+Each job sources your setup script and launches `slurm-pilot-worker`.
+That worker loops forever: fetch a task from its group's queue,
 cloudpickle-load the function, run it, post the cloudpickled result back.
 
 The coordinator and the workers never talk to each other.
-Everything passes through the queue server,
-which is why a driver can be killed and restarted
-without the workers noticing,
-and why the workers do not need to know how many of them there are.
+Everything passes through the queue server.
+For this reason, you can kill a driver and restart it,
+and the workers never notice.
+The workers also do not need to know how many of them there are.
 
 ## Two consequences worth knowing
 
-**Exceptions are values.** A task that raises on a worker
-does not propagate to the coordinator.
+**Exceptions are values.** An exception raised on a worker
+never reaches the coordinator.
 The worker catches it, logs the traceback under a generated `error_id`,
 and returns a `RemoteExecutionError` as the task's `output`.
-`as_completed` and `wait` are what turn that back into an exception,
+`as_completed` and `wait` are what turn that value back into an exception,
 under the [`RaiseOnError`](../reference/executor.md#raiseonerror)
-policy they are given.
+policy you give them.
 
-This is a deliberate trade.
-A worker that died on a bad task would take the rest of its queue with it,
-so a worker swallows everything;
-the cost is that a failure is only noticed
-when somebody waits on the task.
+This trade is deliberate.
+A worker that dies on a bad task takes the rest of its queue with it,
+so a worker swallows everything.
+The cost is that nobody sees a failure
+until somebody waits on the task.
 
-**Submitting from inside a job works.** `sbatch` is invoked
-with all `SLURM_*` / `SLURMD_*` / `PMI_*` / `SRUN_*` variables
-stripped from the environment,
-so a coordinator running inside a Slurm allocation
-can still submit pilot jobs.
+**You can submit from inside a job.**
+The executor strips every `SLURM_*`, `SLURMD_*`, `PMI_*` and `SRUN_*` variable
+from the environment before it invokes `sbatch`.
+A coordinator inside a Slurm allocation can therefore still submit pilot jobs.
 
 ## Why one executor per server
 
 A `ds-service` server holds one run's tasks,
 worker registrations and actor arguments
 in a single flat namespace with no executor name in it.
-Point two executors at one server and they share that namespace:
-same-named worker groups serve each other's tasks,
+Point two executors at one server, and they share that namespace.
+Same-named worker groups serve each other's tasks,
 and same-named groups overwrite each other's actor arguments.
 
 Nothing enforces the rule, because an executor cannot see another one.
 That is also why the liveness checks behind
 [a wait that cannot finish](../reference/executor.md#errors-that-end-a-wait)
-refuse a queue served by pilot jobs the executor did not start:
-it has no way to tell a healthy foreign worker
-from a queue nobody is serving.
+refuse a queue served by pilot jobs the executor did not start.
+The executor has no way to tell a healthy foreign worker
+from a queue nobody serves.
 
-Task ids and worker names are still prefixed with the executor's name,
+The executor still prefixes task ids and worker names with its own name,
 because a *cluster* holds many runs even when a server holds one.
 
 ## Which class to reach for
@@ -113,10 +113,10 @@ in increasing order of how much of the loop they own:
 | `ExploreSpaceSobolQMC` | evaluating one function over one space |
 | `OptimizeSpaceBotorch` | finding where one function is smallest |
 
-The two space classes are built on the first:
-both take an executor and submit through it,
-so a program always starts by building one.
+The two space classes build on the first.
+Both take an executor and submit through it,
+so every program begins with an executor.
 The difference between them is not capability
 but who owns the submit-and-wait loop.
-Work that is not a function over a space has to own that loop itself,
+Work that is not a function over a space must own that loop itself,
 which is what `submit` and `wait` are for.

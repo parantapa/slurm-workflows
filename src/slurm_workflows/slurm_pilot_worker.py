@@ -1,7 +1,7 @@
 """The pilot worker: the process that runs tasks on a compute node.
 
-Started by the generated worker script inside a pilot job,
-never constructed by user code.
+The generated worker script starts it inside a pilot job.
+User code never constructs it.
 """
 
 import os
@@ -30,15 +30,17 @@ from .monitors import (
 NEXT_TASK_RETRY_TIME_S: float = 0.1
 
 # One JSON key per worker process, keyed on its worker id.
-# Read by `swtop`; the fields are listed in `docs/reference/executor.md`.
+# `swtop` reads it.
+# `docs/reference/executor.md` lists the fields.
 WORKER_PROCESS_INFO_PREFIX = "worker_process_info:"
 
 
 class PilotWorkerProcess:
-    """One worker process, pulling tasks from its group's queue and running them.
+    """One worker process that pulls tasks from its group's queue and runs them.
 
-    Runs on a compute node inside a pilot job, started by the generated
-    worker script rather than constructed by user code.
+    The worker runs on a compute node inside a pilot job.
+    The generated worker script starts it.
+    User code never constructs it.
     """
 
     def __init__(
@@ -55,17 +57,19 @@ class PilotWorkerProcess:
     ) -> None:
         """Register this worker on the queue server and build its actor.
 
-        Publishes the worker's identity before constructing the actor,
-        so a worker that dies in the constructor has still recorded where.
-        Whatever the actor's constructor raises propagates, after this
-        worker's own monitors and client have been closed.
+        Publishes the worker's identity before it builds the actor.
+        As a result, a worker that dies in the constructor
+        already recorded where it ran.
+        Whatever the actor's constructor raises propagates.
+        Before that, this worker closes its own monitors and client.
         """
         self.group = group
         self.name = name
         self.server_address = server_address
         self.work_dir = work_dir
 
-        # `<worker-name>.<job>.<host>.<pid>`; the name carries the group.
+        # `<worker-name>.<job>.<host>.<pid>`.
+        # The name carries the group.
         self.worker_id = "%s.%s.%s.%s" % (name, slurm_job_id, hostname, pid)
         self.logger = logging.getLogger("worker_process")
         self.client = DsServiceClient(self.server_address)
@@ -119,9 +123,9 @@ class PilotWorkerProcess:
     def _start_monitors(
         self, hostname: str, slurm_job_id: int, interval: float
     ) -> None:
-        """Take on monitoring this node and this job, if nobody else has."""
-        # The counter hands out distinct values, so exactly one worker
-        # is told 1 and takes the subject.
+        """Monitor this node and this job, if no other worker already does."""
+        # The counter hands out distinct values,
+        # so exactly one worker sees 1 and takes the subject.
         if self.client.counter_get_next_value(f"host_monitor:{hostname}") == 1:
             self.logger.info("Monitoring host %s", hostname)
             self.monitors.append(
@@ -138,9 +142,9 @@ class PilotWorkerProcess:
             )
 
     def _get_actor_ctor_arg(self, key: str, default: Any) -> Any:
-        """Read one cloudpickled constructor argument out of the key value store.
+        """Read one cloudpickled constructor argument from the key value store.
 
-        A missing key means none was passed.
+        A missing key means the caller passed none.
         """
         try:
             value = self.client.map_get(key)
@@ -149,7 +153,7 @@ class PilotWorkerProcess:
         return cloudpickle.loads(value)
 
     def _stop_monitors(self) -> None:
-        """Stop whatever monitoring this worker took on.
+        """Stop whatever monitoring this worker started.
 
         Idempotent, and safe on a half-built worker.
         """
@@ -162,7 +166,7 @@ class PilotWorkerProcess:
 
         Calls the actor's own `close()` if it has one.
         """
-        # Before the client, whose channel they are using.
+        # Before the client, whose channel they use.
         self._stop_monitors()
 
         self.client.close()
@@ -176,10 +180,10 @@ class PilotWorkerProcess:
 
         Never returns of its own accord:
         a worker lives until its Slurm job ends.
-        Every `Exception` a task raises is caught,
-        logged under a generated `error_id`,
-        and returned to the caller as a `RemoteExecutionError`,
-        so one bad task cannot end the worker.
+        The worker catches every `Exception` a task raises,
+        logs it under a generated `error_id`,
+        and returns it to the caller as a `RemoteExecutionError`.
+        As a result, one bad task cannot end the worker.
         """
         self.logger.info("Starting worker: %s" % self.worker_id)
 
@@ -189,7 +193,8 @@ class PilotWorkerProcess:
                     task = self.client.task_get(self.worker_id, self.group)
                 except NoTaskAvailable:
                     # An idle queue: sleep and ask again.
-                    # A TimeoutError is a server problem, handled below.
+                    # A TimeoutError is a server problem,
+                    # and the outer `except` catches it.
                     time.sleep(NEXT_TASK_RETRY_TIME_S)
                     continue
 
@@ -222,8 +227,8 @@ class PilotWorkerProcess:
             except Exception:
                 self.logger.exception("Unexpected exception")
 
-                # A refused connection returns at once, so without this
-                # sleep the loop would spin on a core.
+                # A refused connection returns at once,
+                # so without this sleep the loop spins on a core.
                 time.sleep(NEXT_TASK_RETRY_TIME_S)
 
 

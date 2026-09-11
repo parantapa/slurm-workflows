@@ -1,8 +1,9 @@
 """Tests for the pilot worker.
 
-The worker runs for real against a real ds-service; only Slurm is mocked.
+The worker runs for real against a real ds-service.
+The tests mock Slurm alone.
 `run_worker` stops the otherwise-infinite main loop
-once the expected number of tasks have been reported done.
+once the worker reports the expected number of tasks done.
 """
 
 from __future__ import annotations
@@ -67,8 +68,8 @@ class TestTaskExecution:
         `task_get` answers `NoTaskAvailable` at once when nothing is ready,
         and the worker sleeps and asks again.
         Left to the catch-all handler instead,
-        the loop would still poll, but log a traceback every time round,
-        so the absence of that log is what tells the two apart.
+        the loop still polls, but logs a traceback every time round.
+        For this reason the absence of that log tells the two apart.
         """
         worker = make_worker(ds_service_address, tmp_path)
 
@@ -181,7 +182,7 @@ class TestRemoteErrors:
     def test_unserializable_result_is_reported_as_an_error(
         self, executor, ds_service_address, tmp_path
     ):
-        """Serialization happens inside the try block, so it is caught too."""
+        """Serialization happens inside the try block, so the handler catches it too."""
         task = executor.submit("cpu", lambda: (_ for _ in range(3)))  # generator
 
         worker = make_worker(ds_service_address, tmp_path)
@@ -240,7 +241,7 @@ class TestActors:
         )
 
         # Same actor class, a different group: the keys are group-scoped,
-        # so this worker is constructed with nothing.
+        # so this worker builds its actor with nothing.
         worker = make_worker(
             ds_service_address,
             tmp_path,
@@ -425,7 +426,7 @@ class TestWorkerIdentity:
     def test_identity_is_published_before_the_actor_is_built(
         self, ds_service_address, ds_client, tmp_path
     ):
-        """A worker that dies constructing its actor has still said where it was."""
+        """A worker that dies constructing its actor already published where it was."""
         with pytest.raises(AttributeError):
             make_worker(
                 ds_service_address,
@@ -441,7 +442,7 @@ class TestWorkerIdentity:
 
 
 class TestMonitors:
-    """One worker per node and per job does the sampling; the rest do not."""
+    """One worker per node and per job samples. The rest do not."""
 
     def test_the_first_worker_takes_on_both(self, ds_service_address, tmp_path):
         worker = make_worker(ds_service_address, tmp_path)
@@ -494,7 +495,7 @@ class TestMonitors:
     def test_a_first_reading_is_published_at_startup(
         self, ds_service_address, ds_client, tmp_path
     ):
-        """The tables in swtop should not be empty until the first interval."""
+        """The tables in swtop must not be empty until the first interval."""
         worker = make_worker(ds_service_address, tmp_path)
 
         assert wait_for(
@@ -506,7 +507,7 @@ class TestMonitors:
     def test_a_failed_actor_leaves_none_of_them_running(
         self, ds_service_address, tmp_path
     ):
-        """close() is never called on a constructor that raised."""
+        """The worker never calls close() on a constructor that raised."""
         before = {t for t in threading.enumerate()}
 
         with pytest.raises(AttributeError):
@@ -535,11 +536,11 @@ class TestCli:
     def _restore_process_state(self):
         """Put `os.environ` and `sys.path` back after each case.
 
-        The command writes both directly and undoes neither
-        --- it is a process entry point, and the process is the worker ---
-        so without this a run leaks `DS_SERVER_ADDRESS` into every later test,
-        which is exactly the value `DsServiceClient()` falls back to
-        when it is given no address.
+        The command writes both directly and undoes neither.
+        It is a process entry point, and the process is the worker.
+        Without this fixture, a run leaks `DS_SERVER_ADDRESS` into every later test.
+        That is exactly the value `DsServiceClient()` falls back to
+        when the caller gives it no address.
         """
         env = dict(os.environ)
         path = list(sys.path)
@@ -578,10 +579,9 @@ class TestCli:
     def invoke(self, tmp_path: Path, **overrides) -> int:
         """Run the CLI and return its exit code.
 
-        Invoked directly rather than through click's CliRunner,
-        which swaps the process streams for buffers of its own
-        --- these tests assert on what the command does to those streams,
-        so it must not.
+        This helper invokes the CLI directly, not through click's CliRunner.
+        CliRunner swaps the process streams for buffers of its own,
+        and these tests assert on what the command does to those streams.
         """
         args = {
             "--group": "cpu",
@@ -625,9 +625,9 @@ class TestCli:
     def test_leaves_the_process_streams_alone(self, captured, tmp_path):
         """Slurm writes the worker's output file itself, via `--output`.
 
-        `logging.basicConfig` leaves the streams on the handles the process
-        inherited, and redirecting them here
-        would leave the file Slurm writes empty.
+        `logging.basicConfig` leaves the streams on the handles
+        the process inherited.
+        A redirect here therefore leaves the file Slurm writes empty.
         """
         before = (sys.stdout, sys.stderr)
 

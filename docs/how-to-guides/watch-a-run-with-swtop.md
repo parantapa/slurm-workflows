@@ -2,34 +2,34 @@
 
 [<- back to the main README](../../README.md)
 
-`swtop` shows a live view of a running workflow:
-the tasks, the pilot jobs and worker processes,
-and the compute nodes they are running on.
-Nothing has to be started for it on the cluster side.
+`swtop` shows a live view of a running workflow.
+The view holds the tasks, the pilot jobs and worker processes,
+and the compute nodes they run on.
+`swtop` needs nothing on the cluster side.
 
 For the options, the blocks and the columns, see
 [`swtop` reference](../reference/swtop.md).
 
 ## Watch a run from another shell
 
-Point it at the same `ds-service` address (`host:port`)
-the executor was given,
-from another shell on the login node:
+From another shell on the login node,
+point `swtop` at the same `ds-service` address (`host:port`)
+you gave the executor:
 
 ```sh
 swtop 10.0.0.1:5051
 ```
 
-If the driver prints its address, copy it from there;
-otherwise it is `ds.address` from the
-[queue server](run-the-task-queue-server.md) you started.
+If the driver prints its address, copy it from there.
+If not, use `ds.address`
+from the [queue server](run-the-task-queue-server.md) you started.
 
-Starting `swtop` before the server is up is fine:
-it waits, and fills in once there is something to read.
+You can start `swtop` before the server is up.
+`swtop` waits, and fills the blocks once there is something to read.
 
 ## Make the tasks block readable
 
-A task is listed under `-` unless it is named:
+Unless you name a task, `swtop` lists it under `-`:
 
 ```python
 task = executor.submit("cpu", train, config)
@@ -38,22 +38,23 @@ executor.set_task_name(task, "train-7")
 
 Name tasks on a run of any size,
 since `my-run.task.412` says nothing about which point it is.
-A name published after the task was submitted
-appears at the next poll.
+You can name a task after you submit it,
+and the name appears at the next poll.
 
-`ExploreSpaceSobolQMC` and `OptimizeSpaceBotorch` name what they submit,
-so a sweep or a search is readable here without doing anything.
+`ExploreSpaceSobolQMC` and `OptimizeSpaceBotorch` name what they submit.
+So a sweep or a search is readable here with no extra work.
 
 ## Keep a record of a run instead of a live view
 
-`--plain` prints one frame of text per poll rather than running the UI,
-and redirected output is appended rather than replaced:
+`--plain` prints one frame of text per poll, rather than the live UI.
+Redirected to a file, each poll adds one more frame,
+rather than replacing the last one:
 
 ```sh
 swtop 10.0.0.1:5051 --plain > swtop.log
 ```
 
-That keeps a record of a run that can be read afterwards.
+The file keeps a record of the run, and you can read it later.
 The blocks and columns are the same either way.
 
 ## Poll less often on a long run

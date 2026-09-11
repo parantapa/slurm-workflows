@@ -16,7 +16,7 @@ def reset() -> None:
 
 
 class CounterActor:
-    """Keeps state across tasks, and records that it was closed."""
+    """Keeps state across tasks, and records that `close()` ran."""
 
     def __init__(self) -> None:
         self.calls = 0
@@ -38,7 +38,7 @@ class CounterActor:
 
 
 class ConfiguredActor:
-    """Keeps whatever constructor arguments it was handed."""
+    """Keeps the constructor arguments the caller passes."""
 
     def __init__(self, *args, **kwargs) -> None:
         self.args = args
@@ -49,7 +49,7 @@ class ConfiguredActor:
 
 
 class NoCloseActor:
-    """Has no close(); exercises the optional-cleanup branch."""
+    """Has no close(). Exercises the optional-cleanup branch."""
 
     def ping(self) -> str:
         return "pong"

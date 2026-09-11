@@ -3,7 +3,7 @@
 The samplers read this machine,
 so the assertions are about shape and plausibility
 rather than exact numbers.
-The cgroup reader is pointed at files written by the test,
+The tests point the cgroup reader at files they write themselves,
 which is the only way to assert on values a kernel decides.
 """
 
@@ -48,8 +48,9 @@ class TestSampleHost:
     def test_an_unmounted_filesystem_is_left_out(self, monkeypatch):
         """Absent is not the same as empty, so it gets no value at all."""
 
-        # Kept before patching: `monitors_mod.psutil` is the psutil module
-        # itself, so the patch would otherwise replace what this calls.
+        # Kept before patching:
+        # `monitors_mod.psutil` is the psutil module itself,
+        # so the patch otherwise replaces what `disk_usage` calls.
         real_disk_usage = psutil.disk_usage
 
         def disk_usage(path):
@@ -95,7 +96,7 @@ class TestCgroupSampler:
         assert values["cpu"] > 0.5, "a busy cgroup reports cores in use"
 
     def test_a_counter_that_restarts_reports_no_time(self, tmp_path):
-        """A recreated cgroup starts from zero; that is not negative CPU."""
+        """A recreated cgroup starts from zero. That is not negative CPU."""
         sampler = CgroupSampler(tmp_path)
         self.write_cgroup(tmp_path, memory=4096, cpu_usec=10_000_000)
         sampler.sample()
@@ -120,6 +121,19 @@ class TestCgroupSampler:
 
         assert values["memory"] > 0
         assert values["memory"] != 4096, "the partial cgroup reading is not used"
+
+    def test_a_cgroup_naming_no_readable_process_falls_back(self, tmp_path):
+        """The root cgroup of a systemd host names only kernel threads.
+
+        A kernel thread has no address space, so the sum over them is zero.
+        """
+        dead = max(psutil.pids()) + 1000
+        assert not psutil.pid_exists(dead)
+        (tmp_path / "cgroup.procs").write_text(f"{dead}\n")
+
+        values = CgroupSampler(tmp_path).sample()
+
+        assert values["memory"] > 0, "the sum falls back to this process's tree"
 
     def test_the_real_cgroup_is_readable_or_falls_back(self):
         """Whatever this machine is, a sample comes back."""
@@ -245,5 +259,5 @@ def test_the_two_series_maps_do_not_overlap():
 
 @pytest.mark.parametrize("prefixes", [HOST_SERIES, JOB_SERIES])
 def test_every_series_prefix_ends_with_a_separator(prefixes):
-    """The subject is appended raw, so the prefix carries the colon."""
+    """The monitor appends the subject raw, so the prefix carries the colon."""
     assert all(prefix.endswith(":") for prefix in prefixes.values())

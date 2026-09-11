@@ -1,6 +1,6 @@
 """Batch Bayesian optimization on Rivanna's BII cluster.
 
-Walked through in `docs/tutorials/optimizing-himmelblau.md`.
+`docs/tutorials/optimizing-himmelblau.md` walks through this program.
 """
 
 import math
@@ -66,7 +66,7 @@ KNOWN_MINIMA = [
 
 
 def himmelblau(x, y):
-    """The objective, minimized over SEARCH_SPACE."""
+    """The objective that the search minimizes over SEARCH_SPACE."""
     value = (x * x + y - 11.0) ** 2 + (x + y * y - 7.0) ** 2
     return {"objective": value, "distance_from_origin": math.hypot(x, y)}
 

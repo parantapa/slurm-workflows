@@ -1,19 +1,19 @@
 """Tests for the botorch-based parallel optimizer.
 
-The optimizer's contract with the executor is two calls wide ---
-`submit()` returning a `Task`, and `wait()` filling in that task's `output` ---
-so most tests here drive that contract through `LocalExecutor`,
-which runs whatever it is handed inline ---
-both the objective and, since the fit became a task of its own,
+The optimizer's contract with the executor is two calls wide:
+`submit()` returns a `Task`, and `wait()` fills in that task's `output`.
+Most tests here drive that contract through `LocalExecutor`,
+which runs inline whatever the optimizer hands it.
+That covers both the objective and, since the fit became a task of its own,
 `fit_and_propose`.
 The GP fit and the acquisition optimization
-are the expensive part of these tests;
-a queue round trip on top would add nothing the optimizer can tell apart.
+are the expensive part of these tests.
+A queue round trip on top adds nothing the optimizer can tell apart.
 
-Running the fit inline is also what makes the monkeypatching work:
+The inline fit is also what makes the monkeypatching work:
 a patched `osb.optimize_acqf` reaches the task
 because the task ran in this process.
-`TestOptimizerQueue` covers what only shows up once it does not:
+`TestOptimizerQueue` covers what appears only once the fit runs elsewhere:
 which queue the fit went to,
 and what a failure on the far end reports.
 
@@ -23,16 +23,16 @@ so the file the optimizer reads is the file the explorer writes.
 
 `TestRealExecutor` keeps the stand-in honest.
 It runs a whole exploration and optimization through the real executor,
-the real ds-service queue and a real worker, the fit included,
-pinning the two-call contract against the real implementation.
+the real ds-service queue and a real worker, the fit included.
+That pins the two-call contract against the real implementation.
 
-The four tests in `TestSearchBehaviour` assert behaviour of the search
-rather than its bookkeeping,
-and are what would catch the objective's sign being flipped
---- botorch maximizes and this optimizer minimizes.
-They are stochastic
-(torch's global RNG is left unseeded, so each run is a fresh sample),
-and their thresholds come from measured spreads.
+The four tests in `TestSearchBehaviour` assert behavior of the search
+rather than its bookkeeping.
+They are what catches a flipped sign on the objective,
+because botorch maximizes and this optimizer minimizes.
+They are stochastic.
+The torch global RNG stays unseeded, so each run is a fresh sample.
+Their thresholds come from measured spreads.
 All four use unimodal objectives:
 an earlier multimodal version of the random-search comparison
 lost 1 run in 10.
@@ -86,11 +86,11 @@ from worker_harness import make_worker, run_worker  # noqa: E402
 
 
 class LocalExecutor:
-    """Stands in for SlurmPilotExecutor, running each callable inline.
+    """Stands in for SlurmPilotExecutor and runs each callable inline.
 
-    Records what it was asked to submit
+    This class records each submit,
     so tests can assert on the queue
-    and on the keyword arguments the objective was called with.
+    and on the keyword arguments the objective received.
     A raising objective comes back as a `RemoteExecutionError` output,
     exactly as a real worker reports it.
     """
@@ -132,9 +132,9 @@ class LocalExecutor:
     ) -> None:
         """The real `wait`'s contract, minus the waiting.
 
-        The callables ran in `submit`,
-        so all this has left to do is the raise policy,
-        which is what the optimizer relies on
+        The callables ran in `submit`.
+        So all this has left to do is the raise policy.
+        That policy is what the optimizer relies on
         to turn a failed evaluation into an exception.
         """
         self.waits.append(desc)
@@ -155,12 +155,13 @@ class LocalExecutor:
 def as_executor(executor: LocalExecutor) -> SlurmPilotExecutor:
     """Type the stand-in as the executor it stands in for.
 
-    `LocalExecutor` satisfies the whole contract the optimizer uses
-    --- `submit()` returning a `Task`, `wait()` filling in its `output` ---
-    but does not inherit from `SlurmPilotExecutor`,
-    whose `__init__` would open a real queue connection.
-    The cast is the assertion that the two-call contract is all that is needed;
-    `TestRealExecutor` is what proves it.
+    `LocalExecutor` satisfies the whole contract the optimizer uses.
+    That contract is two calls:
+    `submit()` returns a `Task`, and `wait()` fills in its `output`.
+    `LocalExecutor` does not inherit from `SlurmPilotExecutor`,
+    whose `__init__` opens a real queue connection.
+    The cast asserts that the two-call contract is enough,
+    and `TestRealExecutor` proves it.
     """
     return cast(SlurmPilotExecutor, executor)
 
@@ -172,7 +173,7 @@ def sphere(x, y):
     the value to minimize under "objective",
     plus whatever else is worth recording.
     The extra key here keeps the tests honest
-    about the optimizer carrying it through.
+    about whether the optimizer carries it through.
     """
     return {"objective": x * x + y * y, "note": "sphere"}
 
@@ -190,9 +191,9 @@ def constant(x, y):
 def benign(**params):
     """An objective for the *prior* file, whatever the space.
 
-    Tests of a broken objective still need observations to start from,
-    and the file only carries numbers: what ranked them is not recorded,
-    so the search's own key and objective are free to differ from this.
+    Tests of a broken objective still need observations to start from.
+    The file carries numbers alone, and it does not record what ranked them.
+    The search's own key and objective are therefore free to differ from this.
     """
     return {"objective": float(sum(params.values()))}
 
@@ -212,7 +213,7 @@ def explored(
     seed: int = SEED,
     filename: str | None = None,
 ) -> Path:
-    """A results file, written by a real exploration sweep.
+    """A results file that a real exploration sweep wrote.
 
     The optimizer starts from what `ExploreSpaceSobolQMC.save` wrote,
     so the tests start from that too rather than from a hand-built file.
@@ -241,10 +242,10 @@ def make_task(
 ) -> OptimizationTask:
     """One optimization task, with the test defaults filled in.
 
-    `iterations` pins the round count by setting both search bounds to it,
-    which switches early stopping off:
-    a stall can only end the search at a round at or above the floor,
-    and with floor == ceiling that is the round the loop ends on anyway,
+    `iterations` pins the round count, because it sets both search bounds to it.
+    That switches early stopping off.
+    A stall ends the search only at a round at or above the floor.
+    With floor == ceiling, that round is the one the loop ends on anyway,
     so the search runs exactly that many rounds.
     Tests that are *about* early stopping pass the bounds themselves.
     """
@@ -260,8 +261,9 @@ def make_task(
         "patience",
         "min_improvement",
         "objective_key",
-        # The acquisition knobs travel the same way: named here so they
-        # reach the optimizer instead of being handed to the objective.
+        # The acquisition knobs travel the same way.
+        # This list names them,
+        # so they reach the optimizer instead of the objective.
         "num_restarts",
         "raw_samples",
         "mc_samples",
@@ -295,9 +297,11 @@ def make_opt(
 
     The task's observations come from a file an exploration sweep wrote,
     unless the test supplies its own `files`.
-    The sweep runs the task's own objective, so the file and the search
-    measure the same thing --- except where the test is *about* an objective
-    that cannot be evaluated, which passes `prior_objective=benign`.
+    The sweep runs the task's own objective,
+    so the file and the search measure the same thing.
+    The exception is a test that is *about* an objective
+    the run cannot evaluate.
+    Such a test passes `prior_objective=benign`.
     """
     space = BOX_2D if space is None else space
     task = make_task(objective=objective, space=space, **task_kwargs)
@@ -319,7 +323,7 @@ def make_opt(
 
 
 def rounds_run(opt, name: str = "test") -> int:
-    """How many search rounds one task actually ran."""
+    """How many search rounds one task ran."""
     parallelism = opt._task(name).search_parallelism
     return len(opt.results[name].values) // parallelism
 
@@ -351,7 +355,7 @@ class TestConstruction:
             make_opt(tmp_path, files=[other])
 
     def test_the_unit_points_are_recomputed_against_the_space(self, tmp_path):
-        """The file carries the parameters; only the space can place them."""
+        """The file carries the parameters. Only the space can place them."""
         opt, _ = make_opt(tmp_path, explore=4)
 
         prior = opt.prior["test"]
@@ -564,7 +568,7 @@ class TestEarlyStopping:
         assert rounds_run(opt) == 2
 
     def test_the_progress_line_counts_towards_the_real_stop(self, tmp_path, capsys):
-        """A floor outlasting patience must not print a ratio past its own end."""
+        """A floor that outlasts patience must not print a ratio past its own end."""
         opt, _ = make_opt(
             tmp_path,
             objective=constant,
@@ -578,8 +582,8 @@ class TestEarlyStopping:
 
         out = capsys.readouterr().out
 
-        # The gap shrinks by one a round, and the floor sets it:
-        # patience alone would have run out after three.
+        # The gap shrinks by one a round, and the floor sets it.
+        # Patience alone runs out after three.
         assert re.findall(r"(\d+) in a row, (\d+) more to stop", out) == [
             ("1", "4"),
             ("2", "3"),
@@ -649,7 +653,7 @@ class TestImprovementTest:
         assert not improved(1000.0, 999.9)
 
     def test_a_negative_incumbent_uses_its_magnitude(self, improved):
-        # -10 -> -11 is a 10% improvement; -10 -> -10.1 is 1%.
+        # -10 -> -11 is a 10% improvement, and -10 -> -10.1 is 1%.
         assert improved(-10.0, -11.0)
         assert not improved(-10.0, -10.1)
 
@@ -665,7 +669,10 @@ class TestImprovementTest:
 
 
 class TestAcquisition:
-    """One acquisition per round, asserted without paying for a real optimization."""
+    """One acquisition per round.
+
+    These tests assert it without paying for a real optimization.
+    """
 
     @pytest.fixture
     def record(self, monkeypatch):
@@ -702,7 +709,7 @@ class TestAcquisition:
         assert record == [(qLogNoisyExpectedImprovement.__name__, 3)] * 3
 
     def test_a_timeout_is_passed_to_the_optimizer(self, tmp_path, monkeypatch):
-        """Unbounded, one round can outlast the batch it is choosing points for."""
+        """Without the limit, one round can outlast the batch it chooses points for."""
         timeouts = []
 
         def fake_optimize_acqf(acqf, **kwargs):
@@ -714,15 +721,15 @@ class TestAcquisition:
         opt, _ = make_opt(tmp_path, explore=4, iterations=2, parallel=2)
         opt.run()
 
-        # Against the task's own setting rather than a literal:
-        # the default lives in the dataclass,
-        # and pinning its value here would only mean editing this test
-        # whenever it is returned.
+        # Against the task's own setting rather than a literal.
+        # The default lives in the dataclass,
+        # so a literal here only means an edit to this test
+        # whenever that default changes.
         assert timeouts == [opt.tasks[0].acqf_timeout_s] * 2
         assert timeouts[0] is not None
 
     def test_a_timed_out_proposal_is_still_usable(self, tmp_path):
-        """The limit degrades the proposal; it must not break the round."""
+        """The limit degrades the proposal, but it must not break the round."""
         opt, _ = make_opt(
             tmp_path, explore=4, iterations=1, parallel=3, acqf_timeout_s=0.001
         )
@@ -736,7 +743,7 @@ class TestAcquisition:
                 assert BOX_2D[name].min <= value <= BOX_2D[name].max
 
     def test_the_sampler_is_passed_explicitly(self, tmp_path, monkeypatch):
-        """Left to botorch the default is larger, and every round pays for it."""
+        """The botorch default is larger, and every round pays for it."""
         shapes = []
         real_acqf = osb.qLogNoisyExpectedImprovement
 
@@ -784,12 +791,13 @@ class TestAcquisition:
         out = capsys.readouterr().out
         counts = [int(n) for n in re.findall(r"best after (\d+) points", out)]
 
-        # Once per round, each covering everything measured up to that point,
+        # Once per round.
+        # Each count covers everything measured up to that point,
         # the file's four included.
         assert counts == [6, 8, 10]
 
     def test_reported_parameters_keep_their_type(self, tmp_path, capsys):
-        """An int parameter must not be printed as a float."""
+        """The progress line must not print an int parameter as a float."""
         space = {"x": FloatRange(0.0, 1.0), "n": IntRange(1, 8)}
         objective = lambda x, n: {"objective": x + n}  # noqa: E731
         opt, _ = make_opt(
@@ -816,7 +824,7 @@ class TestAcquisition:
         assert out.count("fitting GP on") == 2
         assert out.count("GP fit took") == 2
 
-        # The count is the observations the fit actually sees:
+        # The count is the observations the fit sees:
         # the file's four, then those plus the first round's two.
         assert "test: fitting GP on 4 points" in out
         assert "test: fitting GP on 6 points" in out
@@ -888,7 +896,7 @@ class TestOptimizerQueue:
         assert len(opt.results["test"].values) == 2
 
     def test_the_task_carries_its_own_tuning_to_the_worker(self, tmp_path, monkeypatch):
-        """How the task was configured has to decide, not what the worker has."""
+        """The task's own settings must decide, not what the worker has."""
         seen = self._record_kwargs(monkeypatch)
 
         opt, _ = make_opt(
@@ -913,7 +921,7 @@ class TestOptimizerQueue:
         ]
 
     def test_an_unconfigured_task_carries_its_defaults(self, tmp_path, monkeypatch):
-        """The defaults travel too --- the worker is told, never left to guess."""
+        """The defaults travel too, so the worker never guesses."""
         seen = self._record_kwargs(monkeypatch)
 
         opt, _ = make_opt(tmp_path, explore=4, iterations=1, parallel=2)
@@ -992,7 +1000,7 @@ class TestOptimizerQueue:
     def test_a_batch_that_is_not_the_full_width_is_rejected(
         self, tmp_path, monkeypatch
     ):
-        """A short round would otherwise pass as a normal one."""
+        """A short round otherwise passes as a normal one."""
         monkeypatch.setattr(
             osb,
             "fit_and_propose",
@@ -1009,7 +1017,7 @@ class TestOptimizerQueue:
             opt.run()
 
     def test_the_fit_sees_every_point_measured_so_far(self, tmp_path, monkeypatch):
-        """It is given the observations, not a handle to the driver's state."""
+        """The fit gets the observations, not a handle to the driver's state."""
         sizes = []
         real = osb.fit_and_propose
 
@@ -1171,15 +1179,15 @@ class TestPartialFailure:
 
     @staticmethod
     def fails_every_other():
-        """An objective that raises on every second point it is handed.
+        """An objective that raises on every second point it receives.
 
-        A threshold on `x` cannot be used for a *partial* failure here.
+        A threshold on `x` cannot produce a *partial* failure here.
         The acquisition decides where a round's points land,
-        and torch's global RNG is left unseeded,
-        so a round can land wholly on either side of any threshold
-        --- which either loses the failure the test needs
+        and the torch global RNG stays unseeded.
+        A round can therefore land wholly on either side of any threshold.
+        Such a round either loses the failure the test needs,
         or loses the successes it checks were kept.
-        Counting the calls splits the round whatever the search proposes,
+        A count of the calls splits the round whatever the search proposes,
         and `LocalExecutor` runs them inline in submission order.
         """
         seen = 0
@@ -1208,7 +1216,7 @@ class TestPartialFailure:
 
         result = opt.results["test"]
         # Half the round raised, so exactly the other half is on record:
-        # the failures were dropped and nothing else was.
+        # the run dropped the failures and nothing else.
         assert len(result.values) == 4, "the successful points were thrown away"
         assert len(result.points) == len(result.values) == len(result.outputs)
 
@@ -1264,7 +1272,7 @@ class TestPartialFailure:
 
 
 class TestSavedObservations:
-    """A results file says nothing about the space it was measured over."""
+    """A results file says nothing about the space its points came from."""
 
     def test_a_point_missing_a_parameter_is_rejected(self, tmp_path):
         elsewhere = explored(
@@ -1292,7 +1300,7 @@ class TestSavedObservations:
             make_opt(tmp_path, files=[elsewhere])
 
     def test_a_point_outside_a_narrowed_range_is_rejected(self, tmp_path):
-        """Otherwise the GP is fit outside the cube the acquisition searches."""
+        """Otherwise the fit runs outside the cube the acquisition searches."""
         wider = explored(
             tmp_path,
             space={"x": FloatRange(-5.0, 5.0), "y": FloatRange(-5.0, 5.0)},
@@ -1432,7 +1440,7 @@ class TestTaskNames:
 
     The round is in every name because the batches look alike:
     a queue full of evaluations otherwise says nothing
-    about where the search has got to.
+    about where the search stands.
     """
 
     def test_the_fit_is_named_after_the_round_it_belongs_to(self, tmp_path):
@@ -1478,7 +1486,7 @@ class TestTaskNames:
 
 
 # --------------------------------------------------------------------------
-# Search behaviour
+# Search behavior
 # --------------------------------------------------------------------------
 
 
@@ -1487,10 +1495,10 @@ class TestSearchBehaviour:
 
     def test_search_moves_toward_the_minimum(self, tmp_path):
         # f(x) = x on [0, 1]: a flipped sign sends the search to 1.0 instead.
-        # Asserted on the median search point:
+        # This test asserts on the median search point.
         # qLogNEI keeps probing away from the incumbent,
-        # so the max is not a reliable signal,
-        # and the best is already near the minimum from the exploration file.
+        # so the max is not a reliable signal.
+        # The best is already near the minimum from the exploration file.
         space = {"x": FloatRange(0.0, 1.0)}
         opt, _ = make_opt(
             tmp_path,
@@ -1649,14 +1657,14 @@ class TestFailures:
 
 
 class TestObjectiveKey:
-    """Which key of the result is modelled is the task's to choose."""
+    """The task chooses which key of the result the search models."""
 
     def test_the_default_key_is_objective(self, tmp_path):
         opt, _ = make_opt(tmp_path)
         assert opt.tasks[0].objective_key == "objective"
 
     def test_a_configured_key_is_the_one_modelled(self, tmp_path):
-        """An evaluation that already reports `loss` is searched as it is."""
+        """The search takes an evaluation that already reports `loss` as it is."""
 
         def objective(x, y):
             return {"loss": x * x + y * y, "note": "sphere"}
@@ -1676,7 +1684,7 @@ class TestObjectiveKey:
         assert result.values == [objective(**p)["loss"] for p in result.points]
 
     def test_the_default_key_is_then_just_another_recorded_key(self, tmp_path):
-        """Only the configured key is modelled; the rest are carried along."""
+        """The search models the configured key alone, and records the rest."""
 
         def objective(x, y):
             return {"loss": x * x + y * y, "objective": 999.0}
@@ -1733,7 +1741,7 @@ class TestBestPoint:
             assert output["objective"] == value
 
     def test_a_stored_output_is_a_copy(self, tmp_path):
-        """Mutating what the objective returned must not rewrite the record."""
+        """A caller that mutates the returned mapping must not rewrite the record."""
         returned = {}
 
         def objective(x, y):
@@ -1753,7 +1761,7 @@ class TestBestPoint:
         assert opt.results["test"].outputs[-1] == recorded
 
     def test_returns_a_copy(self, tmp_path):
-        # A caller mutating the returned dict must not corrupt the history.
+        # A caller that mutates the returned dict must not corrupt the history.
         opt, _ = make_opt(tmp_path, explore=4, iterations=1, parallel=2)
         opt.run()
 
@@ -1835,7 +1843,7 @@ class TestRealExecutor:
         params, value = opt.best_point("e2e")
         assert math.isclose(value, sphere(**params)["objective"])
         # The whole mapping survives the round trip through the real queue,
-        # not just the number the model was fit on.
+        # not only the number the fit used.
         assert opt.best_output("e2e") == {"objective": value, "note": "sphere"}
         assert value < BOX_2D["x"].max ** 2 + BOX_2D["y"].max ** 2
 

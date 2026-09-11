@@ -1,6 +1,6 @@
 """Compute pi with a Sobol' QMC sweep on Rivanna's BII cluster.
 
-Walked through in `docs/tutorials/computing-pi-qmc.md`.
+`docs/tutorials/computing-pi-qmc.md` walks through this program.
 """
 
 import math

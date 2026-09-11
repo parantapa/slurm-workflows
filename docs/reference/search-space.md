@@ -24,15 +24,16 @@ SPACE = {
 | `FloatRange(min, max, log_range=True)` | A `float` in `[min, max]` | Searched in log space, so each decade gets equal budget. Requires `min > 0`. |
 | `CategoricalRange(n)` | An `int` in `[0, n - 1]` | An index into your own list of values. `n = 1` is allowed but is a dead dimension. |
 
-One space may mix all three.
+One space can mix all three.
 A parameter the search must not vary
 belongs in `extra_objective_kwargs` rather than in the space.
 
-Every parameter is mapped into `[0, 1]` before a model sees it
-and mapped back for the objective,
-which is what lets one model span all the kinds at once.
-Integer and categorical parameters come back by rounding a continuous proposal.
-What is recorded is where the objective actually ran, after rounding,
+Both space classes map every parameter into `[0, 1]` before a model sees it,
+and map it back for the objective.
+That is what lets one model span all the kinds at once.
+The space rounds a continuous proposal
+to get back an integer or a categorical parameter.
+Both classes record where the objective actually ran, after rounding,
 not the continuous proposal.
 
 What that rounding costs a search on a mostly-discrete space is in

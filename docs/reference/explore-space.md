@@ -12,11 +12,12 @@ from slurm_workflows import ExplorationTask, ExploreSpaceSobolQMC
 sweep = ExploreSpaceSobolQMC(tasks, executor, num_exploration_points=None)
 ```
 
-Draws a Sobol' design over each space it is given,
+Draws a Sobol' design over each space you give it,
 evaluates every point of every design across the pool,
 and keeps what came back.
-`tasks` is a **list** of `ExplorationTask`s, one per space:
-they are submitted together, so a small sweep does not wait for a large one.
+`tasks` is a **list** of `ExplorationTask`s, one per space.
+`ExploreSpaceSobolQMC` submits them together,
+so a small sweep does not wait for a large one.
 `num_exploration_points` is the count for tasks that do not carry their own.
 
 It needs neither botorch nor torch, on the driver or on the workers.
@@ -41,36 +42,40 @@ The same contract holds for both space classes.
 The objective runs on a worker, once per point.
 Its argument names must match the keys of `space`,
 and it receives them as keyword arguments.
-It is cloudpickled like any other task,
-so a closure or a lambda is fine,
-as long as what it imports exists on the compute node.
+The executor cloudpickles it like any other task,
+so a closure or a lambda is fine.
+What it imports must exist on the compute node.
 
 It returns a **mapping**, not a bare number.
-The entry under `objective_key` is the value,
-lower being better, so negate a score you would rather maximize.
-Only that entry is ranked or modelled;
-every other entry is recorded, which is where a runtime,
+The entry under `objective_key` is the value, and lower is better.
+Negate a score you want to maximize.
+Both classes rank or model only that entry.
+They record every other entry, which is where a runtime,
 a checkpoint path or an unoptimized metric goes.
 
-A bare float, a mapping without the key,
-or a value that is not a finite float
-each raise rather than being coerced -
-`NaN` and `inf` included, since either one silently poisons a GP fit.
+Both classes raise on a bare float, on a mapping without the key,
+or on a value that is not a finite float.
+They never coerce one.
+That covers `NaN` and `inf`,
+because either one silently poisons a GP fit.
 
 `extra_objective_kwargs` carries what the objective needs
 but the search must not vary.
-It may not shadow a key of `space`, which is rejected when the run is built.
+It must not shadow a key of `space`.
+A shadowed key raises `ValueError` when you build the run.
 
 ## Failures
 
-Both classes block until every point in flight has come back.
+Both classes block until every point in flight comes back.
 A worker that raises does not raise on the driver,
-so both wait with `RaiseOnError.RAISE_AFTER_COMPLETED`
-and turn what came back into a `RuntimeError` naming the tasks that failed,
-rather than feeding a `RemoteExecutionError` into a model.
-One bad evaluation therefore does not hide the rest of its batch,
-and what did come back is recorded before the exception is raised,
-so `save()` still holds the good points and the next run resumes from them.
+so both classes wait with `RaiseOnError.RAISE_AFTER_COMPLETED`.
+They turn what came back into a `RuntimeError` that names the tasks that failed,
+rather than feed a `RemoteExecutionError` into a model.
+
+One bad evaluation therefore does not hide the rest of its batch.
+Both classes record what did come back before they raise the exception.
+`save()` therefore still holds the good points,
+and the next run resumes from them.
 
 ## Methods
 
@@ -94,28 +99,27 @@ sweep.save("sweep.pkl.gz")
 result = sweep.results["sweep"]     # points, values, outputs, unit_points
 ```
 
-`sweep.results[name]` holds four index-aligned lists,
-in submission order:
-the `points` evaluated, the `values` ranked,
+`sweep.results[name]` holds four index-aligned lists, in submission order.
+They are the `points` evaluated, the `values` ranked,
 the whole `outputs`, and `unit_points`, the points in the unit cube.
-`sweep.tasks` is the task list with the point count and seed filled in;
-the caller's own `ExplorationTask` objects are left alone.
+`sweep.tasks` is the task list with the point count and seed filled in.
+`ExploreSpaceSobolQMC` leaves the caller's own `ExplorationTask` objects alone.
 
-Calling `run()` again re-evaluates the same design:
+A second call to `run()` re-evaluates the same design:
 the seed decides the draw, so there is no "next 4096 points".
 A different seed draws a different design.
 
-The point count is floored to a power of two,
-which is the prefix length at which a Sobol' sequence is balanced.
-64 workers asking for 100 points evaluate 64 and leave the rest idle.
+`ExploreSpaceSobolQMC` floors the point count to a power of two.
+A Sobol' sequence is balanced at that prefix length.
+64 workers that ask for 100 points evaluate 64 and leave the rest idle.
 
 ## The results file
 
 Read a saved file back with `load_results(paths)`,
 which merges several files by task name
 into a `dict[str, SavedResults]`.
-The file is a gzipped plain pickle - measurements, not code -
-keyed by task name, each holding `points`, `values` and `outputs`
+The file is a gzipped plain pickle, measurements rather than code.
+The task name is the key, and each entry holds `points`, `values` and `outputs`
 as index-aligned lists in submission order:
 
 ```python

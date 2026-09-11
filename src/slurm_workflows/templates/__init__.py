@@ -1,10 +1,10 @@
 """Jinja2 templates, several to a file.
 
-Each `.jinja` file holds several named templates,
-delimited by `{#- name: "..." -#}` JSON5 headers,
-and a template is addressed as `"<file prefix>:<name>"`,
+Each `.jinja` file holds several named templates.
+A `{#- name: "..." -#}` JSON5 header starts each one.
+Address a template as `"<file prefix>:<name>"`,
 for example `"slurm_pilot:worker_script"`.
-Rendering is strict:
+The environment is strict:
 a variable the template uses and the caller did not pass
 is an error, not an empty string.
 """
@@ -20,7 +20,7 @@ import jinja2
 
 @dataclass(frozen=True, slots=True)
 class TemplateText:
-    """One named template, as read out of its file.
+    """One named template, as `parse_file` reads it from a file.
 
     `name` is the addressed form, `"<file prefix>:<name>"`.
     """
@@ -45,8 +45,8 @@ def line_col_from_pos(text: str, loc: int) -> tuple[int, int]:
 def parse_file(prefix: str, path: Path) -> dict[str, TemplateText]:
     """Every template in one file, keyed by its addressed name.
 
-    Whatever the header fails on is re-raised
-    with the file, line and column added as notes.
+    Whatever the header raises gets the file, line and column
+    as notes, and then propagates.
     """
     ret: dict[str, TemplateText] = {}
 
@@ -64,8 +64,9 @@ def parse_file(prefix: str, path: Path) -> dict[str, TemplateText]:
             if head_end == -1:
                 raise ValueError("Unable to find end of header")
 
-            # A body runs to the next header, so it cannot itself contain
-            # `{#-`: use `{#` without the dash for a comment inside one.
+            # A body runs to the next header,
+            # so it cannot itself contain `{#-`:
+            # use `{#` without the dash for a comment inside one.
             body_end = text.find("{#-", head_end)
             if body_end == -1:
                 body_end = len(text)
@@ -89,13 +90,13 @@ def parse_file(prefix: str, path: Path) -> dict[str, TemplateText]:
 
 
 def load_template(name: str) -> tuple[str, str, None] | None:
-    """Find one template for jinja2, loading its file on first use.
+    """Find one template for jinja2, and load its file on first use.
 
-    This is a `jinja2.FunctionLoader` callback:
-    it returns the source, the filename it came from,
-    and `None` for the up-to-date check,
-    which makes a loaded template permanent.
-    `None` means no such template.
+    This is a `jinja2.FunctionLoader` callback.
+    The callback returns the source, the filename it came from,
+    and `None` for the up-to-date check.
+    That `None` makes a loaded template permanent.
+    A missing template gives `None` in place of the tuple.
     """
     if name in _TEMPLATES:
         tpl = _TEMPLATES[name]
@@ -162,11 +163,12 @@ def render_template(
 
 
 def render_template(template: str, **kwargs: Any) -> str:
-    """Render one template, addressed as `"<file prefix>:<name>"`.
+    """Render the template named `"<file prefix>:<name>"`.
 
-    Each template's required keyword arguments are the overloads above.
-    A variable the template uses and the caller did not pass raises
-    `jinja2.UndefinedError`.
+    The overloads of this function give each template's
+    required keyword arguments.
+    The renderer raises `jinja2.UndefinedError`
+    for a variable the template uses and the caller did not pass.
     """
     tpl = _ENVIRONMENT.get_template(template)
     return tpl.render(**kwargs)

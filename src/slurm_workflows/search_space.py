@@ -1,9 +1,9 @@
-"""Search spaces: what an optimizer is allowed to vary, and over what.
+"""Search spaces: what an optimizer can vary, and over what.
 
 A search space maps parameter names to ranges.
-Every range moves one of its own values into `[0, 1]` and back again,
-so an optimizer works in the unit cube
-and the objective sees values of the kind it declared.
+Every range moves one of its own values into `[0, 1]` and back again.
+So an optimizer works in the unit cube.
+The objective sees values of the kind it declared.
 Nothing here imports torch or botorch.
 """
 
@@ -33,18 +33,19 @@ class IntRange:
         return (x - self.min) / (self.max - self.min)
 
     def unstandardize(self, y: float) -> int:
-        """Move from [0, 1] range to nearest integer in [min, max]."""
+        """Move from [0, 1] range to the nearest integer in [min, max]."""
         x = round(self.min + y * (self.max - self.min))
         return int(min(max(x, self.min), self.max))
 
 
 @dataclass
 class FloatRange:
-    """Floating point range, inclusive of both bounds.
+    """Floating-point range, inclusive of both bounds.
 
     `max` must be greater than `min`.
-    With `log_range`, the range is searched in log space, so every decade
-    gets an equal share of the budget, and `min` must be above zero.
+    With `log_range`, an optimizer searches the range in log space,
+    so every decade gets an equal share of the budget.
+    `log_range` also needs `min` above zero.
     """
 
     min: float
@@ -81,8 +82,10 @@ class CategoricalRange:
     """Categorical range, standardized as an index in `[0, n - 1]`.
 
     `num_categories` must be at least 1.
-    `num_categories=1` is accepted, unlike a degenerate `IntRange`,
-    but is a dead dimension: prefer `extra_objective_kwargs` for it.
+    `CategoricalRange` accepts `num_categories=1`,
+    unlike a degenerate `IntRange`.
+    But one category is a dead dimension.
+    Prefer `extra_objective_kwargs` for that parameter.
     """
 
     num_categories: int
@@ -118,8 +121,8 @@ def space_dim(space: SearchSpace) -> int:
 def to_params(space: SearchSpace, unit: Sequence[float]) -> dict[str, Any]:
     """Unit cube coordinates -> objective keyword arguments.
 
-    The coordinates are in the order the space was given in,
-    which is the order `to_unit` produces them in.
+    The coordinates follow the order of the space.
+    `to_unit` produces them in that same order.
     """
     return {
         name: range_.unstandardize(float(u))

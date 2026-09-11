@@ -1,33 +1,36 @@
-# slurm-workflows: HPC workflow helpers for Slurm clusters.
+# slurm-workflows: HPC workflow helpers for Slurm clusters
 
 ![Futuristic banner image.](extra/banner-image.png "Futuristic banner image.")
 
 `slurm-workflows` lets you run Python functions on a Slurm cluster
-without writing sbatch scripts by hand.
+without sbatch scripts written by hand.
 It provides an interface inspired by
-[`concurrent.futures`](https://docs.python.org/3/library/concurrent.futures.html)
-that launches long-lived **pilot workers** and dispatches tasks to them,
-so that Slurm's queueing latency is paid once per worker instead of once per task.
+[`concurrent.futures`](https://docs.python.org/3/library/concurrent.futures.html).
+The interface launches long-lived **pilot workers**.
+It then dispatches tasks to those workers.
+You pay Slurm's queue latency once per worker, not once per task.
 
-Reach for it when you have many Python tasks to run on one cluster allocation,
-when a sweep or a calibration has to spread across a pool of nodes,
-or when per-worker state is expensive enough
-that you want it kept warm between tasks.
+Use it in three cases:
+
+- You have many Python tasks to run on one cluster allocation.
+- A sweep or a calibration has to spread across a pool of nodes.
+- Per-worker state is expensive, and you want it to stay warm between tasks.
 
 ## Features
 
-- **Pilot-worker task execution** - pay Slurm's queue latency once per worker,
+- **Pilot workers** - pay Slurm's queue latency once per worker,
     then dispatch tasks to them.
 - **Dynamic scaling** - grow or shrink a pool of workers at runtime.
 - **Stateful actors** - keep expensive per-worker state
-    (loaded models, DB connections) warm across many tasks.
-- **Transparent serialization** - functions, arguments, and return values
-    are transferred using [cloudpickle](https://github.com/cloudpipe/cloudpickle).
+    (loaded models, database connections) warm across many tasks.
+- **Transparent serialization** -
+    [cloudpickle](https://github.com/cloudpipe/cloudpickle)
+    serializes functions, arguments, and return values.
 - **Live monitoring tool** - [`swtop`](docs/reference/swtop.md),
-    a terminal UI showing the tasks, workers, nodes and jobs
+    a terminal UI that shows the tasks, workers, nodes and jobs
     for a running workflow.
-- **Bayesian optimization** - a [botorch](https://botorch.org/) based optimizer
-    for running optimization / calibration workflows.
+- **Bayesian optimization** - an optimizer built on [botorch](https://botorch.org/)
+    for optimization and calibration workflows.
 
 ## Requirements
 
@@ -41,7 +44,7 @@ that you want it kept warm between tasks.
 pip install -U slurm-workflows
 ```
 
-For detailed instructions on setting up on UVA's Rivanna cluster follow
+To set up on UVA's Rivanna cluster, read
 [How to install slurm-workflows on Rivanna](docs/how-to-guides/install-on-rivanna.md).
 
 ## Usage
@@ -74,20 +77,20 @@ with DsServiceServer(interface="ib0") as ds_service:
         # 2. Launch 4 pilot jobs of that kind.
         executor.scale_workers("cpu", 4)
 
-        # 3. Submit tasks to a named queue; workers of that group pull from it.
+        # 3. Submit tasks to a named queue. Workers of that group pull from it.
         tasks = [executor.submit("cpu", square, i) for i in range(100)]
 
         # 4. Block until every result is in.
         executor.wait(tasks, desc="squaring")
 
-# Leaving the block cancelled every pilot job.
+# The executor canceled every pilot job at the end of the block.
 print(sum(task.output for task in tasks))
 ```
 
-`sbatch_args` are passed straight through to `sbatch`,
-so any Slurm option works.
-Tasks may be submitted before the workers exist:
-they queue up and are picked up as pilot jobs start running.
+The executor passes `sbatch_args` straight through to `sbatch`.
+As a result, any Slurm option works.
+You can submit tasks before the workers exist.
+The tasks wait on the queue until a pilot job starts and takes them.
 
 ## Documentation
 

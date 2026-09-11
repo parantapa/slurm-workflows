@@ -1,31 +1,32 @@
-# Tutorial: Computing PI on a Slurm Cluster
+# Computing pi on a Slurm cluster
 
 [<- back to the main README](../../README.md)
 
-This tutorial demonstrates how to use the `slurm-workflows` package.
-It numerically computes $\pi$
-by integrating over a quarter of the unit circle in parallel.
-The example runs on the `bii` partition of the Rivanna cluster at UVA,
-and uses the `bii_nssac` account.
+This tutorial shows how to use the `slurm-workflows` package.
+It computes $\pi$ by numerical integration
+over a quarter of the unit circle, in parallel.
+The example runs on the `bii` partition of the Rivanna cluster at UVA.
+It uses the `bii_nssac` account.
 
 The complete program can be found at
 [`examples/example_compute_pi.py`](../../examples/example_compute_pi.py).
 
 ## Before you start
 
-This program is meant to be run from a Rivanna login node.
+Run this program from a Rivanna login node.
 
-Work through
+Follow
 [How to install slurm-workflows on Rivanna](../how-to-guides/install-on-rivanna.md)
 first.
-It leaves you with the two things this program needs:
+That guide gives you the two things this program needs:
 
-1. **A conda environment named `slurm-workflows`**,
+1. A conda environment named `slurm-workflows`,
     with the package and its `botorch` extra installed in it.
-2. **The `ds-service` binary on your `PATH`.**
+2. The `ds-service` binary on your `PATH`.
     `DsServiceServer` runs it from there.
 
-The example itself lives in this repository, so clone it:
+The example itself lives in this repository.
+Clone it:
 
 ```sh
 git clone https://github.com/parantapa/slurm-hpc-workflows.git
@@ -42,15 +43,15 @@ python examples/example_compute_pi.py
 
 ## The arithmetic
 
-$\pi$ is the integral of $4 / (1 + x^2)$ over $[0, 1]$,
-approximated here by a midpoint Riemann sum
+$\pi$ is the integral of $4 / (1 + x^2)$ over $[0, 1]$.
+This program approximates it with a midpoint Riemann sum
 over `num_steps` slices of the interval.
 
-The slices are split between tasks by stride:
-task `i` of `num_tasks` sums slices `i`, `i + num_tasks`, `i + 2 * num_tasks`,
+The program splits the slices between tasks by stride.
+Task `i` of `num_tasks` sums slices `i`, `i + num_tasks`, `i + 2 * num_tasks`,
 and so on.
-No task needs anything another task computed,
-and the partial sums they return add up to the whole.
+No task needs anything another task computed.
+The partial sums they return add up to the whole.
 
 ## The whole program
 
@@ -72,7 +73,7 @@ SBATCH_ARGS = [
 
 
 def do_step_pi(start, stop, step, stepsize):
-    """Sum every `step`-th midpoint slice, beginning at `start`."""
+    """Sum every `step`-th midpoint slice, from `start`."""
     x, s = 0.0, 0.0
     for i in range(start, stop, step):
         x = (i + 0.5) * stepsize
@@ -124,25 +125,25 @@ if __name__ == "__main__":
 
 What to watch for while it runs, in order:
 
-* a `ds-service` task queue starts on the login node;
-* one Slurm job is submitted, spanning `NUM_NODES` nodes -
-    watch for it in `squeue -u $USER`;
-* `srun` starts a worker process on every task slot in that job;
-* each worker connects back to the queue over InfiniBand,
-    pulls tasks, runs them, and posts results;
-* the driver blocks in `wait()` until every task is back.
+* A `ds-service` task queue starts on the login node.
+* The executor submits one Slurm job across `NUM_NODES` nodes.
+    `squeue -u $USER` shows it.
+* `srun` starts a worker process on every task slot in that job.
+* Each worker connects back to the queue over InfiniBand.
+    It pulls tasks, runs them, and posts results.
+* The driver blocks in `wait()` until every task is back.
 
-Notice that the 800 tasks are submitted before a single worker exists.
-Tasks queue up and are picked up as pilot jobs start running,
-so nothing has to be timed by hand.
+Notice that the program submits the 800 tasks before a single worker exists.
+The tasks wait on the queue until a pilot job starts and takes them.
+You time nothing by hand.
 
 ## Next steps
 
-[Tutorial: Computing PI with a Sobol' QMC sweep](computing-pi-qmc.md)
-does the same calculation with `ExploreSpaceSobolQMC`,
-which owns the submit-and-wait loop
+[Computing pi with a Sobol' QMC sweep](computing-pi-qmc.md)
+does the same calculation with `ExploreSpaceSobolQMC`.
+That class owns the submit-and-wait loop
 and keeps what every evaluation returned.
 
 [About the pilot-job model](../explanation/about-the-pilot-job-model.md)
-is why the work is arranged this way,
-and what the three processes above are each responsible for.
+says why the work has this shape.
+It also says what each of the three processes does.

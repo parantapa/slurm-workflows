@@ -1,4 +1,4 @@
-"""Manage Slurm Jobs."""
+"""Submit, list and cancel Slurm jobs."""
 
 import os
 import re
@@ -9,7 +9,7 @@ from functools import cache
 
 from .templates import render_template
 
-# Seconds any one Slurm command may take before it is abandoned.
+# Seconds any one Slurm command can run before the timeout stops it.
 COMMAND_TIMEOUT: int = 120
 SBATCH_OUTPUT_REGEX = re.compile(r"Submitted batch job (?P<id>\S*)")
 
@@ -22,9 +22,9 @@ SCANCEL_EXE = "scancel"
 def get_clean_environ() -> dict[str, str]:
     """The environment, less every Slurm-set variable.
 
-    Drops `SLURM_`, `SLURMD_`, `PMI_` and `SRUN_`,
-    which is what lets a coordinator running inside an allocation
-    submit jobs of its own.
+    Drops `SLURM_`, `SLURMD_`, `PMI_` and `SRUN_`.
+    A coordinator that runs inside an allocation
+    then submits jobs of its own.
     """
     sanitized_env: dict[str, str] = {}
     for k, v in os.environ.items():
@@ -134,14 +134,16 @@ def submit_sbatch_job(
         env=get_clean_environ(),
     )
 
-    # Searched for, not matched at the start: a site may print a banner.
+    # A site can print a banner, so this searches the output,
+    # not only the start.
     match = SBATCH_OUTPUT_REGEX.search(proc.stdout)
     if match is None:
         raise RuntimeError("Failed to parse sbatch output", proc, match)
     job_id = match.group("id")
     job_id = int(job_id)
 
-    # Slurm expands %j itself; do the same here so the caller has a real path.
+    # Slurm expands %j itself.
+    # Do the same here, so the caller has a real path.
     output_file = Path(output_file.replace("%j", str(job_id)))
 
     return SlurmJob(

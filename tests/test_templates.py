@@ -18,20 +18,20 @@ def run_sbatch_script(
 ) -> subprocess.CompletedProcess[str]:
     """Run a rendered sbatch body against a stub `srun`.
 
-    Which of the two `srun` invocations runs is decided by the shell,
-    not by anything Python can see in the rendered text,
-    so the only test that can be right about it is one that runs the shell.
+    The shell decides which of the two `srun` invocations runs,
+    not anything Python can see in the rendered text.
+    The only test that can be right about it is one that runs the shell.
 
-    Both streams come back, because the script uses both:
-    the stub echoes its command line to stdout,
-    among whatever the script itself echoed on the way there
-    --- so callers pick that line back out with `srun_lines`
-    rather than reading stdout whole ---
-    while `set -x` traces to stderr.
+    Both streams come back, because the script uses both.
+    The stub echoes its command line to stdout,
+    among whatever the script itself echoed on the way there.
+    For this reason callers pick that line back out with `srun_lines`
+    rather than reading stdout whole.
+    `set -x` traces to stderr.
 
-    The environment is built from scratch rather than inherited:
-    that pins the SLURM variables to exactly what a case sets,
-    including when the suite itself is run from inside a Slurm job.
+    The test builds the environment from scratch rather than inheriting it.
+    That pins the SLURM variables to exactly what a case sets,
+    even when the suite itself runs from inside a Slurm job.
     """
 
     bin_dir = tmp_path / "bin"
@@ -59,7 +59,7 @@ class TestParseFile:
     A file is a run of `{#- <json5 header> -#}` markers,
     each followed by the body of the template it names.
     Nothing else in the file is addressable,
-    which is what the cases below pin down.
+    which is what the cases in this class pin down.
     """
 
     def write(self, tmp_path: Path, text: str) -> Path:
@@ -80,11 +80,10 @@ class TestParseFile:
         assert templates["sample:second"].source == "body two"
 
     def test_the_prefix_is_the_callers_not_the_filename(self, tmp_path: Path):
-        """`load_template` derives it from the name being looked up.
+        """`load_template` derives it from the name the caller looks up.
 
-        The file it then reads is `<prefix>.jinja`,
-        so the two agree in practice
-        --- but `parse_file` takes the caller's word for it.
+        The file it then reads is `<prefix>.jinja`, so the two agree in practice.
+        But `parse_file` takes the caller's word for it.
         """
         path = self.write(tmp_path, '{#- name: "only" -#}\nbody\n')
 
@@ -151,11 +150,11 @@ class TestParseFile:
         assert str(path) in notes
 
     def test_a_jinja_comment_in_a_body_is_read_as_the_next_header(self, tmp_path: Path):
-        """A limit of the format, not a bug to be fixed by accident.
+        """A limit of the format, not a bug to correct by accident.
 
         `{#-` is how a template body ends,
-        so a body cannot also contain a whitespace-trimming Jinja comment
-        --- the parser takes it for the header of the next template.
+        so a body cannot also contain a whitespace-trimming Jinja comment.
+        The parser takes that comment for the header of the next template.
         Use `{#` without the dash for a comment inside a body.
         """
         path = self.write(
@@ -240,7 +239,7 @@ class TestWorkerSbatchScript:
         )
 
     def test_both_srun_forms_are_rendered(self, srun_lines):
-        """The script carries both; the shell picks between them at run time."""
+        """The script carries both. The shell picks between them at run time."""
         out = self.render()
 
         plain, per_task = srun_lines(out)
@@ -253,9 +252,9 @@ class TestWorkerSbatchScript:
     def test_each_srun_task_gets_its_own_output_file(self, srun_lines):
         """`srun` fans out over every task in the allocation.
 
-        Without a per-task --output
-        they would all interleave into the one batch output file,
-        so the pattern has to carry both the job id and the task id.
+        Without a per-task --output,
+        the tasks all interleave into the one batch output file.
+        For this reason the pattern carries both the job id and the task id.
         """
         out = self.render()
 
@@ -269,16 +268,16 @@ class TestWorkerSbatchScript:
 
 
 class TestOutputRedirectByTaskCount:
-    """Which `srun` a job runs, established by running the shell.
+    """Which `srun` a job runs. These cases run the shell to find out.
 
-    A job of exactly one task writes to the batch job's own output file:
-    it has no second task to interleave with,
-    so a per-task file would only duplicate what is already there.
-    Every other allocation --- and anything that is not a Slurm job at all ---
-    keeps the per-task files.
+    A job of exactly one task writes to the batch job's own output file.
+    It has no second task to interleave with,
+    so a per-task file only duplicates what is already there.
+    Every other allocation keeps the per-task files,
+    and so does anything that is not a Slurm job at all.
 
     Each case names the `sbatch` options it stands for,
-    and sets the variables Slurm would have set for them.
+    and sets the variables Slurm sets for them.
     """
 
     def render(self) -> str:
@@ -310,12 +309,12 @@ class TestOutputRedirectByTaskCount:
     def test_a_single_task_job_writes_to_the_batch_file(
         self, tmp_path: Path, env: dict[str, str], srun_lines
     ):
-        # The last case names no task count, so SLURM_NTASKS is unset;
-        # one task per node is then the default,
+        # The last case names no task count, so SLURM_NTASKS is unset.
+        # One task per node is then the default,
         # which makes the one node one task.
         out = run_sbatch_script(self.render(), tmp_path, **env).stdout
 
-        # One line, because only one of the two branches may run.
+        # One line, because only one of the two branches can run.
         assert srun_lines(out) == ["srun /bin/bash /path/to/worker.sh"]
 
     @pytest.mark.parametrize(
@@ -345,8 +344,7 @@ class TestOutputRedirectByTaskCount:
     ):
         # One task *per node* is not one task:
         # `--nodes=4 --ntasks-per-node=1` is four workers on four nodes,
-        # and dropping --output there
-        # would interleave them into the single batch file.
+        # and without --output they interleave into the single batch file.
         out = run_sbatch_script(self.render(), tmp_path, **env).stdout
 
         assert srun_lines(out) == [
@@ -360,8 +358,8 @@ class TestOutputRedirectByTaskCount:
         """SLURM_NTASKS is the job's task count, so nothing else gets a vote.
 
         Slurm sets it for `--ntasks` *and* for any `--ntasks-per-*` option,
-        which is what makes it the whole answer whenever it is there;
-        the node count only stands in when it is absent.
+        which is what makes it the whole answer whenever it is there.
+        The node count only stands in when it is absent.
         """
         out = run_sbatch_script(
             self.render(),
@@ -374,10 +372,10 @@ class TestOutputRedirectByTaskCount:
         assert "--output" in command
 
     def test_the_count_it_decided_on_is_echoed(self, tmp_path: Path):
-        """The batch output file should say why the branch was taken.
+        """The batch output file must say why the shell took that branch.
 
-        Which file a worker's log went to is otherwise
-        something you can only work out by re-reading the sbatch script
+        Which file a worker's log went to is otherwise something
+        you can only work out by re-reading the sbatch script
         and guessing what Slurm set.
         """
         proc = run_sbatch_script(
@@ -402,19 +400,20 @@ class TestOutputRedirectByTaskCount:
         """`set -x` is what puts the command line in the batch output file.
 
         That file is all there is to read
-        when a job dies before the worker script gets as far as its own log,
-        so tracing has to be on before `srun` runs --- in either branch.
+        when a job dies before the worker script gets as far as its own log.
+        For this reason `set -x` has to come before `srun` runs,
+        in either branch.
         """
         proc = run_sbatch_script(self.render(), tmp_path, **env)
 
         assert traced in proc.stderr
 
     def test_the_guard_survives_a_strict_shell(self, tmp_path: Path, srun_lines):
-        """Both variables are read with `:-`.
+        """The script reads both variables with `:-`.
 
         Nothing sets `-u` on the generated sbatch script today,
-        so an unset variable would merely expand empty;
-        the default is only worth anything if it cannot become an error later.
+        so an unset variable merely expands empty.
+        The default is only worth anything if it cannot become an error later.
         """
         out = run_sbatch_script("set -u\n" + self.render(), tmp_path).stdout
 

@@ -17,9 +17,10 @@ conda create -y -n slurm-workflows python=3.12
 conda activate slurm-workflows
 ```
 
-Python version used must be >= 3.12.
+The Python version must be >= 3.12.
 If `conda activate` fails with a message about `conda init`,
-source conda's shell hook and try again:
+source conda's shell hook.
+Then activate the environment again:
 
 ```sh
 source "$(conda info --base)/etc/profile.d/conda.sh"
@@ -32,12 +33,13 @@ conda activate slurm-workflows
 pip install -U "slurm-workflows[botorch]"
 ```
 
-The `botorch` extra pulls in botorch and torch,
-which are needed by the Bayesian optimizer.
+The `botorch` extra installs botorch and torch.
+The Bayesian optimizer needs both.
 
 ## 4. Install the ds-service binary
 
-`ds-service` is a static binary, released separately from this package.
+`ds-service` is a static binary.
+The project releases it separately from this package.
 Put it somewhere on your `PATH`:
 
 ```sh
@@ -65,11 +67,12 @@ swtop --help
 
 Both must print usage text.
 
-* `ds-service: command not found` means step 4's `PATH` change
-    has not taken effect in this shell.
+* `ds-service: command not found` means the `PATH` change in step 4
+    is not active in this shell.
 * `swtop: command not found` means the `slurm-workflows` environment
-    is not the active one; run `conda activate slurm-workflows` again.
+    is not active.
+    Run `conda activate slurm-workflows` again.
 
 ## Next steps
 
-Check out [Tutorial: Computing pi on a Slurm cluster](../tutorials/computing-pi.md)
+Read [Computing pi on a Slurm cluster](../tutorials/computing-pi.md)

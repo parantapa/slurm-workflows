@@ -1,18 +1,19 @@
 """Tests for the `swtop` terminal UI.
 
 Textual is async and the tests around it are not:
-each drives the app inside `asyncio.run`,
-which keeps this file the same shape as the rest of the suite
+each drives the app inside `asyncio.run`.
+That keeps this file the same shape as the rest of the suite,
 and needs no pytest plugin.
 
-The app is driven headlessly through `run_test`,
-so what is asserted is the state of the widgets rather than pixels.
-Polling happens in a Textual worker, so anything that waits for a poll
+Each test drives the app headlessly through `run_test`,
+and asserts on the state of the widgets rather than on pixels.
+The poll runs in a Textual worker, so anything that waits for a poll
 waits on `app.workers`, never on a sleep.
 
-A collector against the real server is built inside the scenario rather
-than by a fixture: its client belongs to the event loop it is made on,
-and that is the loop `run_test` is running.
+The scenario builds a collector against the real server,
+rather than a fixture.
+Its client belongs to the event loop that made it,
+and `run_test` runs that loop.
 """
 
 from __future__ import annotations
@@ -45,7 +46,7 @@ def square(x):
 
 
 def text_of(widget: Static) -> str:
-    """What a `Static` is currently showing."""
+    """What a `Static` shows now."""
     return str(widget.content)
 
 
@@ -139,7 +140,7 @@ def synced(*updates: list[tuple[str, list[str]]]) -> dict:
 
 
 class TestSyncTable:
-    """What keeps a scroll position: rows are updated, not rebuilt."""
+    """What keeps a scroll position: an update to the rows, not a rebuild."""
 
     def test_it_adds_the_rows_it_is_given(self):
         seen = synced([("k1", ["a", "b"]), ("k2", ["c", "d"])])
@@ -355,7 +356,7 @@ class TestFailedPoll:
         drive(scenario)
 
     def test_the_last_good_reading_is_left_on_the_screen(self):
-        """A server restarting must not blank the display."""
+        """A server that restarts must not blank the display."""
 
         async def scenario():
             app = SwtopApp(as_collector(StubCollector()), 3600.0)

@@ -46,9 +46,9 @@ def mixed_objective(x, n, kind):
 
 
 class LocalExecutor:
-    """Stands in for SlurmPilotExecutor, running each callable inline.
+    """Stands in for SlurmPilotExecutor, and runs each callable inline.
 
-    Records what it was asked to submit,
+    Records the submissions it receives,
     and turns a raising objective into a `RemoteExecutionError` output,
     exactly as a real worker reports it.
     """
@@ -153,7 +153,7 @@ class TestConstruction:
             ExploreSpaceSobolQMC([], as_executor(LocalExecutor()))
 
     def test_duplicate_task_names_are_rejected(self):
-        """The name keys the results, so two of them would lose one."""
+        """The name keys the results, so two tasks of one name lose a result."""
         with pytest.raises(ValueError, match="unique"):
             explorer(task(name="a"), task(name="b"), task(name="a"))
 
@@ -176,7 +176,10 @@ class TestConstruction:
         assert str(sweep.tasks[0].seed) in capsys.readouterr().out
 
     def test_the_callers_task_is_left_alone(self):
-        """`tasks` says what will run; the caller's own object is not touched."""
+        """`tasks` says what will run.
+
+        The sweep does not touch the caller's own object.
+        """
         original = task(points=100, seed=None)
 
         sweep = explorer(original)
@@ -241,7 +244,7 @@ class TestDesign:
         assert isinstance(params["kind"], int)
 
     def test_the_design_covers_the_space_more_evenly_than_it_clumps(self):
-        """What Sobol' buys over a uniform draw: no half is left empty."""
+        """What Sobol' buys over a uniform draw: no half stays empty."""
         design = explorer(task(points=64)).design("sweep")
 
         assert sum(1 for p in design if p["x"] < 0.0) == 32
@@ -314,7 +317,7 @@ class TestRun:
         assert "second: best of 4 points" in out
 
     def test_the_recorded_unit_point_is_the_one_evaluated(self):
-        """Discrete parameters are rounded; the rounded point is the record."""
+        """The sweep rounds discrete parameters, and records the rounded point."""
         sweep = explorer(task(space=MIXED, objective=mixed_objective, points=4))
 
         sweep.run()
@@ -590,7 +593,7 @@ class TestSave:
         assert len(self.load(tmp_path / "sweep.pkl.gz")["sweep"]["values"]) == 8
 
     def test_saving_before_running_writes_empty_lists(self, tmp_path):
-        """The file says what was measured, and that is nothing yet."""
+        """The file says what the sweep measured, and that is nothing yet."""
         explorer(task(points=4)).save(tmp_path / "sweep.pkl.gz")
 
         results = self.load(tmp_path / "sweep.pkl.gz")
@@ -667,8 +670,8 @@ class TestRealExecutor:
         )
 
         # A real worker in a thread:
-        # the sweep blocks in wait() as soon as it submits,
-        # so nothing can play the worker's part after the fact.
+        # the sweep blocks in wait() as soon as it submits.
+        # Nothing can then play the worker's part after the fact.
         worker = make_worker(ds_service_address, tmp_path / "worker", group="cpu")
         thread = threading.Thread(
             target=run_worker, args=(worker, 2 * points), daemon=True

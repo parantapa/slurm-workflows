@@ -1,24 +1,26 @@
-# Tutorial: Computing PI with a Sobol' QMC sweep
+# Computing pi with a Sobol' QMC sweep
 
 [<- back to the main README](../../README.md)
 
-This tutorial computes $\pi$ with `ExploreSpaceSobolQMC`,
-which owns the submit-and-wait loop:
-the sweep draws a low-discrepancy design over a space,
-evaluates every point of it across a pool of pilot workers,
-and keeps what came back.
-The example runs on the `bii` partition of the Rivanna cluster at UVA,
-under the `bii_nssac` account.
+This tutorial computes $\pi$ with `ExploreSpaceSobolQMC`.
+That class owns the submit-and-wait loop.
+The sweep draws a low-discrepancy design over a space.
+It evaluates every point of the design across a pool of pilot workers.
+Then it keeps what came back.
+
+The example runs on the `bii` partition of the Rivanna cluster at UVA.
+It uses the `bii_nssac` account.
 
 The complete program can be found at
 [`examples/example_compute_pi_qmc.py`](../../examples/example_compute_pi_qmc.py).
 
 ## Before you start
 
-This program is meant to be run from a Rivanna login node,
-set up as in
-[How to install slurm-workflows on Rivanna](../how-to-guides/install-on-rivanna.md),
-with this repository cloned:
+Run this program from a Rivanna login node.
+Follow
+[How to install slurm-workflows on Rivanna](../how-to-guides/install-on-rivanna.md)
+first.
+Next, clone this repository:
 
 ```sh
 git clone https://github.com/parantapa/slurm-hpc-workflows.git
@@ -35,14 +37,14 @@ python examples/example_compute_pi_qmc.py
 
 ## The arithmetic
 
-A quarter of the unit circle has area $\pi / 4$,
-so a point of the unit square lands inside it with probability $\pi / 4$.
-Scoring a point 4 when it is inside and 0 when it is outside
-makes the mean score over the design an estimate of $\pi$.
+A quarter of the unit circle has area $\pi / 4$.
+So a point of the unit square lands inside it with probability $\pi / 4$.
+The program scores a point 4 inside the circle and 0 outside it.
+The mean score over the design is then an estimate of $\pi$.
 
-The points are generated using a scrambled Sobol' sequence ---
-a method for generating low-discrepancy points for Quasi Monte Carlo methods ---
-rather than using uniform sampling.
+The sweep draws the points from a scrambled Sobol' sequence,
+not from uniform sampling.
+A Sobol' sequence gives low-discrepancy points for Quasi Monte Carlo methods.
 
 ## The whole program
 
@@ -129,31 +131,31 @@ if __name__ == "__main__":
 
 What to watch for while it runs, in order:
 
-* a `ds-service` task queue starts on the login node;
-* one Slurm job is submitted, spanning `NUM_NODES` nodes;
-* `srun` starts a worker process on every task slot in that job,
-    and each connects back to the queue over InfiniBand;
-* the sweep draws 4096 Sobol' points over `SAMPLE_SPACE`
-    and submits every one of them to the `bii` queue as a task,
-    named `compute-pi-qmc-explore-0000` and up,
-    so the sweep can be followed in [`swtop`](../how-to-guides/watch-a-run-with-swtop.md);
-* `run` blocks until all of them are back;
-* `save` writes the points, the scores and the whole outputs to a file;
-* leaving the executor's block cancels the pilot job;
-* the driver averages the scores.
+* A `ds-service` task queue starts on the login node.
+* The executor submits one Slurm job across `NUM_NODES` nodes.
+* `srun` starts a worker process on every task slot in that job.
+    Each worker connects back to the queue over InfiniBand.
+* The sweep draws 4096 Sobol' points over `SAMPLE_SPACE`.
+    It submits every point to the `bii` queue as a task.
+* The sweep names the tasks `compute-pi-qmc-explore-0000` and up,
+    so you can follow them in [`swtop`](../how-to-guides/watch-a-run-with-swtop.md).
+* `run` blocks until every task is back.
+* `save` writes the points, the scores and the whole outputs to a file.
+* The executor cancels the pilot job at the end of its block.
+* The driver averages the scores.
 
 ## Next steps
 
-[Tutorial: Optimizing Himmelblau's function](optimizing-himmelblau.md)
-takes a file like the one this run saved and searches on from it
-with `OptimizeSpaceBotorch`,
-choosing where to evaluate next
-instead of drawing every point up front.
+[Optimizing Himmelblau's function](optimizing-himmelblau.md)
+takes a file like the one this run saved.
+It then searches on from that file with `OptimizeSpaceBotorch`.
+The optimizer chooses where to evaluate next.
+It does not draw every point up front.
 
-[Tutorial: Computing PI on a Slurm Cluster](computing-pi.md)
-computes the same number the other way round,
-submitting each piece of work itself with `submit` and `wait`,
-which is what to copy when the work is not a function over a space.
+[Computing pi on a Slurm cluster](computing-pi.md)
+computes the same number the other way round.
+It submits each piece of work itself with `submit` and `wait`.
+If the work is not a function over a space, copy that shape.
 
 [`ExploreSpaceSobolQMC`](../reference/explore-space.md) is the full API
 for a sweep: the objective contract, the methods,

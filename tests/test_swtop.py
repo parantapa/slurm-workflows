@@ -1,16 +1,16 @@
 """Tests for the `swtop` monitor.
 
 The server is real, as everywhere else here,
-so what the collector reports is what a live queue would tell it.
-Slurm is mocked, since a worker's identity comes from the store
+so what the collector reports is what a live queue tells it.
+The tests mock Slurm, since a worker's identity comes from the store
 rather than from a running job.
 
 The collector is async and these tests are not.
-Each is given a collector on an event loop that lasts the whole test
-(`LoopBound`) and calls `snapshot()` as if it were an ordinary method,
-so a test can change the store between two polls
---- which is what the caching and staleness tests are about ---
-without every test being written as a coroutine.
+Each test gets a collector on an event loop that lasts the whole test
+(`LoopBound`), and calls `snapshot()` like an ordinary method.
+A test can therefore change the store between two polls,
+which is what the caching and staleness tests are about.
+No test has to be a coroutine.
 """
 
 from __future__ import annotations
@@ -43,10 +43,11 @@ def square(x):
 class LoopBound:
     """A collector, and the one event loop its client belongs to.
 
-    `DsServiceClientAsync` binds its channel to the loop running when it is made,
-    so a fresh `asyncio.run` per call
-    would leave the second poll talking to a loop that has closed.
-    One loop is kept for the test instead.
+    `DsServiceClientAsync` binds its channel to the loop that runs
+    when the caller makes it.
+    A fresh `asyncio.run` per call therefore leaves the second poll
+    on a loop that closed.
+    The test keeps one loop instead.
     """
 
     def __init__(
@@ -70,7 +71,7 @@ class LoopBound:
 
 
 async def _make_client(address: str) -> DsServiceClientAsync:
-    """Build the client with the loop that will own it running."""
+    """Build the client while the loop that will own it runs."""
     return DsServiceClientAsync(address)
 
 
@@ -82,10 +83,10 @@ def collector(ds_service_address):
 
 
 class CountingClient:
-    """Records key reads, so the identity cache can be checked.
+    """Records key reads, so a test can check the identity cache.
 
     Keyed by prefix, because a poll reads the progress display every time
-    on top of the identities it is caching.
+    on top of the identities it caches.
     """
 
     def __init__(self, inner):
@@ -192,8 +193,8 @@ class TestCollectTasks:
         executor.set_task_name(ready, "b-ready")
         executor.set_task_name(running, "a-running")
 
-        # The queue is oldest first, so this claims `ready` --
-        # claim both and let the second one stay Running.
+        # The queue is oldest first, so this claims `ready`.
+        # Claim both, and let the second one stay Running.
         ds_client.task_get("stranger", "cpu")
         ds_client.task_get("stranger", "cpu")
         ds_client.task_done(ready.task_id, "stranger", b"")
@@ -260,7 +261,7 @@ class TestCollectProgress:
         assert progress.done
 
     def test_a_display_that_stopped_moving_keeps_its_count(self, collector, ds_client):
-        """A finished wait writes nothing more; the last count still shows."""
+        """A finished wait writes nothing more. The last count still shows."""
         self.publish(ds_client, progress_id="p-4", total=10)
         ds_client.time_series_append("progress:p-4", 10.0, _now_utc())
         collector.snapshot()
@@ -308,7 +309,7 @@ class TestCollectWorkerJobs:
         assert listed[0].name < listed[1].name
 
     def test_a_job_with_no_process_is_still_listed(self, collector, executor):
-        """Which is what a queued job looks like: submitted, not yet running."""
+        """A queued job looks like this: submitted, not yet running."""
         executor.define_worker("cpu", [])
         executor.scale_workers("cpu", 1)
 
@@ -328,7 +329,7 @@ class TestCollectWorkerJobs:
         assert listed.slurm_job_id == "?"
 
     def test_a_job_is_read_once(self, ds_service_address, executor):
-        """Written once when the job is submitted, so never read twice."""
+        """Written once when the executor submits the job, so never read twice."""
         executor.define_worker("cpu", [])
         executor.scale_workers("cpu", 1)
         bound = LoopBound(ds_service_address, wrap=CountingClient)
@@ -363,9 +364,9 @@ class TestCollectWorkers:
     def test_workers_are_ordered_by_group_then_name(
         self, collector, ds_service_address, tmp_path
     ):
-        # Named as the executor names them, because the worker id is built
-        # from the name: two workers of one job and pid
-        # are told apart by their names alone.
+        # Named as the executor names them,
+        # because the worker id contains the name.
+        # Two workers of one job and pid differ only in their names.
         workers = [
             make_worker(
                 ds_service_address, tmp_path, group="gpu", name="run.worker.gpu.0"
@@ -419,7 +420,7 @@ class TestCollectWorkers:
         assert listed.name == "?"
 
     def test_an_unreadable_description_is_not_cached(self, collector, ds_client):
-        """It may be a writer this reader arrived in the middle of."""
+        """It can be a writer this reader arrived in the middle of."""
         ds_client.map_set("worker_process_info:w", b"not json")
         collector.snapshot()
 
@@ -456,6 +457,8 @@ class TestCollectMonitored:
         assert wait_for(
             lambda: bool(ds_client.time_series_get("host_free_memory:testhost"))
         )
+        # The job monitor is a second thread, and starts after the host one.
+        assert wait_for(lambda: bool(ds_client.time_series_get("slurm_job_memory:42")))
 
         snapshot = collector.snapshot()
 
@@ -491,7 +494,7 @@ class TestCollectMonitored:
     def test_a_series_that_never_started_leaves_its_column_out(
         self, collector, ds_client
     ):
-        """Only one of a host's four series has to exist for it to be listed."""
+        """Only one of a host's four series has to exist for swtop to list the host."""
         ds_client.time_series_append("host_free_memory:node-1", 5.0, _now_utc())
 
         (host,) = collector.snapshot().hosts
@@ -534,7 +537,7 @@ class TestRender:
         assert "%" not in render(Snapshot(address="a", when=datetime.now()))
 
     def test_an_idle_server_says_so(self, collector):
-        """A pilot job is submitted here, but nothing is running in it yet."""
+        """The fixture submits a pilot job here, but nothing runs in it yet."""
         out = render(collector.snapshot())
 
         assert "total 0" in out
@@ -600,7 +603,7 @@ class TestRender:
 
     def test_a_missing_measurement_is_a_dash(self, collector, ds_client):
         # A subject name without a dash of its own,
-        # so the dashes asserted below can only be the empty columns.
+        # so the dashes in the assertions can only be the empty columns.
         ds_client.time_series_append("host_free_memory:nodeone", 5.0, _now_utc())
 
         out = render(collector.snapshot())
@@ -618,7 +621,7 @@ class TestRender:
         assert "workers" not in out
 
     def test_every_line_fits_together(self, collector):
-        """Columns are padded, so no row may be ragged or unterminated."""
+        """`render` pads the columns, so no row is ragged or unterminated."""
         out = render(collector.snapshot())
 
         assert out.endswith("\n")
@@ -633,7 +636,7 @@ class TestRender:
 class TestCli:
     @pytest.fixture
     def stop_after_one_poll(self, monkeypatch):
-        """Let one frame be drawn, then interrupt as a user would."""
+        """Let swtop draw one frame, then interrupt it as a user does."""
 
         async def sleep(seconds):
             raise KeyboardInterrupt

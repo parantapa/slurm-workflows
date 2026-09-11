@@ -1,6 +1,6 @@
 """Compute pi on Rivanna's BII cluster.
 
-Walked through in `docs/tutorials/computing-pi.md`.
+`docs/tutorials/computing-pi.md` walks through this program.
 """
 
 from ds_service_client import DsServiceServer
@@ -20,7 +20,7 @@ SBATCH_ARGS = [
 
 
 def do_step_pi(start, stop, step, stepsize):
-    """Sum every `step`-th midpoint slice, beginning at `start`."""
+    """Sum every `step`-th midpoint slice, from `start`."""
     x, s = 0.0, 0.0
     for i in range(start, stop, step):
         x = (i + 0.5) * stepsize

@@ -1,10 +1,10 @@
 """Batch Bayesian optimization of search spaces, with botorch.
 
 Fits a Gaussian process to everything measured so far,
-asks it for a whole batch of points at once,
-evaluates that batch across a pilot pool, refits, repeats.
-Exploration is not done here: a run starts from the results files
-`ExploreSpaceSobolQMC.save` wrote.
+and asks it for a whole batch of points at once.
+Evaluates that batch across a pilot pool, refits, repeats.
+This module does not explore.
+A run starts from the results files `ExploreSpaceSobolQMC.save` wrote.
 
 See `docs/reference/optimize-space.md` for what a round does and how a search stops.
 """
@@ -45,8 +45,8 @@ ObjectiveOutput = Mapping[str, Any]
 ObjectiveFunction = Callable[..., ObjectiveOutput]
 
 
-# How far outside the unit cube a saved point may land
-# before it is taken for a point from another space.
+# How far outside the unit cube a saved point can land
+# before this module takes it for a point from another space.
 SAVED_POINT_TOLERANCE = 1e-9
 
 CANDIDATES_KEY = "candidates"
@@ -58,31 +58,34 @@ PROPOSE_SECONDS_KEY = "propose_seconds"
 class OptimizationTask:
     """One space to optimize, and everything needed to optimize it.
 
-    name: keys its results, and has to be the name its observations
-        were measured under in the results files.
-    objective: minimized.
+    name: keys its results,
+        and must match the name the results files hold its observations under.
+    objective: the search minimizes it.
         Its argument names must match the keys of `space`,
         and it returns a mapping carrying `objective_key`.
-    optimizer_queue: where the model fit and acquisition optimization run,
-        one task per round. Its workers need botorch; the objective's
-        workers do not.
+    optimizer_queue: where the model fit and the acquisition optimization run,
+        one task per round.
+        Its workers need botorch.
+        The objective's workers do not.
     search_parallelism: points evaluated per round.
-        Taken from the search when None.
+        When None, the count comes from the search.
 
-    The search runs between min_search_iterations and max_search_iterations
-    rounds, stopping early when it stops improving:
+    The search runs between `min_search_iterations`
+    and `max_search_iterations` rounds.
+    It stops early when it stops improving:
 
     min_search_iterations: rounds that always run.
-        Stalled rounds below it count towards patience
-        but cannot be the round that ends the search.
+        Stalled rounds below it count toward patience.
+        But they cannot end the search.
     max_search_iterations: hard ceiling.
-    patience: consecutive stalled rounds that end the search;
-        a round that improves resets the count.
+    patience: consecutive stalled rounds that end the search.
+        A round that improves resets the count.
     min_improvement: fraction of the incumbent's magnitude
-        a round must beat it by to count as improving.
+        a round must beat it by.
+        A smaller gain counts as a stall.
 
     objective_key: the key of the result to minimize.
-        Every other key is recorded and not modelled.
+        The search records every other key and does not model it.
 
     The rest tune the fit and the acquisition optimization:
 
@@ -91,10 +94,11 @@ class OptimizationTask:
     mc_samples: quasi-MC draws used to estimate the acquisition value
         at a candidate.
     acqf_timeout_s: wall-clock budget for one proposal.
-        Hitting it is not an error: the best candidates so far are returned.
+        A timeout is not an error.
+        The proposal returns the best candidates so far.
 
     extra_objective_kwargs: extra keyword arguments for the objective.
-        May not shadow a parameter of the space.
+        Must not shadow a parameter of the space.
     """
 
     name: str
@@ -119,16 +123,16 @@ class OptimizationTask:
 class OptimizationResult:
     """What one task measured, in submission order.
 
-    The four lists are index-aligned:
-    `points[i]` was evaluated, returned `outputs[i]`,
-    was modelled by `values[i]`, and sits at `unit_points[i]`
-    in the unit cube.
+    The four lists are index-aligned.
+    The search evaluates `points[i]`, gets `outputs[i]` back,
+    models the point by `values[i]`,
+    and records `unit_points[i]` as its place in the unit cube.
     `unit_points` is where the objective ran, after any rounding.
     """
 
     points: list[dict[str, Any]] = field(default_factory=list)
     values: list[float] = field(default_factory=list)
-    # The objective's whole result, not just the number modelled from it.
+    # The objective's whole result, not just the number modeled from it.
     outputs: list[dict[str, Any]] = field(default_factory=list)
     unit_points: list[list[float]] = field(default_factory=list)
 
@@ -151,8 +155,9 @@ def fit_and_propose(
     """
     train_x = torch.tensor(unit_points, dtype=DTYPE)
 
-    # Botorch maximizes and the objective is minimized, so the model
-    # is fit to -f, and the acquisition values below are in that space.
+    # Botorch maximizes and the search minimizes the objective.
+    # So this function fits the model to -f,
+    # and the acquisition values below are in that space.
     train_y = torch.tensor([[-v] for v in values], dtype=DTYPE)
 
     model = SingleTaskGP(train_x, train_y, outcome_transform=Standardize(m=1))
@@ -195,8 +200,9 @@ def fit_and_propose(
 class OptimizeSpaceBotorch:
     """Botorch batch optimization of one or more search spaces, run together.
 
-    Integer and categorical parameters are rounded from a continuous
-    proposal, so a mostly-discrete space re-evaluates points.
+    The search rounds integer and categorical parameters
+    from a continuous proposal.
+    So a mostly-discrete space re-evaluates points.
     """
 
     def __init__(
@@ -208,17 +214,17 @@ class OptimizeSpaceBotorch:
     ) -> None:
         """Validate every task and load the observations it starts from.
 
-        The tasks all run together, in the same rounds, and each drops out
-        when it meets its own stopping rule.
+        The tasks all run together, in the same rounds.
+        Each drops out when it meets its own stopping rule.
         files: results files to start from,
-            as written by `ExploreSpaceSobolQMC.save`
-            or by this class's own `save`.
-            A task is modelled on every observation they hold under its name,
-            and a task with none of them raises.
+            as `ExploreSpaceSobolQMC.save` or this class's own `save` wrote them.
+            The search models a task on every observation
+            they hold under its name.
+            A task with none of them raises.
         search_parallelism: batch size for tasks that do not carry their own.
             A task with neither raises.
 
-        Every task is validated here rather than when it runs.
+        The search validates every task now, not when it runs.
         """
         if not tasks:
             raise ValueError("no optimization tasks given")
@@ -231,9 +237,10 @@ class OptimizeSpaceBotorch:
         self.executor = executor
         self.tasks = [self._resolve(task, search_parallelism) for task in tasks]
 
-        # What the files hold, keyed by task name; `save` does not write it back.
+        # What the files hold, keyed by task name.
+        # `save` does not write it back.
         self.prior: dict[str, OptimizationResult] = {}
-        # What this instance has evaluated, which is what `save` writes.
+        # What this instance evaluated, which is what `save` writes.
         self.results: dict[str, OptimizationResult] = {}
 
         loaded = load_results(files)
@@ -371,7 +378,7 @@ class OptimizeSpaceBotorch:
         return unit
 
     def _task(self, name: str) -> OptimizationTask:
-        """The named task, or a `KeyError` naming the ones there are."""
+        """The named task, or a `KeyError` that lists the tasks there are."""
         for task in self.tasks:
             if task.name == name:
                 return task
@@ -384,7 +391,7 @@ class OptimizeSpaceBotorch:
         return space_dim(self._task(name).space)
 
     def observations(self, name: str) -> tuple[list[list[float]], list[float]]:
-        """Everything a task's model is fit on: the files, then this run."""
+        """Everything a task's model uses: the files, then this run."""
         self._task(name)
         prior, results = self.prior[name], self.results[name]
         return (
@@ -393,7 +400,7 @@ class OptimizeSpaceBotorch:
         )
 
     def num_observations(self, name: str) -> int:
-        """How many points a task's model is fit on."""
+        """How many points a task's model uses."""
         return len(self.observations(name)[1])
 
     def run(self) -> None:
@@ -403,9 +410,9 @@ class OptimizeSpaceBotorch:
         then every task's proposed batch, evaluated on its objective queue.
         Tasks advance in step and drop out independently,
         each on its own patience and ceiling.
-        Called again, it runs another set of rounds from where this stopped.
+        A second call runs another set of rounds from where this stopped.
 
-        The tasks of a round are named
+        The search names the tasks of a round
         `<task>-fit-<round>` and `<task>-search-<round>-<index>`
         on the queue server.
         """
@@ -486,7 +493,7 @@ class OptimizeSpaceBotorch:
     def _fit_and_propose(
         self, tasks: list[OptimizationTask], desc: str, round_number: int
     ) -> dict[str, list[list[float]]]:
-        """One fit per task, all of them submitted before any is waited for."""
+        """Submit one fit per task, then wait for all of them."""
         submissions: list[tuple[str, Task]] = []
         for task in tasks:
             unit_points, values = self.observations(task.name)
@@ -516,7 +523,7 @@ class OptimizeSpaceBotorch:
                 raise_on_error=RaiseOnError.RAISE_AFTER_COMPLETED,
             )
         except RuntimeError as e:
-            # Named in full: the traceback is in a worker log,
+            # Name every failure in full: the traceback is in a worker log,
             # and the usual cause is a worker that cannot import botorch.
             broken = [
                 f"{name} on queue {self._task(name).optimizer_queue!r} "
@@ -535,8 +542,8 @@ class OptimizeSpaceBotorch:
     def _candidates(
         self, task: OptimizationTask, submission: Task, desc: str
     ) -> list[list[float]]:
-        """The batch one fit proposed, checked before it is evaluated."""
-        # Every key read below, not just the candidates,
+        """The batch one fit proposed, checked before the run evaluates it."""
+        # Check every key, not just the candidates,
         # so a stale worker fails with this message and not a KeyError.
         result = submission.output
         expected = (CANDIDATES_KEY, FIT_SECONDS_KEY, PROPOSE_SECONDS_KEY)
@@ -555,8 +562,8 @@ class OptimizeSpaceBotorch:
 
         candidates = result[CANDIDATES_KEY]
 
-        # Every round is the full width of the pool;
-        # a short batch would silently narrow it.
+        # Every round is the full width of the pool.
+        # A short batch narrows it silently.
         if len(candidates) != task.search_parallelism:
             raise RuntimeError(
                 f"{task.name}: the optimizer queue proposed "
@@ -630,15 +637,15 @@ class OptimizeSpaceBotorch:
                     if isinstance(submission.output, RemoteExecutionError)
                 }
             )
-            # Empty when nothing came back at all, a cancelled task say,
-            # in which case the cause is in the exception this chains to.
+            # Empty when nothing came back at all, for example after a canceled task.
+            # Then the cause is in the exception this chains to.
             named = f" of {failed}" if failed else ""
             raise RuntimeError(f"{what} failed during {desc}{named}") from e
 
     def _record_returned(
         self, submitted: list[tuple[OptimizationTask, dict[str, Any], Task]]
     ) -> None:
-        """Record every evaluation that came back; for the failure path only."""
+        """Record every evaluation that came back. For the failure path only."""
         for task, params, submission in submitted:
             try:
                 self._record(task, params, submission)
@@ -655,7 +662,7 @@ class OptimizeSpaceBotorch:
         result = self.results[task.name]
         result.points.append(params)
         result.values.append(value)
-        # Copied, so a later mutation of the returned mapping
+        # A copy, so a later change to the returned mapping
         # cannot rewrite what the run recorded.
         result.outputs.append(dict(output))
         result.unit_points.append(to_unit(task.space, params))
@@ -722,12 +729,14 @@ class OptimizeSpaceBotorch:
     def save(self, path: Path | str) -> None:
         """Write what this run measured to a gzipped pickle.
 
-        Only this run, so the files it started from and this one
-        can be passed to the next `OptimizeSpaceBotorch` together
+        The file holds only this run.
+        So the caller can pass the files it started from and this one
+        to the next `OptimizeSpaceBotorch` together,
         without counting a point twice.
         Same shape as `ExploreSpaceSobolQMC.save` writes.
 
-        Overwrites `path`, and writes empty lists if nothing was evaluated.
+        Overwrites `path`.
+        If the search evaluated nothing, it writes empty lists.
         """
         results = {
             name: {

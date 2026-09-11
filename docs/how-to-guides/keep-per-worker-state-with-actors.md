@@ -2,11 +2,11 @@
 
 [<- back to the main README](../../README.md)
 
-If a task has to load something expensive before it can do any work -
-a model, a database connection, a large table -
-paying for that once per task wastes most of the run.
+Some tasks load something expensive before they do any work:
+a model, a database connection or a large table.
+A load that runs once per task wastes most of the run.
 Register an **actor class** instead.
-Each worker instantiates it once at startup,
+Each worker creates it once at startup,
 and you dispatch **method names** (as strings) instead of functions.
 
 ## 1. Write the class
@@ -28,8 +28,9 @@ class Model:
 ```
 
 The class must be importable on the compute node.
-By default the executor's current working directory
-is added to the workers' `sys.path`; add more with `python_paths=[...]`.
+By default, each worker adds the executor's current working directory
+to its own `sys.path`.
+Add more paths with `python_paths=[...]`.
 
 ## 2. Name the class when you define the worker group
 
@@ -68,20 +69,20 @@ executor.define_worker(
 )
 ```
 
-They travel through the queue server, so they must be picklable,
-and anything they refer to has to be importable on the compute node,
+They travel through the queue server, so they must be picklable.
+Anything they refer to must be importable on the compute node,
 exactly as for the actor class itself.
 
 ## If you change the arguments mid-run
 
-Redefining a group with different actor arguments is allowed,
-unlike differing `sbatch_args`.
-Only the workers started *after* that call read the new values:
-an actor is constructed once, when its worker starts.
+You can redefine a group with different actor arguments.
+Different `sbatch_args` raise an `AssertionError` instead.
+Only the workers that start after that call read the new values.
+The reason is that each worker creates its actor once, at startup.
 Scale the group down and back up to rebuild the actors.
 
 ## Related
 
 - [`define_worker` options](../reference/executor.md#define_worker-options)
 - [How to troubleshoot a failing run](troubleshoot-a-failing-run.md),
-    for a `ModuleNotFoundError` raised in an actor's constructor
+    for a `ModuleNotFoundError` from an actor's constructor

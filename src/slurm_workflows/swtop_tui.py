@@ -1,7 +1,8 @@
 """The terminal UI `swtop` runs in, built with Textual.
 
-`swtop.py` decides what to show; this puts it on a screen and keeps it
-there, polling in a Textual worker and updating tables in place.
+`swtop.py` decides what to show.
+This module puts it on a screen and keeps it there.
+It polls in a Textual worker and updates the tables in place.
 """
 
 from __future__ import annotations
@@ -36,10 +37,11 @@ from .swtop import (
 
 
 def sync_table(table: DataTable, rows: list[tuple[str, list[str]]]) -> None:
-    """Bring one table to `rows`, touching only what changed.
+    """Bring one table to `rows`, and change only what differs.
 
-    Keyed on the row keys the builders hand out, so a row that is still
-    there keeps its place, its scroll position and the cursor on it.
+    Each row keeps the key the builders hand out.
+    So a row that is still there keeps its place,
+    its scroll position and the cursor on it.
     """
     wanted = {key: cells for key, cells in rows}
     columns = list(table.columns)
@@ -90,7 +92,7 @@ class Block(VerticalScroll):
 
 
 class ProgressBlock(VerticalScroll):
-    """The bar a `wait` or `as_completed` call is drawn as."""
+    """The bar that shows a `wait` or `as_completed` call."""
 
     def compose(self) -> ComposeResult:
         yield Static("", classes="progress-label")
@@ -182,18 +184,20 @@ class SwtopApp(App):
         """Ask the server for a snapshot, without blocking the interface."""
         self.run_worker(
             self._poll,
-            # One poll at a time; the one in flight is cancelled.
+            # One poll at a time.
+            # Textual cancels the poll in flight.
             exclusive=True,
             group="poll",
         )
 
     async def _poll(self) -> None:
-        """One poll, awaited in a worker so the interface keeps running."""
+        """One poll, awaited in a worker so the interface does not block."""
         try:
             snapshot = await self.collector.snapshot()
         except Exception as e:
-            # A server that is down, or not up yet, is worth waiting out:
-            # this is a monitor, and quitting would take the screen with it.
+            # A server that is down, or not up yet, is worth waiting out.
+            # This is a monitor.
+            # If it quits, the screen goes with it.
             snapshot = Snapshot(
                 address=self.collector.address,
                 when=datetime.now(),
@@ -205,7 +209,7 @@ class SwtopApp(App):
     def apply(self, snapshot: Snapshot) -> None:
         """Draw one snapshot.
 
-        Called on the event loop, like every update.
+        Runs on the event loop, like every update.
         """
         self.snapshot = snapshot
 
@@ -213,7 +217,7 @@ class SwtopApp(App):
         error.display = snapshot.error is not None
         if snapshot.error is not None:
             error.update(f"cannot read the server: {snapshot.error}")
-            # The tables are left as they were, showing the last reading.
+            # The tables still show the last reading.
             return
 
         when = snapshot.when.strftime("%H:%M:%S")
@@ -230,6 +234,6 @@ class SwtopApp(App):
 async def run_app(collector: Collector, interval: float) -> None:
     """Run the terminal UI until the viewer quits.
 
-    Awaited on the loop the collector's client belongs to.
+    Await this on the loop the collector's client belongs to.
     """
     await SwtopApp(collector, interval).run_async()

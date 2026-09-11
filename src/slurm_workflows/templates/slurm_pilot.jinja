@@ -5,8 +5,8 @@ echo "Running batch worker."
 
 . '{{ worker_script_path }}'
 {% else %}
-# In case more than 1 task is generated per slurm job
-# we redirect output of each task to a separate file.
+# If a slurm job runs more than one task,
+# srun writes the output of each task to a separate file.
 num_tasks="${SLURM_NTASKS:-${SLURM_JOB_NUM_NODES:-}}"
 echo "Num tasks: ${num_tasks}"
 if [[ "${num_tasks}" = "1" ]] ; then

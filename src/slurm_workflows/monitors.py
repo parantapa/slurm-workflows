@@ -1,7 +1,7 @@
 """Background sampling of a compute node and of a Slurm job.
 
-One elected worker per node and one per job runs these threads,
-each appending to a `ds-service` time series,
+One elected worker per node and one per job runs these threads.
+Each thread appends to a `ds-service` time series,
 one series per measurement per subject.
 `docs/reference/swtop.md` says what the readings mean.
 """
@@ -32,7 +32,7 @@ HOST_FILESYSTEMS = {"dev_shm": "/dev/shm", "tmp": "/tmp"}
 # The subject is the hostname for a host and the job id for a job.
 HOST_SERIES = {
     "free_memory": "host_free_memory:",  # bytes
-    "load_average": "host_load_average:",  # 1 minute load average
+    "load_average": "host_load_average:",  # 1-minute load average
     "dev_shm_used": "host_dev_shm_used:",  # percent of /dev/shm in use
     "tmp_used": "host_tmp_used:",  # percent of /tmp in use
 }
@@ -45,7 +45,8 @@ JOB_SERIES = {
 def sample_host() -> dict[str, float]:
     """One reading of this node: free memory, load, and scratch usage.
 
-    A filesystem that is not mounted is left out rather than reported as zero.
+    The reading omits a filesystem that is not mounted.
+    It does not report that filesystem as zero.
     """
     values = {
         "free_memory": float(psutil.virtual_memory().available),
@@ -115,11 +116,22 @@ class CgroupSampler:
         """The same two numbers, summed over the processes in the cgroup.
 
         A fallback: summed RSS counts shared pages once per process.
+        A cgroup that holds no process with an address space reads as zero,
+        which is what the root cgroup of a systemd host holds.
+        This sums the tree of this process in that case.
         """
+        memory, cpu_seconds = self._sum(self._cgroup_processes())
+        if memory > 0.0:
+            return memory, cpu_seconds
+        return self._sum(self._own_tree())
+
+    @staticmethod
+    def _sum(procs: list[psutil.Process]) -> tuple[float, float]:
+        """Total memory in bytes and total CPU seconds over `procs`."""
         memory = 0.0
         cpu_seconds = 0.0
 
-        for proc in self._processes():
+        for proc in procs:
             try:
                 with proc.oneshot():
                     memory += float(proc.memory_info().rss)
@@ -131,8 +143,8 @@ class CgroupSampler:
 
         return memory, cpu_seconds
 
-    def _processes(self) -> list[psutil.Process]:
-        """The cgroup's processes, or this one's own tree if it has no cgroup."""
+    def _cgroup_processes(self) -> list[psutil.Process]:
+        """The processes `cgroup.procs` names, where that file is readable."""
         try:
             pids = [
                 int(line)
@@ -140,17 +152,19 @@ class CgroupSampler:
                 if line
             ]
         except (OSError, ValueError):
-            pids = []
+            return []
 
-        if pids:
-            procs = []
-            for pid in pids:
-                try:
-                    procs.append(psutil.Process(pid))
-                except psutil.NoSuchProcess:
-                    continue
-            return procs
+        procs = []
+        for pid in pids:
+            try:
+                procs.append(psutil.Process(pid))
+            except psutil.NoSuchProcess:
+                continue
+        return procs
 
+    @staticmethod
+    def _own_tree() -> list[psutil.Process]:
+        """This process and every descendant of it."""
         this = psutil.Process()
         return [this, *this.children(recursive=True)]
 
@@ -184,7 +198,7 @@ class Monitor(threading.Thread):
             try:
                 self.append_sample()
             except Exception:
-                # A failed sample leaves a gap; it does not end the series.
+                # A failed sample leaves a gap. It does not end the series.
                 self.logger.exception("Monitor %s failed to sample", self.subject)
 
             if self._stopping.wait(self.interval):
@@ -203,9 +217,9 @@ class Monitor(threading.Thread):
             )
 
     def stop(self, timeout: float = 10.0) -> None:
-        """Ask the thread to finish its wait and end, and wait for it to.
+        """Ask the thread to finish its wait and end, then wait for it to end.
 
-        Idempotent, and safe on a thread that was never started.
+        Idempotent, and safe on a thread that never started.
         """
         self._stopping.set()
         if self.is_alive():

@@ -2,10 +2,10 @@
 
 [<- back to the main README](../../README.md)
 
-The executor and workers communicate only through a `ds-service` server,
+The executor and the workers communicate only through a `ds-service` server,
 and each executor needs one of its own.
-Starting it from the driver is the simplest way to get that,
-and ties the server's life to the run's.
+The simplest way is to start the server from the driver.
+The server then lives exactly as long as the run.
 
 ## Start it from the driver
 
@@ -20,29 +20,30 @@ with DsServiceServer(interface="ib0", port=5051) as ds:
     ...
 ```
 
-`DsServiceServer` comes from the `ds-service-client` package,
-and the constructor spawns the process,
-so the server is already coming up when it returns.
-Call `wait_until_ready()` before handing the address to anything.
+`DsServiceServer` comes from the `ds-service-client` package.
+The constructor spawns the process,
+so the server starts before the constructor returns.
+Call `wait_until_ready()` before you hand the address to anything.
 Omit `port` to get an arbitrary free one.
 
 ## Choose an interface the compute nodes can reach
 
-The server must be reachable from the compute nodes,
-so it is bound to the IPv4 address of the `interface` you name -
-`ib0` above, the login node's Infiniband interface -
-and `ds.address` is the `host:port` the workers then connect to.
+The server must be reachable from the compute nodes.
+`DsServiceServer` binds it to the IPv4 address of the `interface` you name.
+The example uses `ib0`, the login node's Infiniband interface.
+`ds.address` is then the `host:port` the workers connect to.
 
-Naming an interface that does not exist on that node,
-or that has no IPv4 address, raises `ValueError` at construction.
+If you name an interface that the node does not have,
+the constructor raises `ValueError`.
+An interface with no IPv4 address raises the same error.
 
 ## If the binary is not on your `PATH`
 
 `DsServiceServer` runs `ds-service` from your `PATH`.
-Pass `ds_service_bin`, or set the `DS_SERVICE_BIN` environment variable,
-to override that.
+To override that, pass `ds_service_bin`,
+or set the `DS_SERVICE_BIN` environment variable.
 
-To install it in the first place, see
+To install it, see
 [How to install slurm-workflows on Rivanna](install-on-rivanna.md).
 
 ## Related

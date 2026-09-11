@@ -13,13 +13,14 @@ class StopWorker(BaseException):
     """Breaks the worker's otherwise-infinite main loop.
 
     Deliberately a BaseException, not an Exception:
-    `main()` catches every Exception so a worker survives bad tasks,
-    so only a BaseException can end the loop from inside a client call.
+    `main()` catches every Exception, so a worker survives bad tasks.
+    For this reason, only a BaseException can end the loop
+    from inside a client call.
     """
 
 
 class _StoppingClient:
-    """Wraps a real client, raising StopWorker after N tasks are reported done."""
+    """Wraps a real client, and raises StopWorker after N calls to `task_done`."""
 
     def __init__(self, inner: DsServiceClient, limit: int) -> None:
         self._inner = inner
@@ -38,7 +39,7 @@ class _StoppingClient:
 
 
 class _IdlingClient:
-    """Wraps a real client, raising StopWorker after N `task_get` calls.
+    """Wraps a real client, and raises StopWorker after N `task_get` calls.
 
     The `task_get` calls themselves are the real ones,
     so an empty queue answers with the server's own `NoTaskAvailable`
@@ -72,10 +73,10 @@ def make_worker(
 ) -> PilotWorkerProcess:
     """A real worker against a real server.
 
-    The monitor interval is long by default:
-    the first worker on a host samples once as it starts,
-    which is what the tests look at,
-    and nothing here wants a thread sampling again mid-test.
+    The monitor interval is long by default.
+    The first worker on a host samples once as it starts,
+    which is what the tests look at.
+    Nothing here wants a second sample mid-test.
     """
     return PilotWorkerProcess(
         group=group,
@@ -91,12 +92,13 @@ def make_worker(
 
 
 def run_worker(worker: PilotWorkerProcess, expect_tasks: int) -> None:
-    """Run the worker's real main loop until `expect_tasks` are completed.
+    """Run the worker's real main loop until it completes `expect_tasks` tasks.
 
-    Tasks must already be queued:
+    The caller must queue the tasks first:
     `task_get` on an empty queue raises `NoTaskAvailable` at once,
-    which the worker answers by sleeping and asking again,
-    so a worker started with nothing to do spins until the hang guard fires.
+    which the worker answers with a sleep and another request.
+    For this reason, a worker that starts with nothing to do
+    spins until the hang guard fires.
     """
     # `_StoppingClient` forwards everything it does not override,
     # so it satisfies the worker's use of the client without subclassing it.
@@ -110,9 +112,9 @@ def run_worker(worker: PilotWorkerProcess, expect_tasks: int) -> None:
 def poll_worker(worker: PilotWorkerProcess, polls: int) -> int:
     """Run the worker's real main loop for `polls` fetches, and count them.
 
-    For the empty-queue case, where no task is ever completed
-    and `run_worker` would therefore never stop.
-    Returns the number of fetches the worker actually made,
+    Use this for the empty-queue case.
+    The worker completes no task there, so `run_worker` never stops.
+    Returns the number of fetches the worker made,
     so a loop that gave up early is distinguishable
     from one that kept polling.
     """

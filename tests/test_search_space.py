@@ -1,9 +1,9 @@
 """Tests for search spaces and their ranges.
 
 These need neither botorch nor a queue:
-a range is arithmetic on one value,
-which is why it lives in a module of its own
-and why this file has no `importorskip` at the top of it.
+a range is arithmetic on one value.
+For this reason it lives in a module of its own,
+and this file has no `importorskip` at the top of it.
 """
 
 from __future__ import annotations
@@ -36,8 +36,8 @@ class TestIntRange:
             assert r.unstandardize(r.standardize(x)) == x
 
     def test_returns_an_int_not_a_float(self):
-        # The value is handed to the objective as a keyword argument;
-        # a 3.0 where the objective expects 3 is a bug the caller has to debug.
+        # The sweep passes the value to the objective as a keyword argument.
+        # A 3.0 where the objective expects 3 is a bug the caller has to debug.
         value = IntRange(0, 10).unstandardize(0.5)
         assert isinstance(value, int)
 
@@ -158,8 +158,8 @@ class TestConversions:
         high = to_params(SPACE, [1.0, 1.0, 1.0])
 
         # The log range goes through exp(log(x)),
-        # so it lands next to its endpoint rather than on it;
-        # the other two are exact.
+        # so it lands next to its endpoint rather than on it.
+        # The other two are exact.
         assert math.isclose(low["lr"], 1e-4)
         assert math.isclose(high["lr"], 1e-1)
         assert (low["width"], low["optimizer"]) == (8, 0)
@@ -192,8 +192,9 @@ class TestConversions:
     def test_a_rounded_parameter_does_not_round_trip_to_its_proposal(self):
         """Why the optimizer records `to_unit` of the point it evaluated.
 
-        A continuous proposal lands between two integers;
-        what ran is the rounded one, and that is what the model is told.
+        A continuous proposal lands between two integers.
+        What ran is the rounded one,
+        and that is what the optimizer tells the model.
         """
         proposal = [0.5, 0.51, 0.5]
 

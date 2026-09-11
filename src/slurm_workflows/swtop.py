@@ -1,12 +1,14 @@
 """`swtop`: a live view of a `ds-service` task queue.
 
-Polls the server and redraws a summary of its tasks, of the pilot jobs
-the executor submitted, and of the worker processes running in them.
-`swtop_tui.py` holds the terminal UI; this module decides what to show.
+Polls the server and redraws a summary of its tasks.
+The summary also holds the pilot jobs the executor submitted,
+and the worker processes that run in them.
+`swtop_tui.py` holds the terminal UI.
+This module decides what to show.
 
-See `docs/reference/swtop.md` for the blocks and what fills them,
-and the monitoring section of `docs/developer-notes.md` for why they
-are collected the way they are.
+See `docs/reference/swtop.md` for the blocks and what fills them.
+The monitoring section of `docs/developer-notes.md` says
+why `swtop` collects them the way it does.
 """
 
 from __future__ import annotations
@@ -33,7 +35,8 @@ from .slurm_pilot_worker import WORKER_PROCESS_INFO_PREFIX
 DEFAULT_INTERVAL_S: float = 2.0
 
 # The fields a worker process publishes about itself,
-# in the order it writes them; the tables order their own columns.
+# in the order it writes them.
+# The tables order their own columns.
 WORKER_INFO_FIELDS = ["group", "name", "slurm_job_id", "hostname", "pid"]
 
 # The fields the executor publishes about a pilot job, likewise.
@@ -42,7 +45,7 @@ WORKER_JOB_FIELDS = ["name", "group", "slurm_job_id", "submit_time"]
 # The fields of the progress display a wait publishes.
 PROGRESS_FIELDS = ["progress_id", "desc", "unit", "total"]
 
-# How far back a progress reading is still shown as live.
+# How far back a progress reading still counts as live.
 PROGRESS_TAIL_S = 60.0
 
 TASK_NAME_PREFIX = "task_name:"
@@ -51,18 +54,19 @@ TASK_NAME_PREFIX = "task_name:"
 # and an empty one matches every task the server holds.
 ALL_TASK_IDS = ""
 
-# Shown in place of the name of a task that was never given one.
+# The tables show this in place of the name of a task that nothing named.
 UNNAMED = "-"
 
 # How far back a monitored value is still worth showing.
 # A monitor samples every 5 seconds, so nothing this recent is stale.
 STALE_AFTER_S = 60.0
 
-# Shown when a worker published its id but not the field being read,
-# which is what a worker caught mid-startup looks like.
+# The tables show this when a worker published its id
+# but not the field the collector reads.
+# A worker caught mid-startup looks like this.
 UNKNOWN = "?"
 
-# The order tasks are listed in: what is happening now, first.
+# The order the tables list tasks in: what runs now comes first.
 STATE_ORDER = ["Running", "Ready", "Complete", "Canceled", "Undefined"]
 
 # What each block says when it has nothing to show.
@@ -114,8 +118,8 @@ class TaskInfo:
 class SubjectInfo:
     """The latest reading of one monitored host or job.
 
-    `values` is empty when the subject's series exist
-    but hold nothing recent, which is what a dead monitor looks like.
+    `values` is empty when the subject's series exist but hold nothing recent.
+    A dead monitor looks like this.
     """
 
     subject: str
@@ -123,13 +127,13 @@ class SubjectInfo:
 
     @property
     def stale(self) -> bool:
-        """Whether nothing recent was read, which is a dead monitor."""
+        """Whether the collector read nothing recent, which is a dead monitor."""
         return not self.values
 
 
 @dataclass
 class ProgressInfo:
-    """What a `wait` or `as_completed` call is working through."""
+    """What a `wait` or `as_completed` call works through."""
 
     progress_id: str
     desc: str
@@ -139,7 +143,7 @@ class ProgressInfo:
 
     @property
     def done(self) -> bool:
-        """Whether the wait this describes has finished."""
+        """Whether the wait this describes finished."""
         return self.completed >= self.total
 
     @property
@@ -170,21 +174,22 @@ class Collector:
     def __init__(self, client: DsServiceClientAsync, address: str) -> None:
         self.client = client
         self.address = address
-        # Identities are written once and never change, so they are read
-        # once: a steady state re-reads only what is new.
+        # An identity never changes after its first write,
+        # so `Collector` reads it once.
+        # A steady state re-reads only what is new.
         self._worker_jobs: dict[str, WorkerJobInfo] = {}
         self._workers: dict[str, WorkerInfo] = {}
         # The last count read for a progress id,
-        # so a display that has stopped moving is still drawn where it stopped.
+        # so a display that no longer moves still shows where it stopped.
         self._progress_seen: dict[str, int] = {}
         self._task_names: dict[str, str] = {}
 
     async def snapshot(self) -> Snapshot:
         """One poll of the server, as a `Snapshot`.
 
-        A key the server does not hold reads as `UNKNOWN` rather than raising,
-        but a server that cannot be reached raises:
-        it is the caller that decides whether to keep polling.
+        A key the server does not hold reads as `UNKNOWN` rather than raising.
+        But a server that the client cannot reach raises.
+        The caller decides whether to keep polling.
         """
         # None of these six needs an answer from another,
         # so they go out together and the poll waits once.
@@ -197,7 +202,7 @@ class Collector:
             self._collect_subjects(JOB_SERIES),
         )
         # The tasks do need the workers:
-        # a running task is labelled with the name of the worker holding it.
+        # a running task carries the name of the worker that holds it.
         tasks = await self._collect_tasks(workers)
 
         return Snapshot(
@@ -226,7 +231,7 @@ class Collector:
         return value.decode("utf-8", errors="replace")
 
     async def _collect_progress(self) -> ProgressInfo | None:
-        """The progress display a wait published, and how far it has got."""
+        """The progress display a wait published, and how far it got."""
         text = await self._text(PROGRESS_DISPLAY_KEY)
         try:
             published = json.loads(text)
@@ -251,7 +256,7 @@ class Collector:
         return info
 
     async def _collect_worker_jobs(self) -> list[WorkerJobInfo]:
-        """Every pilot job the executor has published, cached like the rest."""
+        """Every pilot job the executor published, cached like the rest."""
         names = [
             key[len(WORKER_JOB_INFO_PREFIX) :]
             for key in await self.client.map_search_key(f"^{WORKER_JOB_INFO_PREFIX}")
@@ -280,7 +285,7 @@ class Collector:
         return WorkerJobInfo(**fields)
 
     async def _collect_workers(self) -> list[WorkerInfo]:
-        """Every worker process that has registered, cached like the rest."""
+        """Every worker process that registered, cached like the rest."""
         worker_ids = [
             key[len(WORKER_PROCESS_INFO_PREFIX) :]
             for key in await self.client.map_search_key(
@@ -292,8 +297,8 @@ class Collector:
         missing = [w for w in worker_ids if w not in self._workers]
         read = await asyncio.gather(*(self._worker_info(w) for w in missing))
         for worker_id, info in zip(missing, read):
-            # An unreadable description is not cached:
-            # the read may have landed in the middle of the write.
+            # An unreadable description does not go in the cache:
+            # the read can land in the middle of the write.
             if info is not None:
                 self._workers[worker_id] = info
 
@@ -316,7 +321,7 @@ class Collector:
 
     async def _collect_tasks(self, workers: list[WorkerInfo]) -> list[TaskInfo]:
         """Every task on the server, in the order the tasks block lists them."""
-        # Which tasks there are, and which of them have been named:
+        # Which tasks there are, and which of them have a name:
         # two searches, neither of which needs the other's answer.
         task_ids, name_keys = await asyncio.gather(
             self.client.task_search_id(ALL_TASK_IDS),
@@ -325,8 +330,8 @@ class Collector:
         if not task_ids:
             return []
 
-        # Only names that were there are cached: a task seen before
-        # `set_task_name` ran may have been named since.
+        # The cache holds only the names that were there.
+        # A task seen before `set_task_name` ran can have a name now.
         named = {key[len(TASK_NAME_PREFIX) :] for key in name_keys}
         missing = sorted(named - self._task_names.keys())
         names = await asyncio.gather(
@@ -359,7 +364,7 @@ class Collector:
             task.worker = holder
 
         # Named before unnamed within a state:
-        # a name is what somebody wanted to be able to find.
+        # a name marks a task somebody wanted to find again.
         return sorted(
             tasks,
             key=lambda t: (_state_rank(t.state), t.name == UNNAMED, t.name, t.task_id),
@@ -368,7 +373,7 @@ class Collector:
     async def _collect_subjects(self, prefixes: dict[str, str]) -> list[SubjectInfo]:
         """The latest reading of every subject one monitor writes about.
 
-        The subjects are discovered from one of the series.
+        The collector finds the subjects in the keys of one series.
         """
         first = next(iter(prefixes.values()))
         subjects = sorted(
@@ -403,7 +408,10 @@ class Collector:
         return [readings[subject] for subject in subjects]
 
     async def _holder(self, task_id: str, worker_names: dict[str, str]) -> str:
-        """The name of the worker running `task_id`, or "" if it cannot be told."""
+        """The name of the worker that runs `task_id`.
+
+        The name is "" where the server cannot say.
+        """
         try:
             worker_id = await self.client.task_get_worker_id(task_id)
         except (KeyError, TaskStateError):
@@ -415,28 +423,28 @@ class Collector:
 async def open_collector(address: str) -> AsyncIterator[Collector]:
     """A collector on a client of its own, closed on the way out.
 
-    Must be entered on the event loop the client is to belong to.
+    Enter this on the event loop the client belongs to.
     """
     async with DsServiceClientAsync(address) as client:
         yield Collector(client, address)
 
 
 def _unknown_worker(worker_id: str) -> WorkerInfo:
-    """A row for a worker process whose description could not be read."""
+    """A row for a worker process whose description the collector cannot read."""
     return WorkerInfo(
         worker_id=worker_id, **{name: UNKNOWN for name in WORKER_INFO_FIELDS}
     )
 
 
 def _unknown_worker_job(name: str) -> WorkerJobInfo:
-    """A row for a pilot job whose description could not be read."""
+    """A row for a pilot job whose description the collector cannot read."""
     return WorkerJobInfo(
         **{field: UNKNOWN for field in WORKER_JOB_FIELDS} | {"name": name}
     )
 
 
 def _state_rank(state: str) -> int:
-    """Where a state sorts, with any state `STATE_ORDER` omits placed last."""
+    """Where a state sorts. A state `STATE_ORDER` omits comes last."""
     try:
         return STATE_ORDER.index(state)
     except ValueError:
@@ -453,7 +461,7 @@ def _bytes(value: float) -> str:
 
 
 def _subject(info: SubjectInfo) -> str:
-    """The subject's name, said to be stale when its series have stopped."""
+    """The subject's name, marked `(stale)` where its series stopped."""
     return info.subject if not info.stale else f"{info.subject} (stale)"
 
 
@@ -464,7 +472,7 @@ def _cell(values: dict[str, float], name: str, fmt: Callable[[float], str]) -> s
     return fmt(values[name])
 
 
-# The columns of each block, shared by the text frames and the UI.
+# The columns of each block, which the text frames and the UI share.
 WORKER_JOB_COLUMNS = ["NAME", "GROUP", "JOB", "SUBMITTED"]
 WORKER_COLUMNS = ["NAME", "GROUP", "HOST", "JOB", "PID"]
 HOST_COLUMNS = ["HOST", "FREE MEM", "LOAD", "/dev/shm", "/tmp"]
@@ -609,13 +617,13 @@ def render(snapshot: Snapshot) -> str:
 
 
 def draw(text: str) -> None:
-    """Put `text` on the screen, replacing what was there.
+    """Put `text` on the screen, in place of what was there.
 
-    Redirected output is appended instead, without escape codes.
+    This appends to redirected output instead, without escape codes.
     """
     if sys.stdout.isatty():
-        # Home, then clear: clearing first leaves the old frame visible
-        # for a moment on a slow link.
+        # Home, then clear.
+        # The other order leaves the old frame visible for a moment on a slow link.
         sys.stdout.write("\x1b[H\x1b[2J")
     sys.stdout.write(text)
     if not sys.stdout.isatty():
@@ -624,13 +632,13 @@ def draw(text: str) -> None:
 
 
 async def run_plain(collector: Collector, interval: float) -> None:
-    """Poll and print frames until interrupted."""
+    """Poll and print frames until the viewer interrupts."""
     try:
         while True:
             try:
                 snapshot = await collector.snapshot()
             except Exception as e:
-                # A server that is down, or not up yet, is waited out.
+                # A server that is down, or not up yet, is worth waiting out.
                 snapshot = Snapshot(
                     address=collector.address,
                     when=datetime.now(),
@@ -640,18 +648,18 @@ async def run_plain(collector: Collector, interval: float) -> None:
             draw(render(snapshot))
             await asyncio.sleep(interval)
     except KeyboardInterrupt:
-        # Ctrl-C is how this is meant to end.
+        # Ctrl-C is the way this ends.
         pass
 
 
 async def watch(server_address: str, interval: float, plain: bool) -> None:
-    """Open a client on this loop and run whichever display was asked for."""
+    """Open a client on this loop and run the display the caller asked for."""
     async with open_collector(server_address) as collector:
         if plain or not sys.stdout.isatty():
             await run_plain(collector, interval)
         else:
-            # Imported here so the text path, and the tests that drive it,
-            # do not pay for loading Textual.
+            # The import sits here, so the text path
+            # and the tests that drive it do not pay for loading Textual.
             from .swtop_tui import run_app
 
             await run_app(collector, interval)
@@ -684,6 +692,6 @@ def swtop(server_address: str, interval: float, plain: bool) -> None:
     try:
         asyncio.run(watch(server_address, interval, plain))
     except KeyboardInterrupt:
-        # A Ctrl-C that lands between two awaits comes out here
-        # rather than inside the loop that was asked to stop.
+        # A Ctrl-C that lands between two awaits comes out here,
+        # rather than inside the loop it stops.
         pass
