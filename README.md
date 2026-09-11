@@ -36,7 +36,7 @@ Use it in three cases:
 
 - Python >= 3.12
 - Access to a Slurm cluster (`sbatch`, `squeue`, `scancel` on `PATH`)
-- A running [`ds-service`](https://github.com/parantapa/ds-service) server, v5.1.0 or later
+- A running [`ds-service`](https://github.com/parantapa/ds-service) server
 
 ## Installation
 

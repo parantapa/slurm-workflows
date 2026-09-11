@@ -119,8 +119,9 @@ for the reason given under Monitoring.
 `SlurmPilotExecutor` always takes the address as its `server_address` argument.
 
 The server and the client carry the same version.
-`pyproject.toml` records the floor,
-and the README states the server version to match.
+`pyproject.toml` records the client floor,
+and the server binary has to match it.
+Install the latest `ds-service` release.
 
 ## Tools and libraries
 
@@ -129,7 +130,7 @@ This table says what each one is here for.
 
 | Dependency | Used by | For |
 | --- | --- | --- |
-| `ds-service-client` (>=5.1.0) | executor, worker, `swtop` | The queue server's client and its `DsServiceServer` launcher. The one channel between coordinator and workers. `task_search_id`, which is how `swtop` lists the tasks on a server, needs at least 5.0.0. |
+| `ds-service-client` | executor, worker, `swtop` | The queue server's client and its `DsServiceServer` launcher. The one channel between coordinator and workers. It also provides `task_search_id`, which is how `swtop` lists the tasks on a server. |
 | `cloudpickle` | `slurm_pilot_executor`, `slurm_pilot_worker` | Serializing functions, arguments and return values, so a locally defined function can cross to a compute node. |
 | `jinja2` | `templates/` | Rendering the worker shell script and its sbatch wrapper. |
 | `json5` | `templates/` | Parsing the `{#- name: ... -#}` headers of the multi-template files. |
@@ -219,7 +220,7 @@ A route through `as_completed` rewrites the policy.
 Its `else` branch means "keep waiting".
 A state that falls through it therefore waits forever,
 and the loop never reports that the task cannot finish.
-ds-service 4.0.0 added `Canceled`, and that new state exposed this.
+ds-service later added `Canceled`, and that new state exposed this.
 
 **`task_done` is per worker.**
 The worker passes its own `worker_id`,

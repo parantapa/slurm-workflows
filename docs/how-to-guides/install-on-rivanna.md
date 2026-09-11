@@ -40,12 +40,13 @@ The Bayesian optimizer needs both.
 
 `ds-service` is a static binary.
 The project releases it separately from this package.
-Put it somewhere on your `PATH`:
+Always download the latest release,
+and put it somewhere on your `PATH`:
 
 ```sh
 mkdir -p ~/bin
 curl -L -o ~/bin/ds-service \
-    https://github.com/parantapa/ds-service/releases/download/v5.1.0/ds-service
+    https://github.com/parantapa/ds-service/releases/latest/download/ds-service
 chmod +x ~/bin/ds-service
 ```
 
@@ -55,8 +56,6 @@ If `~/bin` is not already on your `PATH`, add it:
 echo 'export PATH="$HOME/bin:$PATH"' >> ~/.bashrc
 export PATH="$HOME/bin:$PATH"
 ```
-
-This version of `slurm-workflows` requires `ds-service` >= v5.1.0.
 
 ## 5. Check the installation
 
