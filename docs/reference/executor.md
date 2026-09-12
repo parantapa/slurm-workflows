@@ -3,9 +3,9 @@
 [<- back to the main README](../../README.md)
 
 `slurm_workflows.slurm_pilot_executor`:
-the coordinator that runs on the login node,
-the `Task` handle it returns,
+the coordinator, the `Task` handle it returns,
 and the `RaiseOnError` policy that decides what a failure does.
+The coordinator runs on a login node, or inside a Slurm job.
 
 Everything public is importable from the package root,
 except `NoOutput`:

@@ -30,7 +30,8 @@ Omit `port` to get an arbitrary free one.
 
 The server must be reachable from the compute nodes.
 `DsServiceServer` binds it to the IPv4 address of the `interface` you name.
-The example uses `ib0`, the login node's Infiniband interface.
+The example uses `ib0`, the Infiniband interface of the node the driver runs on.
+That node is a login node, or the compute node of the driver's own Slurm job.
 `ds.address` is then the `host:port` the workers connect to.
 
 If you name an interface that the node does not have,

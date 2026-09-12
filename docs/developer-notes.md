@@ -98,7 +98,7 @@ See `.cpush.json5` for the `rivanna` remote.
 
 | Module | Holds |
 | --- | --- |
-| `slurm_pilot_executor.py` | `SlurmPilotExecutor` (the coordinator, on the login node) and `WorkerGroup` |
+| `slurm_pilot_executor.py` | `SlurmPilotExecutor`, the coordinator that runs on a login node or in a Slurm job, and `WorkerGroup` |
 | `slurm_pilot_worker.py` | `PilotWorkerProcess` (runs inside Slurm jobs) and the `slurm-pilot-worker` CLI |
 | `slurm_utils.py` | `sbatch` / `squeue` / `scancel` wrappers, `get_clean_environ()` |
 | `optimize_space_botorch.py` | `OptimizationTask` and `OptimizeSpaceBotorch`, the botorch searches |
@@ -642,6 +642,15 @@ A second redirect leaves the Slurm-written files empty.
 **`submit_sbatch_job` searches `sbatch`'s stdout for the job id, and does not match at the start.**
 A site that prints a banner or a warning there
 otherwise turns a successful submission into a parse failure.
+
+**`sbatch` gets an environment with no Slurm variables in it.**
+`get_clean_environ` drops `SLURM_`, `SLURMD_`, `PMI_` and `SRUN_`.
+The coordinator runs inside a Slurm job as well as on a login node.
+`sbatch` reads several `SLURM_*` variables as defaults for the job it submits.
+If those variables reach `sbatch`,
+every pilot job takes the coordinator's own node count and task count.
+`get_clean_environ` runs on every submission,
+because a login node carries none of those variables anyway.
 
 ## Conventions
 

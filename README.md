@@ -94,7 +94,7 @@ The tasks wait on the queue until a pilot job starts and takes them.
 | [`OptimizeSpaceBotorch`](docs/reference/optimize-space.md) | The batch Bayesian search, its task fields, and its stopping rule. |
 | [Search spaces](docs/reference/search-space.md) | `IntRange`, `FloatRange` and `CategoricalRange`. |
 | [`swtop`](docs/reference/swtop.md) | The CLI, the blocks on screen, and what the host and job readings measure. |
-| [About the pilot-job model](docs/explanation/about-the-pilot-job-model.md) | Why pilot workers, the three processes, and which class to reach for. |
+| [About the pilot-job model](docs/explanation/about-the-pilot-job-model.md) | Why pilot workers, the three processes, where the coordinator runs, and which class to reach for. |
 | [About batch Bayesian optimization](docs/explanation/about-batch-bayesian-optimization.md) | Why a search has rounds, where the fit runs, and when it is worth the overhead. |
 | [About what a run publishes](docs/explanation/about-what-a-run-publishes.md) | Why a run is observable from outside itself, and the limits of that. |
 

@@ -46,7 +46,7 @@ because a worker only ever asks its own queue for work.
 
 | Process | Runs on | Role |
 | --- | --- | --- |
-| Coordinator (`SlurmPilotExecutor`) | login node | defines worker groups, scales pilot jobs, submits tasks |
+| Coordinator (`SlurmPilotExecutor`) | login node, or a Slurm job | defines worker groups, scales pilot jobs, submits tasks |
 | `ds-service` | login node (or elsewhere) | holds tasks on named queues |
 | Pilot workers | compute nodes | pull tasks, execute them, return results |
 
@@ -62,9 +62,36 @@ For this reason, you can kill a driver and restart it,
 and the workers never notice.
 The workers also do not need to know how many of them there are.
 
-## Two consequences worth knowing
+## Where the coordinator runs
 
-**Exceptions are values.** An exception raised on a worker
+The coordinator runs on a login node, or inside a Slurm job.
+Both placements are part of the design.
+The model is the same in each.
+A login node suits a run you start by hand and watch.
+A Slurm job suits a run that outlives your terminal.
+A Slurm job also suits a driver that wants more memory or more cores
+than a login node gives it.
+
+A coordinator inside a job submits pilot jobs like any other coordinator.
+The difference is the environment it inherits.
+Slurm exports `SLURM_*`, `SLURMD_*`, `PMI_*` and `SRUN_*`
+into every job it starts.
+`sbatch` reads several of those variables as defaults
+for the job it submits.
+If those variables reach `sbatch`,
+a pilot job inherits settings from the coordinator's own allocation.
+The coordinator's node count and task count are two of them.
+
+`get_clean_environ` in `slurm_utils.py` exists for that case.
+The function drops all four prefixes,
+and the executor gives `sbatch` what is left.
+A pilot job therefore takes its shape from the worker group's
+`sbatch_args` alone, whatever the coordinator runs inside.
+The same call runs on a login node, where there is nothing to strip.
+
+## Exceptions are values
+
+An exception raised on a worker
 never reaches the coordinator.
 The worker catches it, logs the traceback under a generated `error_id`,
 and returns a `RemoteExecutionError` as the task's `output`.
@@ -77,11 +104,6 @@ A worker that dies on a bad task takes the rest of its queue with it,
 so a worker swallows everything.
 The cost is that nobody sees a failure
 until somebody waits on the task.
-
-**You can submit from inside a job.**
-The executor strips every `SLURM_*`, `SLURMD_*`, `PMI_*` and `SRUN_*` variable
-from the environment before it invokes `sbatch`.
-A coordinator inside a Slurm allocation can therefore still submit pilot jobs.
 
 ## Why one executor per server
 
