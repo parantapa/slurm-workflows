@@ -16,10 +16,10 @@ the pilot-job executor, and the batch Bayesian optimizer built on it.
 User documentation lives under `docs/`,
 organized by [Diataxis](https://diataxis.fr/) type.
 The README is a landing page:
-what the library is, requirements, install,
+what the library is, install,
 one minimal usage example, and the index of everything else.
-The README links every document, so its tables are the one index.
-This file does not keep a second copy of them.
+The README links every document, so its table is the one index.
+This file does not keep a second copy of it.
 
 ```
 docs/
@@ -32,7 +32,8 @@ docs/
 
 For new user-facing documentation,
 decide which of the four types it is before you decide where it goes.
-Then add it to the matching table in the README.
+Then give it a row in the README's table,
+among the documents of its own type.
 Keep each document inside its type:
 a tutorial that stops to explain links out to `explanation/` instead,
 and reference describes rather than recommends.
@@ -268,7 +269,7 @@ Change it in one place, and workers silently construct actors
 with default arguments.
 
 `define_worker` writes a key only when the caller gives a value.
-For this reason, the worker treats `KeyError` as "none were passed"
+For this reason, the worker treats `KeyError` as "the caller passed none"
 rather than an error.
 The `WorkerGroup` deliberately does not keep the values,
 so a redefinition check never sees them.
@@ -369,7 +370,7 @@ Use `{#` without the dash inside a body.
 **Never import torch or botorch here.**
 This rule is the whole point of the split.
 A search space is arithmetic on one value at a time,
-so you can build and test one where the optimizer cannot be installed.
+so you can build and test one where you cannot install the optimizer.
 `tests/test_search_space.py` therefore runs without the `importorskip`
 that skips every botorch test.
 `optimize_space_botorch` imports only what it uses of it
@@ -656,7 +657,8 @@ otherwise turns a successful submission into a parse failure.
   Neither tool is advisory here.
 
   If `pyright` objects to a deliberate test double,
-  say so with a `cast` and a comment that explains why the double is enough
+  say so with a `cast` and a comment.
+  The comment says why the double is enough
   (see `as_executor` in `tests/test_optimize_space_botorch.py`).
   Do not silence it with a bare `# type: ignore`.
   If `pyright` objects to something in `src/`, fix the annotation instead.

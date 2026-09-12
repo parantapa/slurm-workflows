@@ -16,29 +16,13 @@ Use it in three cases:
 - A sweep or a calibration has to spread across a pool of nodes.
 - Per-worker state is expensive, and you want it to stay warm between tasks.
 
-## Features
+## Installation
 
-- **Pilot workers** - pay Slurm's queue latency once per worker,
-    then dispatch tasks to them.
-- **Dynamic scaling** - grow or shrink a pool of workers at runtime.
-- **Stateful actors** - keep expensive per-worker state
-    (loaded models, database connections) warm across many tasks.
-- **Transparent serialization** -
-    [cloudpickle](https://github.com/cloudpipe/cloudpickle)
-    serializes functions, arguments, and return values.
-- **Live monitoring tool** - [`swtop`](docs/reference/swtop.md),
-    a terminal UI that shows the tasks, workers, nodes and jobs
-    for a running workflow.
-- **Bayesian optimization** - an optimizer built on [botorch](https://botorch.org/)
-    for optimization and calibration workflows.
-
-## Requirements
+A run needs:
 
 - Python >= 3.12
 - Access to a Slurm cluster (`sbatch`, `squeue`, `scancel` on `PATH`)
 - A running [`ds-service`](https://github.com/parantapa/ds-service) server
-
-## Installation
 
 ```sh
 pip install -U slurm-workflows
@@ -94,50 +78,30 @@ The tasks wait on the queue until a pilot job starts and takes them.
 
 ## Documentation
 
-### Tutorials
-
 | Document | What it covers |
 | --- | --- |
 | [Computing pi on a Slurm cluster](docs/tutorials/computing-pi.md) | The main features of `slurm-workflows`, by creating a worker pool to compute $\pi$. |
 | [Computing pi with a Sobol' QMC sweep](docs/tutorials/computing-pi-qmc.md) | Using `ExploreSpaceSobolQMC` to create a space filling design and evaluate it. |
 | [Optimizing Himmelblau's function](docs/tutorials/optimizing-himmelblau.md) | Using `OptimizeSpaceBotorch` to run a calibration / optimization task. |
-
-### How-to guides
-
-| Document | What it covers |
-| --- | --- |
 | [How to install slurm-workflows on Rivanna](docs/how-to-guides/install-on-rivanna.md) | Installing the package and the `ds-service` binary on Rivanna. |
 | [How to run the task-queue server](docs/how-to-guides/run-the-task-queue-server.md) | Starting a `ds-service` server from the driver and binding it where workers can reach it. |
 | [How to keep per-worker state with actors](docs/how-to-guides/keep-per-worker-state-with-actors.md) | Loading an expensive model or connection once per worker instead of once per task. |
 | [How to watch a run with `swtop`](docs/how-to-guides/watch-a-run-with-swtop.md) | Following a live run from another shell, and keeping a record of one. |
 | [How to troubleshoot a failing run](docs/how-to-guides/troubleshoot-a-failing-run.md) | Finding the right log, and what each `RuntimeError` means. |
 | [How to resume a search](docs/how-to-guides/resume-a-search.md) | Carrying an optimization on across a walltime limit. |
-
-### Reference
-
-| Document | What it covers |
-| --- | --- |
 | [`SlurmPilotExecutor`](docs/reference/executor.md) | The coordinator, `Task`, `RaiseOnError`, worker group options, what a run publishes, and the logs. |
 | [`ExploreSpaceSobolQMC`](docs/reference/explore-space.md) | The Sobol' sweep, the objective contract, and the results file. |
 | [`OptimizeSpaceBotorch`](docs/reference/optimize-space.md) | The batch Bayesian search, its task fields, and its stopping rule. |
 | [Search spaces](docs/reference/search-space.md) | `IntRange`, `FloatRange` and `CategoricalRange`. |
 | [`swtop`](docs/reference/swtop.md) | The CLI, the blocks on screen, and what the host and job readings measure. |
-
-### Explanation
-
-| Document | What it covers |
-| --- | --- |
 | [About the pilot-job model](docs/explanation/about-the-pilot-job-model.md) | Why pilot workers, the three processes, and which class to reach for. |
 | [About batch Bayesian optimization](docs/explanation/about-batch-bayesian-optimization.md) | Why a search has rounds, where the fit runs, and when it is worth the overhead. |
 | [About what a run publishes](docs/explanation/about-what-a-run-publishes.md) | Why a run is observable from outside itself, and the limits of that. |
 
-### For contributors
-
-| Document | What it covers |
-| --- | --- |
-| [Developer notes](docs/developer-notes.md) | Notes for anyone working on `slurm-workflows` itself. |
-| [How to run the tests](docs/how-to-run-tests.md) | Organization of the unit tests and instructions for running them. |
+- [Developer notes](docs/developer-notes.md)
+- [How to run the tests](docs/how-to-run-tests.md)
+- [Report a bug](https://github.com/parantapa/slurm-hpc-workflows/issues)
 
 ## License
 
-MIT - see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

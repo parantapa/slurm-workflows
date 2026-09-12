@@ -56,11 +56,11 @@ Generated scripts and all logs land there.
 
 | Method | What it does |
 | --- | --- |
-| `define_worker(name, sbatch_args, ...)` | Register a worker group. Submits nothing. The group name is also the queue name. Idempotent - redefining a group identically is a no-op, redefining it differently asserts. |
+| `define_worker(name, sbatch_args, ...)` | Register a worker group. Submits nothing. The group name is also the queue name. A second identical definition does nothing. A definition that differs raises `AssertionError`. |
 | `scale_workers(name, count)` | Submit or cancel pilot jobs so the group has `count` jobs. |
 | `submit(queue, fn, *args, **kwargs) -> Task` | Enqueue one task and return a `Task` straight away. `queue` is a group name or a list of them; `fn` is a callable, or a method name (`str`) for actor workers. |
 | `as_completed(tasks, desc, unit="task", raise_on_error=...)` | Yield tasks as their results arrive. `desc` and `unit` label the progress `swtop` draws. Raises `RuntimeError` rather than blocking forever on a task that can never finish. |
-| `wait(tasks, desc, unit="task", raise_on_error=...)` | Same, but discards the iterator - block until all are done. |
+| `wait(tasks, desc, unit="task", raise_on_error=...)` | Same, but discards the iterator. Blocks until all are done. |
 | `set_task_name(task, name)` | Name a task, on the queue server as well as locally. |
 | `stop()` | Cancel all pilot jobs, keep the executor usable. |
 | `close()` | Cancel all pilot jobs and close the queue-server connection. |
@@ -101,7 +101,7 @@ they wait on the queue until something pulls them.
 
 | Argument | Default | Meaning |
 | --- | --- | --- |
-| `setup_script` | `""` | Shell snippet run on the compute node before the worker starts - the text, not a path. Must be a `str`; omit it (or pass `""`) if `/etc/profile` (always sourced) already gives workers the right environment. |
+| `setup_script` | `""` | Shell snippet run on the compute node before the worker starts. The text, not a path. Must be a `str`; omit it (or pass `""`) if `/etc/profile` (always sourced) already gives workers the right environment. |
 | `is_batch_worker` | `False` | See [One worker per job, or one per task](#one-worker-per-job-or-one-per-task). |
 | `actor_class_name` | `None` | Fully qualified class name to instantiate once per worker. |
 | `actor_class_args` | `None` | Positional arguments for that class's constructor. Only valid with `actor_class_name`. |
@@ -198,11 +198,11 @@ where another process launched the pilot jobs.
 Two more states end a wait,
 and the executor reads both straight off the queue server:
 
-- **the server does not know the task id** -
+- **the server does not know the task id**:
   `RuntimeError: Task ... is unknown to the task queue server`.
   In practice this is a `Task` built by hand,
   or one left over from a server that restarted in the meantime.
-- **the task was canceled** -
+- **the task was canceled**:
   `RuntimeError: Task ... was canceled on the task queue server`.
   Nothing in this library cancels a task,
   so this means somebody called `task_cancel` through the `ds-service`
@@ -290,9 +290,9 @@ or was still pending when the last pilot job went away.
 
 Inside a task, these environment variables exist:
 
-- `PILOT_WORKER_NAME` - for example `demo.worker.cpu.0`
-- `PILOT_WORKER_GROUP` - the group name
-- `DS_SERVER_ADDRESS` - the queue server address
+- `PILOT_WORKER_NAME`, for example `demo.worker.cpu.0`
+- `PILOT_WORKER_GROUP`, the group name
+- `DS_SERVER_ADDRESS`, the queue server address
 - plus the usual Slurm variables (`SLURM_JOB_ID`, ...)
 
 **The executor publishes each pilot job as it submits it**,
@@ -353,7 +353,7 @@ Everything for a run lives under the executor's `work_dir`
 | `executor.log` | Worker submission and cancellation from the executor's side |
 | `<worker-name>.sh`, `<worker-name>.sbatch` | The generated scripts |
 | `<worker-name>-<jobid>-<task>.out` | One per worker process: setup-script trace, task-by-task progress, full tracebacks |
-| `<worker-name>-<jobid>.out` | The batch job's own output - and the worker's log too, when the job is a single task |
+| `<worker-name>-<jobid>.out` | The batch job's own output, and the worker's log too when the job is a single task |
 
 `<worker-name>` is `<executor-name>.worker.<group>.<index>`,
 which is also the Slurm job name, so `squeue` shows which run a job belongs to.
@@ -366,12 +366,13 @@ Which of the two holds a worker's log depends on how you defined the group:
 - **`is_batch_worker=False`** (the default) runs the worker under `srun`,
     which fans out over every task in the allocation.
     Each task gets `--output <work-dir>/<worker-name>-%j-%t.out`,
-    so `<task>` is the task's rank - that file is the worker's log.
+    so `<task>` is the task's rank.
+    That file is the worker's log.
     `<worker-name>-<jobid>.out` then holds
     only what the batch script itself emitted,
     which in practice means `srun`'s own errors.
 
-    The exception is a job of exactly one task -
+    The exception is a job of exactly one task:
     `--ntasks=1`, or `--nodes=1` and nothing else about tasks.
     It keeps `srun` but drops the `--output`
     and writes to `<worker-name>-<jobid>.out` like a batch worker.

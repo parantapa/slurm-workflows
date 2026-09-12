@@ -41,6 +41,8 @@ from .utils import (
 
 from .templates import render_template
 
+# What a `Task`'s `output` holds until the task finishes.
+# A task that never ran keeps it.
 NoOutput = object()
 
 # One JSON key per submitted pilot job, keyed on the worker name.
@@ -420,8 +422,8 @@ class SlurmPilotExecutor:
         self,
         queue: list[str],
         fn: Callable | str,
-        *args,
-        **kwargs,
+        *args: Any,
+        **kwargs: Any,
     ) -> Task:
         """Enqueue one task on the given queues and return its handle."""
         # Negated: ds-service serves the highest priority first,

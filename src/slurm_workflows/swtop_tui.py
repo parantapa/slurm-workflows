@@ -8,6 +8,7 @@ It polls in a Textual worker and updates the tables in place.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from textual.app import App, ComposeResult
 from textual.containers import VerticalScroll
@@ -62,7 +63,9 @@ def sync_table(table: DataTable, rows: list[tuple[str, list[str]]]) -> None:
 class Block(VerticalScroll):
     """One titled table, and what it says when it is empty."""
 
-    def __init__(self, title: str, columns: list[str], empty: str, **kwargs) -> None:
+    def __init__(
+        self, title: str, columns: list[str], empty: str, **kwargs: Any
+    ) -> None:
         super().__init__(**kwargs)
         self.title_text = title
         self.columns = columns

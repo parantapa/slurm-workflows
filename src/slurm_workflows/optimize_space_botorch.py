@@ -116,7 +116,7 @@ class OptimizationTask:
     raw_samples: int = 128
     mc_samples: int = 128
     acqf_timeout_s: float = 10.0
-    extra_objective_kwargs: dict = field(default_factory=dict)
+    extra_objective_kwargs: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

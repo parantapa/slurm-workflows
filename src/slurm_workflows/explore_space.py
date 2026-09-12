@@ -58,7 +58,7 @@ class ExplorationTask:
     num_exploration_points: int | None = None
     seed: int | None = None
     objective_key: str = "objective"
-    extra_objective_kwargs: dict = field(default_factory=dict)
+    extra_objective_kwargs: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

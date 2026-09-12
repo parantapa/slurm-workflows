@@ -36,7 +36,7 @@ in one `optimize_acqf` call rather than a point at a time.
 The usual advice for a large batch is to pick the points greedily,
 and that advice is wrong here.
 A greedy batch ran 10 to 15 times *slower* on a low-dimensional space.
-The reason is that the greedy path pays the multi-start restart cost
+The reason is that the greedy path pays the restart cost of a multi-start
 once per point instead of once per batch.
 One joint call also keeps the proposals from stacking on one spot.
 
