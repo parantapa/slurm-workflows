@@ -1,4 +1,4 @@
-# About batch Bayesian optimization on a worker pool
+# About batch Bayesian optimization
 
 [<- back to the main README](../../README.md)
 

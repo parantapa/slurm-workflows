@@ -72,6 +72,9 @@ Both must print usage text.
     is not active.
     Run `conda activate slurm-workflows` again.
 
-## Next steps
+## Related
 
-Read [Computing pi on a Slurm cluster](../tutorials/computing-pi.md)
+- [Computing pi on a Slurm cluster](../tutorials/computing-pi.md),
+    the first tutorial, which this setup is what you need for
+- [How to run the task-queue server](run-the-task-queue-server.md),
+    for what `ds-service` is doing in a run

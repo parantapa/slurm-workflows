@@ -2,11 +2,11 @@
 
 [<- back to the main README](../../README.md)
 
-This tutorial shows how to use the `slurm-workflows` package.
-It computes $\pi$ by numerical integration
-over a quarter of the unit circle, in parallel.
-The example runs on the `bii` partition of the Rivanna cluster at UVA.
-It uses the `bii_nssac` account.
+In this tutorial we compute $\pi$ by numerical integration
+over a quarter of the unit circle, in parallel,
+and meet every part of `slurm-workflows` on the way.
+We run on the `bii` partition of the Rivanna cluster at UVA,
+under the `bii_nssac` account.
 
 The complete program can be found at
 [`examples/example_compute_pi.py`](../../examples/example_compute_pi.py).
@@ -18,22 +18,26 @@ Run this program from a Rivanna login node.
 Follow
 [How to install slurm-workflows on Rivanna](../how-to-guides/install-on-rivanna.md)
 first.
-That guide gives you the two things this program needs:
+That guide gives us the two things this program needs:
 
 1. A conda environment named `slurm-workflows`,
-    with the package and its `botorch` extra installed in it.
-2. The `ds-service` binary on your `PATH`.
+    with the package installed in it.
+2. The `ds-service` binary on our `PATH`.
     `DsServiceServer` runs it from there.
 
+The install guide adds the `botorch` extra as well.
+Nothing here uses it.
+It is [the third tutorial](optimizing-himmelblau.md) that needs it.
+
 The example itself lives in this repository.
-Clone it:
+We clone it:
 
 ```sh
 git clone https://github.com/parantapa/slurm-hpc-workflows.git
 cd slurm-hpc-workflows
 ```
 
-Then run it from the root of that clone:
+Then we run it from the root of that clone:
 
 ```sh
 module load miniforge/26.3.2
@@ -44,10 +48,10 @@ python examples/example_compute_pi.py
 ## The arithmetic
 
 $\pi$ is the integral of $4 / (1 + x^2)$ over $[0, 1]$.
-This program approximates it with a midpoint Riemann sum
+We approximate it with a midpoint Riemann sum
 over `num_steps` slices of the interval.
 
-The program splits the slices between tasks by stride.
+The program splits the slices between the tasks by stride.
 Task `i` of `num_tasks` sums slices `i`, `i + num_tasks`, `i + 2 * num_tasks`,
 and so on.
 No task needs anything another task computed.
@@ -135,7 +139,12 @@ What to watch for while it runs, in order:
 
 Notice that the program submits the 800 tasks before a single worker exists.
 The tasks wait on the queue until a pilot job starts and takes them.
-You time nothing by hand.
+We time nothing by hand.
+
+We have just run a thousand-million-slice integration
+across 80 processes on two compute nodes,
+and we wrote no sbatch script to do it.
+Every later program in this documentation has the shape of this one.
 
 ## Next steps
 

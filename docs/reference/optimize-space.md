@@ -53,7 +53,7 @@ It chooses the batch jointly rather than a point at a time.
 at the points already evaluated.
 It carries every point measured so far, so a fit costs more every round.
 
-You can call `run()` again for another set of rounds.
+A second call to `run()` starts another set of rounds.
 The new rounds model everything the earlier calls measured.
 
 Why a round chooses the whole batch at once, and why the fit runs on a worker,
@@ -88,7 +88,7 @@ and waits for it once:
 | `objective_queue` | `search_parallelism` evaluations | whatever the objective needs |
 | `optimizer_queue` | one fit-and-propose: the GP fit and the acquisition optimization | botorch, cores, and memory for a GP over every point measured so far |
 
-You can point both at one queue, and that cannot deadlock,
+Both can point at one queue, and that cannot deadlock,
 because a round never has both kinds in flight at once.
 
 botorch must be importable on the driver
@@ -138,7 +138,7 @@ params, value = opt.best_point("sweep")
 ```
 
 `save` writes only what this instance evaluated,
-so you can pass an earlier file alongside it and count every point once.
+so an earlier file passed alongside it counts every point once.
 `opt.results[name]` is that same set of points as lists,
 and `opt.prior[name]` is what the files held, in the same shape.
 `best_point` and `observations` cover both.

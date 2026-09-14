@@ -2,20 +2,20 @@
 
 [<- back to the main README](../../README.md)
 
-This tutorial searches a two-dimensional space
+In this tutorial we search a two-dimensional space
 for the minimum of Himmelblau's function,
 with `ExploreSpaceSobolQMC` and `OptimizeSpaceBotorch`.
 The pool evaluates a whole batch of candidate points per round.
-Between rounds, the optimizer fits a Gaussian process.
-The model then chooses the next batch.
+Between rounds, the optimizer fits a Gaussian process,
+and the model then chooses the next batch.
 
-The example runs on the `bii` partition of the Rivanna cluster at UVA.
-It uses the `bii_nssac` account.
+We run on the `bii` partition of the Rivanna cluster at UVA,
+under the `bii_nssac` account.
 
 The complete program can be found at
 [`examples/example_optimize_himmelblau.py`](../../examples/example_optimize_himmelblau.py).
 
-Read [Computing pi on a Slurm cluster](computing-pi.md)
+We read [Computing pi on a Slurm cluster](computing-pi.md)
 and [Computing pi with a Sobol' QMC sweep](computing-pi-qmc.md)
 first.
 They cover what this one reuses without further comment.
@@ -28,14 +28,14 @@ Run this program from a Rivanna login node.
 Follow
 [How to install slurm-workflows on Rivanna](../how-to-guides/install-on-rivanna.md)
 first.
-Next, clone this repository:
+Next, we clone this repository:
 
 ```sh
 git clone https://github.com/parantapa/slurm-hpc-workflows.git
 cd slurm-hpc-workflows
 ```
 
-Then run it from the root of that clone:
+Then we run it from the root of that clone:
 
 ```sh
 module load miniforge/26.3.2
@@ -296,7 +296,7 @@ opt.run()
 ```
 
 The optimizer never explores.
-You hand it the results files, and it models what is in them.
+We hand it the results files, and it models what is in them.
 So the task's `name` must be the name the exploration ran under.
 After the name, it takes five more positional arguments, in order:
 
@@ -318,7 +318,7 @@ once past `MIN_SEARCH_ITERATIONS`.
 [`OptimizeSpaceBotorch`](../reference/optimize-space.md#when-it-stops)
 describes the four settings.
 
-You do not need to print anything to follow the search.
+We need print nothing to follow the search.
 The optimizer prints the best point after every round.
 It also prints how long each fit and each proposal took.
 
@@ -326,8 +326,8 @@ Either phase names every task it submits on the queue server.
 So [`swtop`](../how-to-guides/watch-a-run-with-swtop.md) shows
 `himmelblau-explore-00` through `himmelblau-search-<round>-<index>`
 as the run works through them.
-Start it in another shell now.
-Then watch a round go by.
+We start it in another shell now,
+and watch a round go by.
 
 ## The answer
 
@@ -345,6 +345,12 @@ The program then reports which of the four known minima it landed nearest.
 Which one that is depends on the seed.
 All four are equally good.
 The search settles on whichever its batches reached first.
+
+We have driven a Gaussian process across a pool of 80 workers,
+and landed on one of the four minima of a function
+we never told the optimizer anything about.
+The same three files, with a different objective and a different space,
+are a calibration of a real model.
 
 ## Next steps
 

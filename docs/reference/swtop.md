@@ -12,7 +12,7 @@ To watch a run with it, see
 
 ## Command line
 
-`swtop` takes the `ds-service` address (`host:port`) you gave the executor.
+`swtop` takes the `ds-service` address (`host:port`) the executor was given.
 
 ```sh
 swtop 10.0.0.1:5051          # every 2 seconds
@@ -30,8 +30,8 @@ swtop 10.0.0.1:5051 --plain  # frames of text, no UI
 | `q` | Quit |
 | `r` | Poll now, rather than waiting for the next interval |
 
-`swtop` runs until you quit it or interrupt it with Ctrl-C.
-You start nothing for it on the cluster side.
+`swtop` runs until it is quit or interrupted with Ctrl-C.
+Nothing has to be started for it on the cluster side.
 The executor and the workers publish what it reads as they go.
 
 ## What the screen shows
@@ -77,7 +77,7 @@ The blocks come from different places:
 
 - **Progress** is what the driver's current `wait` or `as_completed` call
     works through.
-    It gives the `desc` and `unit` you gave it,
+    It gives the call's `desc` and `unit`,
     how many of its tasks came back,
     and how far along that is.
     In the terminal UI it is a bar.
@@ -110,8 +110,8 @@ cannot read yet shows `?` in the fields it could not read.
 ## Task names
 
 `swtop` lists a task under `-`
-unless you called `executor.set_task_name(task, name)` for it.
-A name you publish after you submit the task
+unless `executor.set_task_name(task, name)` named it.
+A name published after the task was submitted
 appears at the next poll.
 
 `ExploreSpaceSobolQMC` and `OptimizeSpaceBotorch` name what they submit.
@@ -123,7 +123,7 @@ so the names sort in submission order.
 
 ## What the hosts and jobs blocks measure
 
-You start nothing for these.
+Nothing has to be started for these.
 The pilot workers sample the nodes and jobs themselves.
 One worker per node and one per job runs a sampling thread,
 and every 5 seconds each appends to a `ds-service` time series:
@@ -174,7 +174,7 @@ explore  [###############---------]  242/400 point  60%  working
 ```
 
 On a terminal the frames replace each other.
-When you redirect the output, `swtop` appends them instead.
+Redirected output gets them appended instead.
 The blocks and columns are the same either way.
 
 ## When the server cannot be read
@@ -184,5 +184,5 @@ It continues to poll rather than exit.
 In the terminal UI the last good reading stays on the screen,
 so a server restart does not blank the display.
 A text frame carries the message in place of the blocks.
-`swtop` also looks like this when you start it before the server:
+`swtop` also looks like this when it starts before the server:
 it waits, and fills in once there is something to read.

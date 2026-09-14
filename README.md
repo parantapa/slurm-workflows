@@ -71,10 +71,12 @@ with DsServiceServer(interface="ib0") as ds_service:
 print(sum(task.output for task in tasks))
 ```
 
-The executor passes `sbatch_args` straight through to `sbatch`.
-As a result, any Slurm option works.
-You can submit tasks before the workers exist.
-The tasks wait on the queue until a pilot job starts and takes them.
+```
+328350
+```
+
+Tasks can be submitted before the workers exist.
+They wait on the queue until a pilot job starts and takes them.
 
 ## Documentation
 
@@ -98,9 +100,13 @@ The tasks wait on the queue until a pilot job starts and takes them.
 | [About batch Bayesian optimization](docs/explanation/about-batch-bayesian-optimization.md) | Why a search has rounds, where the fit runs, and when it is worth the overhead. |
 | [About what a run publishes](docs/explanation/about-what-a-run-publishes.md) | Why a run is observable from outside itself, and the limits of that. |
 
-- [Developer notes](docs/developer-notes.md)
-- [How to run the tests](docs/how-to-run-tests.md)
-- [Report a bug](https://github.com/parantapa/slurm-hpc-workflows/issues)
+## For contributors
+
+| Document | What it covers |
+| --- | --- |
+| [Developer notes](docs/developer-notes.md) | The layout of the code, where each kind of documentation goes, and the conventions a change is held to. |
+| [How to run the tests](docs/how-to-run-tests.md) | Running the suite, what it mocks, and what it runs for real. |
+| [Report a bug](https://github.com/parantapa/slurm-hpc-workflows/issues) | The issue tracker. |
 
 ## License
 

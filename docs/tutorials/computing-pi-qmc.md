@@ -2,14 +2,15 @@
 
 [<- back to the main README](../../README.md)
 
-This tutorial computes $\pi$ with `ExploreSpaceSobolQMC`.
-That class owns the submit-and-wait loop.
-The sweep draws a low-discrepancy design over a space.
-It evaluates every point of the design across a pool of pilot workers.
-Then it keeps what came back.
+In this tutorial we compute $\pi$ again,
+this time with `ExploreSpaceSobolQMC`,
+which owns the submit-and-wait loop we wrote by hand before.
+The sweep draws a low-discrepancy design over a space,
+evaluates every point of that design across a pool of pilot workers,
+and keeps what came back.
 
-The example runs on the `bii` partition of the Rivanna cluster at UVA.
-It uses the `bii_nssac` account.
+We run on the `bii` partition of the Rivanna cluster at UVA,
+under the `bii_nssac` account.
 
 The complete program can be found at
 [`examples/example_compute_pi_qmc.py`](../../examples/example_compute_pi_qmc.py).
@@ -20,14 +21,14 @@ Run this program from a Rivanna login node.
 Follow
 [How to install slurm-workflows on Rivanna](../how-to-guides/install-on-rivanna.md)
 first.
-Next, clone this repository:
+Next, we clone this repository:
 
 ```sh
 git clone https://github.com/parantapa/slurm-hpc-workflows.git
 cd slurm-hpc-workflows
 ```
 
-Then run it from the root of that clone:
+Then we run it from the root of that clone:
 
 ```sh
 module load miniforge/26.3.2
@@ -39,7 +40,7 @@ python examples/example_compute_pi_qmc.py
 
 A quarter of the unit circle has area $\pi / 4$.
 So a point of the unit square lands inside it with probability $\pi / 4$.
-The program scores a point 4 inside the circle and 0 outside it.
+We score a point 4 inside the circle and 0 outside it.
 The mean score over the design is then an estimate of $\pi$.
 
 The sweep draws the points from a scrambled Sobol' sequence,
@@ -138,11 +139,15 @@ What to watch for while it runs, in order:
 * The sweep draws 4096 Sobol' points over `SAMPLE_SPACE`.
     It submits every point to the `bii` queue as a task.
 * The sweep names the tasks `compute-pi-qmc-explore-0000` and up,
-    so you can follow them in [`swtop`](../how-to-guides/watch-a-run-with-swtop.md).
+    so we can follow them in [`swtop`](../how-to-guides/watch-a-run-with-swtop.md).
 * `run` blocks until every task is back.
 * `save` writes the points, the scores and the whole outputs to a file.
 * The executor cancels the pilot job at the end of its block.
 * The driver averages the scores.
+
+The same number came back from a third as much code.
+We described a space and an objective,
+and the sweep did the submitting, the waiting and the bookkeeping.
 
 ## Next steps
 

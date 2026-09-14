@@ -12,7 +12,7 @@ from slurm_workflows import ExplorationTask, ExploreSpaceSobolQMC
 sweep = ExploreSpaceSobolQMC(tasks, executor, num_exploration_points=None)
 ```
 
-Draws a Sobol' design over each space you give it,
+Draws a Sobol' design over each space it is given,
 evaluates every point of every design across the pool,
 and keeps what came back.
 `tasks` is a **list** of `ExplorationTask`s, one per space.
@@ -48,7 +48,7 @@ What it imports must exist on the compute node.
 
 It returns a **mapping**, not a bare number.
 The entry under `objective_key` is the value, and lower is better.
-Negate a score you want to maximize.
+A score to be maximized must be negated.
 Both classes rank or model only that entry.
 They record every other entry, which is where a runtime,
 a checkpoint path or an unoptimized metric goes.
@@ -62,7 +62,7 @@ because either one silently poisons a GP fit.
 `extra_objective_kwargs` carries what the objective needs
 but the search must not vary.
 It must not shadow a key of `space`.
-A shadowed key raises `ValueError` when you build the run.
+A shadowed key raises `ValueError` at construction.
 
 ## Failures
 

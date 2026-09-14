@@ -23,8 +23,8 @@ The program sees something close to
 ## The vocabulary
 
 **Setup script.** A shell script snippet that every worker runs before it starts.
-Use it to set up the environment (`module load`, `conda activate`)
-on the compute node.
+It is where the compute node's environment comes from,
+which in practice means `module load` and `conda activate`.
 The executor inlines the text of that script, not a path to it,
 into each generated worker script.
 
@@ -142,3 +142,11 @@ The difference between them is not capability
 but who owns the submit-and-wait loop.
 Work that is not a function over a space must own that loop itself,
 which is what `submit` and `wait` are for.
+
+## Related
+
+- [`SlurmPilotExecutor`](../reference/executor.md)
+- [About what a run publishes](about-what-a-run-publishes.md),
+    for the trail the three processes leave behind them
+- [Computing pi on a Slurm cluster](../tutorials/computing-pi.md),
+    which is this model as a program

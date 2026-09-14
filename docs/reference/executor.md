@@ -66,7 +66,7 @@ Generated scripts and all logs land there.
 | `close()` | Cancel all pilot jobs and close the queue-server connection. |
 
 It is also a context manager.
-When you leave the block, Python calls `close()`.
+On leaving the block, Python calls `close()`.
 That call cancels every pilot job, and the executor is spent afterward.
 An exception raised inside the block still propagates:
 
@@ -94,7 +94,7 @@ results = [task.output for task in tasks]
 
 The executor passes `sbatch_args` straight through to `sbatch`,
 so any Slurm option works.
-You can submit tasks before any worker exists:
+Tasks can be submitted before any worker exists:
 they wait on the queue until something pulls them.
 
 ## `define_worker` options
@@ -108,7 +108,7 @@ they wait on the queue until something pulls them.
 | `actor_class_kwargs` | `None` | Keyword arguments for that class's constructor. Only valid with `actor_class_name`. |
 | `python_paths` | `None` | Extra paths prepended to the workers' `sys.path`. |
 | `add_cwd_to_python_path` | `True` | Also add the coordinator's cwd. |
-| `worker_exe` | `"slurm-pilot-worker"` | Worker entry point, if you've wrapped or renamed it. |
+| `worker_exe` | `"slurm-pilot-worker"` | Worker entry point, for a wrapped or renamed one. |
 
 The executor cloudpickles the actor arguments
 and puts them in the `ds-service` key value store.
@@ -120,7 +120,7 @@ They must be picklable.
 Anything they refer to must be importable on the compute node,
 exactly as for the actor class itself.
 They are not part of the group's identity,
-so you can redefine a group with different ones.
+so a group can be redefined with different ones.
 `sbatch_args` are part of it, and a different value asserts.
 Only the workers started after that call read the new values.
 A worker constructs its actor once, when it starts.
@@ -176,7 +176,7 @@ They raise `RuntimeError` and name those queues.
 They check this twice.
 
 **Before the first wait**, and without a call to Slurm,
-they require that you called `scale_workers`
+they require a `scale_workers` call
 for at least one of each pending task's queues.
 `submit` does not check queue names,
 so this check is where a mistyped queue name appears.
@@ -219,10 +219,12 @@ For what to do about each, see
 `output` is a sentinel until the task completes.
 After that it holds the return value,
 or a `RemoteExecutionError(error, error_id)` if the worker raised.
+That class lives in `slurm_workflows.utils`,
+and imports from the package root like everything else.
 `wait` and `as_completed` are what fill it in.
 
 `task_name` is a read-only property, and it is `None`
-until you call `executor.set_task_name(task, name)`.
+until `executor.set_task_name(task, name)` sets it.
 That call stores the name on the queue server, under `task_name:<task_id>`,
 as UTF-8 rather than a pickle.
 Anything that reads the store can therefore read it too.
@@ -264,7 +266,7 @@ they still wait for the rest of the batch.
 | `RAISE_NEVER` | Report and return. |
 
 **Both calls warn about every failure on stderr as they meet it**,
-whichever value you use.
+whichever value the call was given.
 The value decides only whether an exception follows.
 The warning carries the task id
 and, for a worker that raised,
@@ -321,7 +323,7 @@ so anything can read it:
 
 The worker id is the handle the queue server hands out
 (`task_get_worker_id` says which worker took a task).
-This is how you get from a task to the process and node that ran it.
+It is the path from a task to the process and the node that ran it.
 Nothing removes the key when a worker exits.
 
 Workers also sample the node they run on and the Slurm job they belong to.
@@ -361,7 +363,7 @@ The work dir itself defaults to `<cache dir>/slurm-workflows/<executor-name>/<ti
 
 Slurm writes those files.
 The worker process does not redirect its own output.
-Which of the two holds a worker's log depends on how you defined the group:
+Which of the two holds a worker's log depends on the group's definition:
 
 - **`is_batch_worker=False`** (the default) runs the worker under `srun`,
     which fans out over every task in the allocation.

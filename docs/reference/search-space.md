@@ -22,7 +22,7 @@ SPACE = {
 | `IntRange(min, max)` | An `int` in `[min, max]` | |
 | `FloatRange(min, max)` | A `float` in `[min, max]` | |
 | `FloatRange(min, max, log_range=True)` | A `float` in `[min, max]` | Searched in log space, so each decade gets equal budget. Requires `min > 0`. |
-| `CategoricalRange(n)` | An `int` in `[0, n - 1]` | An index into your own list of values. `n = 1` is allowed but is a dead dimension. |
+| `CategoricalRange(n)` | An `int` in `[0, n - 1]` | An index into a caller-supplied list of values. `n = 1` is allowed but is a dead dimension. |
 
 One space can mix all three.
 A parameter the search must not vary

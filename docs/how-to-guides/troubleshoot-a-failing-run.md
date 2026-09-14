@@ -2,6 +2,14 @@
 
 [<- back to the main README](../../README.md)
 
+A run fails in one of three places:
+in a task on a worker, in a wait on the driver,
+or in a pilot job that never got as far as a task.
+Each one leaves its evidence in a different file,
+and none of them puts a traceback in front of you.
+This guide says which file to open,
+and what each error the executor raises means.
+
 ## Start from the `error_id`
 
 A task that raised on its worker comes back as
@@ -98,9 +106,9 @@ Then submit the tasks again.
 Somebody canceled the task through the `ds-service` client directly.
 Nothing in this library cancels a task.
 
-CAUTION: If you still want the output, submit the task again.
+If you still want the output, submit the task again.
 The server never dispatches a canceled task a second time,
-so the output of that task is lost.
+so the output of the canceled one is lost for good.
 
 ## `RuntimeError: Task ... is unknown to the task queue server`
 
