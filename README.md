@@ -106,7 +106,6 @@ They wait on the queue until a pilot job starts and takes them.
 | --- | --- |
 | [Developer notes](docs/developer-notes.md) | The layout of the code, where each kind of documentation goes, and the conventions a change is held to. |
 | [How to run the tests](docs/how-to-run-tests.md) | Running the suite, what it mocks, and what it runs for real. |
-| [Report a bug](https://github.com/parantapa/slurm-hpc-workflows/issues) | The issue tracker. |
 
 ## License
 
