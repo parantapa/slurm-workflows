@@ -55,6 +55,24 @@ class NoCloseActor:
         return "pong"
 
 
+class MapActor:
+    """Maps one item with state built once, for the mapreduce tests."""
+
+    def __init__(self, factor: int = 1) -> None:
+        self.factor = factor
+        self.calls = 0
+
+    def scale(self, x: int) -> int:
+        self.calls += 1
+        return x * self.factor
+
+    def offset(self, x: int, delta: int, sign: int = 1) -> int:
+        return (x * self.factor + delta) * sign
+
+    def explode(self, x: int) -> int:
+        raise ValueError(f"no good: {x}")
+
+
 class EnvironmentActor:
     """Reads the worker environment at construction, as a real actor can."""
 

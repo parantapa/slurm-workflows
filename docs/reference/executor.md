@@ -214,7 +214,7 @@ so a slow item slows one task rather than a fixed share of the work.
 | --- | --- |
 | `description` | Labels the progress `swtop` draws for this call |
 | `queue` | A worker group name, or a list of them, as in `submit` |
-| `map_fn` | Runs once per item, on a worker |
+| `map_fn` | Runs once per item, on a worker. A callable, or the name of a method on the group's actor |
 | `reduce_fn` | Folds one mapped value into the running result |
 | `iterable` | The items. Read out in full before any task starts |
 | `init` | Where every fold starts. Must be the identity of `reduce_fn` |
@@ -256,6 +256,48 @@ map_fn=work, reduce_fn=lambda acc, x: acc + [x], init=[]
 The call folds into a copy of `init`,
 so a `reduce_fn` that folds in place cannot write into the caller's value.
 
+### Mapping with an actor's method
+
+`map_fn` can be the name of a method
+on the actor of the worker group it runs on,
+in place of a callable:
+
+```python
+executor.define_worker(
+    name="gpu",
+    sbatch_args=[...],
+    actor_class_name="my_pkg.model.Model",
+)
+executor.scale_workers("gpu", 2)
+
+score = executor.mapreduce(
+    description="scoring",
+    queue="gpu",
+    map_fn="predict",
+    reduce_fn=operator.add,
+    iterable=batches,
+    init=0,
+    num_tasks=16,
+)
+```
+
+Each task looks the name up once,
+on the actor its worker built at startup.
+An expensive load therefore happens once per worker,
+and not once per item.
+`map_extra_args` and `map_extra_kwargs` reach the method after the item,
+as they reach a callable.
+
+`reduce_fn` is a callable, and takes no method name.
+The final fold runs on the coordinator, where there is no actor.
+
+A method name needs an actor to resolve against,
+so a `queue` whose worker group has none raises `ValueError`.
+A callable `map_fn` runs on any worker group,
+with an actor or without one.
+For the rest of what an actor does, see
+[How to keep per-worker state with actors](../how-to-guides/keep-per-worker-state-with-actors.md).
+
 ### The queue it creates
 
 A call creates a queue named `<executor-name>.mapreduce.<n>.<token>`,
@@ -295,9 +337,8 @@ when the work per item is smaller than the round trip that ships it.
 ### What it refuses
 
 - A `num_tasks` below 1 raises `ValueError`.
-- A `queue` whose worker group has an actor raises `ValueError`.
-    A worker with an actor looks its function up by name on the actor,
-    and `mapreduce` sends a callable.
+- A `map_fn` given as a method name raises `ValueError`
+    where a worker group named in `queue` has no actor to find it on.
 - A `queue` where no worker group has a worker started
     raises `RuntimeError`, before it enqueues anything.
     Unlike `submit`, this call blocks,

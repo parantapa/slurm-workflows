@@ -22,7 +22,7 @@ from ds_service_client import TaskState
 import support_actor
 from slurm_workflows import slurm_pilot_worker as worker_mod
 from slurm_workflows.slurm_pilot_executor import RaiseOnError
-from slurm_workflows.slurm_pilot_worker import slurm_pilot_worker
+from slurm_workflows.slurm_pilot_worker import current_actor, slurm_pilot_worker
 from slurm_workflows.utils import RemoteExecutionError
 from worker_harness import make_worker, poll_worker, run_worker
 from test_monitors import wait_for
@@ -329,6 +329,44 @@ class TestActors:
         executor.wait([task], raise_on_error=RaiseOnError.RAISE_NEVER, desc="test")
         assert isinstance(task.output, RemoteExecutionError)
         assert task.output.error == "actor failure"
+
+    def test_a_callable_runs_as_itself_on_an_actor_worker(
+        self, executor, ds_service_address, tmp_path
+    ):
+        """The payload decides: a string is a method name, a callable is not."""
+        task = executor.submit("cpu", square, 7)
+
+        worker = make_worker(
+            ds_service_address, tmp_path, actor_class_name="support_actor.CounterActor"
+        )
+        run_worker(worker, expect_tasks=1)
+        worker.close()
+
+        executor.wait([task], desc="test")
+        assert task.output == 49
+
+    def test_a_method_name_without_an_actor_is_captured(
+        self, executor, ds_service_address, tmp_path
+    ):
+        task = executor.submit("cpu", "echo", "hello")
+
+        worker = make_worker(ds_service_address, tmp_path)
+        run_worker(worker, expect_tasks=1)
+        worker.close()
+
+        executor.wait([task], raise_on_error=RaiseOnError.RAISE_NEVER, desc="test")
+        assert isinstance(task.output, RemoteExecutionError)
+        assert "no actor" in task.output.error
+
+    def test_the_actor_is_reachable_from_a_task(self, ds_service_address, tmp_path):
+        """What a task that dispatches a method name of its own reads."""
+        worker = make_worker(
+            ds_service_address, tmp_path, actor_class_name="support_actor.CounterActor"
+        )
+
+        assert current_actor() is worker.actor_instance
+        worker.close()
+        assert current_actor() is None
 
     def test_unknown_method_is_captured(self, executor, ds_service_address, tmp_path):
         task = executor.submit("cpu", "no_such_method")

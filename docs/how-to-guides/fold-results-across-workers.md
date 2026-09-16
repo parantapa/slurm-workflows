@@ -78,6 +78,42 @@ Scale the workers up first.
 Unlike `submit`, this call cannot wait for workers that do not exist yet.
 It raises `RuntimeError` instead.
 
+## Map with an actor's method
+
+An expensive load belongs in an actor, once per worker.
+Give `map_fn` the name of one of its methods instead of a callable:
+
+```python
+executor.define_worker(
+    name="gpu",
+    sbatch_args=SBATCH_ARGS,
+    actor_class_name="my_pkg.model.Model",
+)
+executor.scale_workers("gpu", 2)
+
+score = executor.mapreduce(
+    description="scoring",
+    queue="gpu",
+    map_fn="predict",
+    reduce_fn=add,
+    iterable=batches,
+    init=0,
+    num_tasks=16,
+)
+```
+
+Each task looks `predict` up once, on the actor its worker built at startup.
+The model loads once per worker, whatever the number of items.
+`map_extra_args` and `map_extra_kwargs` reach the method after the item,
+as they reach a callable.
+
+Only `map_fn` takes a method name.
+`reduce_fn` runs here as well as on the workers,
+and there is no actor here.
+Give the name of a method the actor has,
+on a group you declared an actor for.
+Anything else raises `ValueError` before the call enqueues a thing.
+
 ## Choose the two numbers separately
 
 `num_tasks` is how many tasks drain the queue, not how many items there are.
@@ -110,18 +146,17 @@ The fold is unchanged, because the chunk's count folds like a file's count.
 ## Watch it
 
 `description` labels the progress `swtop` draws.
-That bar counts the tasks, not the items,
-so it moves a few dozen times over a run of ten thousand files.
+That bar counts the tasks, not the items.
+A run over ten thousand files moves it a few dozen times.
 The items appear in `swtop`'s task table instead,
 under ids that carry `.mapreduce.`.
 They complete one by one while the bar sits still.
 
 ## What it will not do
 
-- **Run on a worker group with an actor.**
-    A worker with an actor looks its function up by name on that actor,
-    and this call sends a callable.
-    It raises `ValueError` rather than failing on the node.
+- **Take a method name for `reduce_fn`.**
+    That fold runs on the coordinator too, where no actor exists.
+    Only `map_fn` takes one.
 - **Return a partial answer.**
     A task that fails raises `RuntimeError`, as `wait` does.
     A fold missing a shard of its input is not worth returning.

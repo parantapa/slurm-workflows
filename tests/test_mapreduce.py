@@ -32,7 +32,10 @@ from slurm_workflows.slurm_pilot_executor import (
     SlurmPilotExecutor,
     _mapreduce_task,
 )
+from slurm_workflows.slurm_pilot_worker import current_actor
 from slurm_workflows.swtop import ALL_TASK_IDS
+
+import support_actor
 
 from worker_harness import make_worker, run_worker
 
@@ -96,9 +99,18 @@ def worker_thread(ds_service_address, tmp_path):
     """Run a real worker in a thread until it completes `expect_tasks`."""
     started: list[tuple] = []
 
-    def start(expect_tasks: int, group: str = "cpu", name: str = "worker-0"):
+    def start(
+        expect_tasks: int,
+        group: str = "cpu",
+        name: str = "worker-0",
+        actor_class_name: str = "",
+    ):
         worker = make_worker(
-            ds_service_address, tmp_path / name, group=group, name=name
+            ds_service_address,
+            tmp_path / name,
+            group=group,
+            name=name,
+            actor_class_name=actor_class_name,
         )
         thread = threading.Thread(
             target=run_worker, args=(worker, expect_tasks), daemon=True
@@ -296,6 +308,125 @@ class TestResults:
         )
 
         assert sorted(got) == [x * x for x in range(10)]
+
+
+# --------------------------------------------------------------------------
+# actors
+# --------------------------------------------------------------------------
+
+
+class TestActors:
+    """`map_fn` as the name of a method on the worker group's actor."""
+
+    @pytest.fixture
+    def actor_group(self, executor):
+        """A worker group whose workers build a `MapActor` with `factor=3`."""
+        executor.define_worker(
+            "act",
+            [],
+            actor_class_name="support_actor.MapActor",
+            actor_class_args=[3],
+        )
+        executor.scale_workers("act", 1)
+
+    def test_a_method_name_maps_on_the_actor(
+        self, executor, actor_group, worker_thread
+    ):
+        worker_thread(
+            expect_tasks=2, group="act", actor_class_name="support_actor.MapActor"
+        )
+
+        total = executor.mapreduce(
+            description="scale",
+            queue="act",
+            map_fn="scale",
+            reduce_fn=add,
+            iterable=range(10),
+            init=0,
+            num_tasks=2,
+        )
+
+        assert total == 3 * sum(range(10))
+
+    def test_the_actor_is_the_one_the_worker_built(
+        self, executor, actor_group, worker_thread
+    ):
+        """One actor per worker, not one per item, is the whole point."""
+        support_actor.INSTANCES.clear()
+        worker_thread(
+            expect_tasks=1, group="act", actor_class_name="support_actor.MapActor"
+        )
+
+        executor.mapreduce(
+            description="scale",
+            queue="act",
+            map_fn="scale",
+            reduce_fn=add,
+            iterable=range(6),
+            init=0,
+            num_tasks=1,
+        )
+
+        actor = current_actor()
+        assert isinstance(actor, support_actor.MapActor)
+        assert actor.calls == 6
+
+    def test_map_extra_args_reach_the_method(
+        self, executor, actor_group, worker_thread
+    ):
+        worker_thread(
+            expect_tasks=1, group="act", actor_class_name="support_actor.MapActor"
+        )
+
+        total = executor.mapreduce(
+            description="offset",
+            queue="act",
+            map_fn="offset",
+            reduce_fn=add,
+            iterable=range(5),
+            init=0,
+            num_tasks=1,
+            map_extra_args=(2,),
+            map_extra_kwargs={"sign": -1},
+        )
+
+        assert total == sum(-(x * 3 + 2) for x in range(5))
+
+    def test_a_failing_method_raises(self, executor, actor_group, worker_thread):
+        worker_thread(
+            expect_tasks=1, group="act", actor_class_name="support_actor.MapActor"
+        )
+
+        with pytest.raises(RuntimeError, match="failed on its worker"):
+            executor.mapreduce(
+                description="boom",
+                queue="act",
+                map_fn="explode",
+                reduce_fn=add,
+                iterable=range(4),
+                init=0,
+                num_tasks=1,
+            )
+
+    def test_a_callable_still_runs_on_an_actor_group(
+        self, executor, actor_group, worker_thread
+    ):
+        """The actor is there for a method name, and does not block a callable."""
+        worker_thread(
+            expect_tasks=2, group="act", actor_class_name="support_actor.MapActor"
+        )
+
+        total = executor.mapreduce(
+            description="sum",
+            queue="act",
+            map_fn=identity,
+            reduce_fn=add,
+            iterable=range(10),
+            init=0,
+            num_tasks=2,
+        )
+
+        assert total == 45
 
 
 # --------------------------------------------------------------------------
@@ -571,20 +702,27 @@ class TestEdgeCases:
                 num_tasks="4",
             )
 
-    def test_an_actor_group_is_rejected(self, executor, ds_client):
-        """A worker with an actor looks its function up by name."""
-        executor.define_worker("act", [], actor_class_name="support_actor.CounterActor")
+    def test_a_method_name_needs_an_actor(self, executor, pilot_jobs, ds_client):
+        """Only a worker group with an actor can resolve a method name."""
+        pilot_jobs("cpu")
         with pytest.raises(ValueError, match="actor"):
             executor.mapreduce(
                 description="sum",
-                queue="act",
-                map_fn=identity,
+                queue="cpu",
+                map_fn="scale",
                 reduce_fn=add,
                 iterable=range(4),
                 init=0,
                 num_tasks=2,
             )
         assert ds_client.task_search_id(ALL_TASK_IDS) == []
+
+    def test_a_method_name_on_a_worker_without_an_actor_is_reported(
+        self, ds_service_address, mapreduce_env
+    ):
+        """The worker-side half of the same check, for a group defined elsewhere."""
+        with pytest.raises(RuntimeError, match="no actor"):
+            _mapreduce_task("mr-no-actor", "scale", add, 0, (), {}, (), {})
 
     def test_a_queue_with_no_worker_raises_before_enqueueing(self, executor, ds_client):
         with pytest.raises(RuntimeError, match="no worker started"):

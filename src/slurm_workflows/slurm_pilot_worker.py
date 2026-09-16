@@ -34,6 +34,26 @@ NEXT_TASK_RETRY_TIME_S: float = 0.1
 # `docs/reference/executor.md` lists the fields.
 WORKER_PROCESS_INFO_PREFIX = "worker_process_info:"
 
+# The actor of the worker running in this process, or None.
+# A task reads it through `current_actor()`,
+# which is how a task dispatches a method name of its own.
+_CURRENT_ACTOR: Any | None = None
+
+
+def current_actor() -> Any | None:
+    """The actor of the worker in this process, or None.
+
+    A pilot worker runs one process and builds one actor,
+    so a task that needs the actor reads it here.
+    """
+    return _CURRENT_ACTOR
+
+
+def _set_current_actor(actor: Any | None) -> None:
+    """Record the actor this process runs tasks against."""
+    global _CURRENT_ACTOR
+    _CURRENT_ACTOR = actor
+
 
 class PilotWorkerProcess:
     """One worker process that pulls tasks from its group's queue and runs them.
@@ -96,6 +116,10 @@ class PilotWorkerProcess:
             self._stop_monitors()
             self.client.close()
             raise
+
+        # For a task that dispatches a method name of its own,
+        # such as the one `mapreduce` submits.
+        _set_current_actor(self.actor_instance)
 
     def _build_actor(self, actor_class_name: str) -> Any | None:
         """Import and construct this group's actor, if it has one."""
@@ -166,6 +190,15 @@ class PilotWorkerProcess:
             return default
         return cloudpickle.loads(value)
 
+    def _resolve_method(self, name: str) -> Any:
+        """Look one method name up on this worker's actor."""
+        if self.actor_instance is None:
+            raise RuntimeError(
+                f"Task names the method {name!r}, "
+                f"but worker group {self.group!r} has no actor"
+            )
+        return getattr(self.actor_instance, name)
+
     def _stop_monitors(self) -> None:
         """Stop whatever monitoring this worker started.
 
@@ -185,6 +218,10 @@ class PilotWorkerProcess:
 
         self.client.close()
         if self.actor_instance is not None:
+            # Only this worker's own actor, since a test can build two
+            # in one process and the second one is still running.
+            if current_actor() is self.actor_instance:
+                _set_current_actor(None)
             if hasattr(self.actor_instance, "close"):
                 self.actor_instance.close()
             self.actor_instance = None
@@ -218,8 +255,8 @@ class PilotWorkerProcess:
                         task.task_id,
                     )
                     function = cloudpickle.loads(task.function)
-                    if self.actor_instance is not None:
-                        function = getattr(self.actor_instance, function)
+                    if isinstance(function, str):
+                        function = self._resolve_method(function)
                     args, kwargs = cloudpickle.loads(task.input)
 
                     self.logger.info("task_id=%s: Executing ...", task.task_id)

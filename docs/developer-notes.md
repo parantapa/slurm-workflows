@@ -259,6 +259,22 @@ and keeps two processes' tasks comparable.
 The one-executor-per-server invariant says two processes never share a server.
 But a stale `Task` from a restarted driver still produces that case.
 
+**The payload decides how the worker resolves a task's function.**
+`main` looks a `str` up on the actor, and calls a callable as it is.
+The check is the type of what `task.function` unpickles to,
+never whether the group has an actor.
+A group with an actor therefore still runs a plain callable,
+which is what lets `mapreduce` submit its own task function there.
+A `str` with no actor to find it on raises,
+rather than failing later as a call on a string.
+
+**The worker publishes its actor to the process, as `current_actor()`.**
+A task the worker runs has no argument that carries the actor,
+so `_mapreduce_task` reads it from the module.
+One pilot worker is one process and one actor, so a module global holds it.
+`close()` clears it, and only when the actor it holds is this worker's own,
+because a test builds two workers in one process.
+
 **Actor constructor arguments travel through the key value store.**
 `define_worker` cloudpickles `actor_class_args` and `actor_class_kwargs`
 into `actor_class_args:<group>` and `actor_class_kwargs:<group>`,
@@ -368,13 +384,20 @@ collides with the item tasks the first run left behind.
 `task_add` refuses a duplicate id,
 so that collision fails the call with items already on the server.
 
+**A mapreduce task resolves a method name once, not once per item.**
+A worker builds its actor at startup and keeps it for the Slurm job.
+The bound method is therefore the same for every item the task folds.
+`reduce_fn` takes no method name at all,
+because the coordinator folds the partial results with it
+and there is no actor there.
+
 **A mapreduce task builds a client of its own.**
 A task has no handle on the worker's client,
 and that client belongs to the worker's own loop in any case.
 `DsServiceClient()` reads `DS_SERVER_ADDRESS`,
 and the task claims its items under `PILOT_WORKER_ID`.
-`PilotWorkerProcess.__init__` puts both in the environment,
-so a test that drives that class gets them,
+`PilotWorkerProcess.__init__` puts both in the environment.
+A test that drives that class gets them,
 and one that calls the task function directly sets them itself.
 
 A `with` block closes the client.

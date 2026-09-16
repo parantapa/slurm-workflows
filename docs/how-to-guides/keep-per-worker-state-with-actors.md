@@ -51,6 +51,31 @@ tasks = [executor.submit("gpu", "predict", item) for item in dataset]
 executor.wait(tasks, desc="predict")
 ```
 
+A callable still runs on a worker with an actor.
+The worker takes a string as a method name, and a callable as itself.
+A group with an actor therefore also serves ordinary tasks.
+
+## Fold the results on the workers
+
+`mapreduce` takes a method name for its `map_fn`.
+A fold over a large dataset therefore reaches the actor as well:
+
+```python
+score = executor.mapreduce(
+    description="scoring",
+    queue="gpu",
+    map_fn="predict",
+    reduce_fn=operator.add,
+    iterable=batches,
+    init=0,
+    num_tasks=16,
+)
+```
+
+`reduce_fn` stays a callable, because that fold also runs on the coordinator.
+[How to fold results across workers](fold-results-across-workers.md)
+covers the rest.
+
 ## If the class takes constructor arguments
 
 Pass them with `actor_class_args` and `actor_class_kwargs`:
@@ -84,5 +109,6 @@ Scale the group down and back up to rebuild the actors.
 ## Related
 
 - [`define_worker` options](../reference/executor.md#define_worker-options)
+- [How to fold results across workers](fold-results-across-workers.md)
 - [How to troubleshoot a failing run](troubleshoot-a-failing-run.md),
     for a `ModuleNotFoundError` from an actor's constructor

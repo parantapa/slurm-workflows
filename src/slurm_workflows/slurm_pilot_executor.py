@@ -42,6 +42,8 @@ from .utils import (
 
 from .templates import render_template
 
+from .slurm_pilot_worker import current_actor
+
 # What a `Task`'s `output` holds until the task finishes.
 # A task that never ran keeps it.
 NoOutput = object()
@@ -188,9 +190,20 @@ class _Progress:
         )
 
 
+def _resolve_map_method(name: str) -> Callable:
+    """Look one map method name up on the actor of the worker running it."""
+    actor = current_actor()
+    if actor is None:
+        raise RuntimeError(
+            f"mapreduce map_fn names the method {name!r}, "
+            f"but the worker running this task has no actor"
+        )
+    return getattr(actor, name)
+
+
 def _mapreduce_task(
     mr_queue: str,
-    map_fn: Callable,
+    map_fn: Callable | str,
     reduce_fn: Callable,
     init: Any,
     map_args: tuple,
@@ -203,6 +216,12 @@ def _mapreduce_task(
     # One worker runs one task at a time,
     # so its id names this mapreduce task as well.
     worker_id = os.environ["PILOT_WORKER_ID"]
+
+    # Once, not once per item: a worker builds its actor at startup
+    # and keeps it for the life of the Slurm job.
+    if isinstance(map_fn, str):
+        map_fn = _resolve_map_method(map_fn)
+
     result = init
 
     # A client of this task's own.
@@ -540,17 +559,18 @@ class SlurmPilotExecutor:
 
         return self._submit(queue, fn, *args, **kwargs)
 
-    def _reject_actor_queues(self, queue: list[str], what: str) -> None:
-        """Refuse a call that no worker group with an actor can run."""
-        actors = sorted(
+    def _require_actor_queues(self, queue: list[str], what: str) -> None:
+        """Refuse a method name where a worker group has no actor to find it on."""
+        plain = sorted(
             name
             for name in queue
-            if (group := self.groups.get(name)) is not None and group.actor_class_name
+            if (group := self.groups.get(name)) is not None
+            and not group.actor_class_name
         )
-        if actors:
+        if plain:
             raise ValueError(
-                f"{what} sends a callable, which a worker group with an actor "
-                f"cannot run, and these groups have one: {actors}"
+                f"{what} names a method, which only a worker group with an "
+                f"actor can resolve, and these groups have none: {plain}"
             )
 
     def _require_started_queues(self, queue: list[str], what: str) -> None:
@@ -567,7 +587,7 @@ class SlurmPilotExecutor:
         self,
         description: str,
         queue: str | list[str],
-        map_fn: Callable,
+        map_fn: Callable | str,
         reduce_fn: Callable,
         iterable: Iterable[Any],
         init: Any,
@@ -590,6 +610,13 @@ class SlurmPilotExecutor:
         *reduce_extra_args, **reduce_extra_kwargs)`.
         The first `previous` is `init`.
 
+        `map_fn` is a callable, or the name of a method
+        on the actor of the worker group it runs on.
+        A method name reaches the actor that worker built at startup,
+        so an expensive load happens once per worker rather than once per item.
+        `reduce_fn` is always a callable,
+        because the fold also runs here, where there is no actor.
+
         Each task starts its fold at `init`, and so does this call,
         so `init` must be the identity of `reduce_fn`.
         Which items a task claims depends on how busy the pool is.
@@ -608,9 +635,8 @@ class SlurmPilotExecutor:
         and an empty one returns a copy of `init` without submitting anything.
 
         Raises `ValueError` for a `num_tasks` below 1.
-        Raises it as well for a `queue` whose worker group has an actor.
-        A worker with an actor looks its function up by name,
-        and this call sends a callable.
+        Raises it as well for a `map_fn` given as a method name
+        where a worker group named in `queue` has no actor to find it on.
         Raises `RuntimeError` when no worker group named in `queue`
         has a worker started,
         and when any of the tasks fails, as `wait` does.
@@ -620,7 +646,8 @@ class SlurmPilotExecutor:
 
         if isinstance(queue, str):
             queue = [queue]
-        self._reject_actor_queues(queue, "mapreduce")
+        if isinstance(map_fn, str):
+            self._require_actor_queues(queue, "mapreduce")
 
         map_args = tuple(map_extra_args or ())
         map_kwargs = dict(map_extra_kwargs or {})
