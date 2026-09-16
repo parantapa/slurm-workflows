@@ -372,9 +372,10 @@ so that collision fails the call with items already on the server.
 A task has no handle on the worker's client,
 and that client belongs to the worker's own loop in any case.
 `DsServiceClient()` reads `DS_SERVER_ADDRESS`,
-which the worker's CLI entry point puts in the environment.
-`PilotWorkerProcess` does not,
-so a test that drives the class directly must set it.
+and the task claims its items under `PILOT_WORKER_ID`.
+`PilotWorkerProcess.__init__` puts both in the environment,
+so a test that drives that class gets them,
+and one that calls the task function directly sets them itself.
 
 A `with` block closes the client.
 A pilot worker runs many tasks over the life of its Slurm job.

@@ -380,6 +380,36 @@ class TestWorkerIdentity:
         assert worker.worker_id == "w-1.42.testhost.4242"
         worker.close()
 
+    def test_startup_puts_the_identity_in_the_environment(
+        self, ds_service_address, tmp_path
+    ):
+        """What a task reads to reach the server and to name itself on it."""
+        worker = make_worker(ds_service_address, tmp_path, group="cpu", name="w-1")
+
+        assert os.environ["PILOT_WORKER_NAME"] == "w-1"
+        assert os.environ["PILOT_WORKER_GROUP"] == "cpu"
+        assert os.environ["PILOT_WORKER_ID"] == worker.worker_id
+        assert os.environ["DS_SERVER_ADDRESS"] == ds_service_address
+        worker.close()
+
+    def test_the_environment_is_set_before_the_actor_is_built(
+        self, ds_service_address, tmp_path
+    ):
+        """An actor constructor can open a client of its own."""
+        worker = make_worker(
+            ds_service_address,
+            tmp_path,
+            group="cpu",
+            name="w-1",
+            actor_class_name="support_actor.EnvironmentActor",
+        )
+
+        actor = worker.actor_instance
+        assert actor is not None
+        assert actor.server_address == ds_service_address
+        assert actor.worker_id == worker.worker_id
+        worker.close()
+
     def test_startup_publishes_the_workers_identity(
         self, ds_service_address, ds_client, tmp_path
     ):
@@ -534,13 +564,12 @@ class TestCli:
 
     @pytest.fixture(autouse=True)
     def _restore_process_state(self):
-        """Put `os.environ` and `sys.path` back after each case.
+        """Put `sys.path` back after each case.
 
-        The command writes both directly and undoes neither.
+        The command prepends to it directly and undoes nothing.
         It is a process entry point, and the process is the worker.
-        Without this fixture, a run leaks `DS_SERVER_ADDRESS` into every later test.
-        That is exactly the value `DsServiceClient()` falls back to
-        when the caller gives it no address.
+        The environment is the same story,
+        and the autouse fixture in `conftest.py` restores that for every test.
         """
         env = dict(os.environ)
         path = list(sys.path)
@@ -559,14 +588,6 @@ class TestCli:
                 seen["kwargs"] = kwargs
 
             def main(self):
-                seen["env"] = {
-                    key: os.environ.get(key)
-                    for key in (
-                        "PILOT_WORKER_NAME",
-                        "PILOT_WORKER_GROUP",
-                        "DS_SERVER_ADDRESS",
-                    )
-                }
                 seen["sys_path_head"] = list(sys.path[:2])
                 seen["streams"] = (sys.stdout, sys.stderr)
 
@@ -609,13 +630,6 @@ class TestCli:
 
         assert exit_code == 0
         assert captured["closed"] is True
-
-    def test_sets_worker_environment_variables(self, captured, tmp_path):
-        self.invoke(tmp_path)
-
-        assert captured["env"]["PILOT_WORKER_NAME"] == "worker-0"
-        assert captured["env"]["PILOT_WORKER_GROUP"] == "cpu"
-        assert captured["env"]["DS_SERVER_ADDRESS"] == "127.0.0.1:5051"
 
     def test_prepends_python_paths(self, captured, tmp_path):
         self.invoke(tmp_path)

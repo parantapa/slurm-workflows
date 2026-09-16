@@ -57,6 +57,8 @@ class PilotWorkerProcess:
     ) -> None:
         """Register this worker on the queue server and build its actor.
 
+        Puts this worker's identity in the environment first,
+        so the actor and every task it runs can read it.
         Publishes the worker's identity before it builds the actor.
         As a result, a worker that dies in the constructor
         already recorded where it ran.
@@ -72,6 +74,11 @@ class PilotWorkerProcess:
         # The name carries the group.
         self.worker_id = "%s.%s.%s.%s" % (name, slurm_job_id, hostname, pid)
         self.logger = logging.getLogger("worker_process")
+
+        # Before the client and the actor, so a task this worker runs
+        # can reach the queue server and name itself on it.
+        self._publish_environment()
+
         self.client = DsServiceClient(self.server_address)
 
         # Before the actor is built, so a worker that dies building one
@@ -105,6 +112,13 @@ class PilotWorkerProcess:
         args = self._get_actor_ctor_arg(f"actor_class_args:{self.group}", [])
         kwargs = self._get_actor_ctor_arg(f"actor_class_kwargs:{self.group}", {})
         return klass(*args, **kwargs)
+
+    def _publish_environment(self) -> None:
+        """Put this worker's identity in the environment, for its tasks."""
+        os.environ["PILOT_WORKER_NAME"] = self.name
+        os.environ["PILOT_WORKER_GROUP"] = self.group
+        os.environ["PILOT_WORKER_ID"] = self.worker_id
+        os.environ["DS_SERVER_ADDRESS"] = self.server_address
 
     def _publish_identity(self, slurm_job_id: int, hostname: str, pid: int) -> None:
         """Record who this worker is in the key value store, as one JSON key."""
@@ -268,10 +282,6 @@ def slurm_pilot_worker(
     pid = os.getpid()
 
     logging.basicConfig(format=LOG_FORMAT, level=LOG_LEVEL)
-
-    os.environ["PILOT_WORKER_NAME"] = name
-    os.environ["PILOT_WORKER_GROUP"] = group
-    os.environ["DS_SERVER_ADDRESS"] = server_address
 
     python_paths: list[str] = json.loads(python_paths_json)
     for path in python_paths:

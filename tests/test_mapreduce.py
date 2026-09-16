@@ -6,12 +6,13 @@ so nothing can play the worker's part after the fact.
 Every test that needs a result therefore runs a real worker in a thread,
 the way `test_explore_space.py` does.
 
-The worker-side function `_mapreduce_task` builds a client
-from `DS_SERVER_ADDRESS`.
-The worker's CLI entry point is what sets that variable,
-not `PilotWorkerProcess`,
-so a test driving the class directly has to set it itself.
-That is what the `mapreduce_env` fixture is for.
+The worker-side function `_mapreduce_task` reads two variables
+that `PilotWorkerProcess.__init__` sets,
+`DS_SERVER_ADDRESS` and `PILOT_WORKER_ID`.
+A test that runs a real worker therefore gets them from the worker,
+which is what makes those tests a check on the worker as well.
+A test that calls `_mapreduce_task` directly sets them itself,
+through the `mapreduce_env` fixture.
 """
 
 from __future__ import annotations
@@ -85,8 +86,9 @@ def count_hits(path, threshold):
 
 @pytest.fixture
 def mapreduce_env(monkeypatch, ds_service_address):
-    """The variable the worker's entry point sets, which a task reads."""
+    """What a worker puts in the environment, for a task driven without one."""
     monkeypatch.setenv("DS_SERVER_ADDRESS", ds_service_address)
+    monkeypatch.setenv("PILOT_WORKER_ID", "test-worker.42.testhost.4242")
 
 
 @pytest.fixture
@@ -137,7 +139,7 @@ def item_ids(ds_client) -> list[str]:
 
 
 class TestResults:
-    def test_it_sums_a_range(self, executor, pilot_jobs, worker_thread, mapreduce_env):
+    def test_it_sums_a_range(self, executor, pilot_jobs, worker_thread):
         pilot_jobs("cpu")
         worker_thread(expect_tasks=4)
 
@@ -153,9 +155,7 @@ class TestResults:
 
         assert total == 4950
 
-    def test_every_item_is_mapped_once(
-        self, executor, pilot_jobs, worker_thread, mapreduce_env
-    ):
+    def test_every_item_is_mapped_once(self, executor, pilot_jobs, worker_thread):
         """A fold that keeps the items shows a lost one and a doubled one."""
         pilot_jobs("cpu")
         worker_thread(expect_tasks=3)
@@ -172,9 +172,7 @@ class TestResults:
 
         assert sorted(got) == list(range(50))
 
-    def test_it_passes_the_extra_arguments(
-        self, executor, pilot_jobs, worker_thread, mapreduce_env
-    ):
+    def test_it_passes_the_extra_arguments(self, executor, pilot_jobs, worker_thread):
         pilot_jobs("cpu")
         worker_thread(expect_tasks=2)
 
@@ -194,9 +192,7 @@ class TestResults:
 
         assert total == sum(x * 3 + 1 for x in range(10)) % 100
 
-    def test_one_task_agrees_with_many(
-        self, executor, pilot_jobs, worker_thread, mapreduce_env
-    ):
+    def test_one_task_agrees_with_many(self, executor, pilot_jobs, worker_thread):
         pilot_jobs("cpu")
         worker_thread(expect_tasks=1 + 8)
 
@@ -221,9 +217,7 @@ class TestResults:
 
         assert one == many == 190
 
-    def test_a_queue_list_works(
-        self, executor, pilot_jobs, worker_thread, mapreduce_env
-    ):
+    def test_a_queue_list_works(self, executor, pilot_jobs, worker_thread):
         pilot_jobs("cpu")
         worker_thread(expect_tasks=2)
 
@@ -239,9 +233,7 @@ class TestResults:
 
         assert total == 45
 
-    def test_it_does_not_mutate_init(
-        self, executor, pilot_jobs, worker_thread, mapreduce_env
-    ):
+    def test_it_does_not_mutate_init(self, executor, pilot_jobs, worker_thread):
         """A `reduce_fn` that folds in place leaves the caller's value alone."""
         pilot_jobs("cpu")
         worker_thread(expect_tasks=2)
@@ -261,7 +253,7 @@ class TestResults:
         assert init == []
 
     def test_the_documented_shape_works(
-        self, executor, pilot_jobs, worker_thread, mapreduce_env, tmp_path
+        self, executor, pilot_jobs, worker_thread, tmp_path
     ):
         """The example in `docs/how-to-guides/fold-results-across-workers.md`."""
         pilot_jobs("cpu")
@@ -287,7 +279,7 @@ class TestResults:
         assert hits == sum(max(index - 2, 0) for index in range(20))
 
     def test_the_documented_gather_shape_works(
-        self, executor, pilot_jobs, worker_thread, mapreduce_env
+        self, executor, pilot_jobs, worker_thread
     ):
         """Mapping to a one-item list and concatenating, as the guide shows."""
         pilot_jobs("cpu")
@@ -376,7 +368,7 @@ class TestMapreduceTask:
 
 class TestQueuesAndIds:
     def test_every_item_is_enqueued_before_the_first_task(
-        self, executor, pilot_jobs, worker_thread, mapreduce_env
+        self, executor, pilot_jobs, worker_thread
     ):
         """The invariant a task's "queue is empty" answer rests on."""
         pilot_jobs("cpu")
@@ -401,7 +393,7 @@ class TestQueuesAndIds:
         assert max(items) < min(tasks)
 
     def test_item_ids_do_not_collide_with_task_ids(
-        self, executor, ds_client, pilot_jobs, worker_thread, mapreduce_env
+        self, executor, ds_client, pilot_jobs, worker_thread
     ):
         pilot_jobs("cpu")
         worker_thread(expect_tasks=2)
@@ -429,7 +421,7 @@ class TestQueuesAndIds:
         assert executor.submit("cpu", identity, 1).task_id == f"{executor.name}.task.2"
 
     def test_two_calls_use_two_queues(
-        self, executor, ds_client, pilot_jobs, worker_thread, mapreduce_env
+        self, executor, ds_client, pilot_jobs, worker_thread
     ):
         pilot_jobs("cpu")
         worker_thread(expect_tasks=2)
@@ -450,7 +442,7 @@ class TestQueuesAndIds:
         assert {q.split(".")[2] for q in queues} == {"0", "1"}
 
     def test_it_publishes_progress(
-        self, executor, ds_client, pilot_jobs, worker_thread, mapreduce_env
+        self, executor, ds_client, pilot_jobs, worker_thread
     ):
         pilot_jobs("cpu")
         worker_thread(expect_tasks=3)
@@ -470,9 +462,7 @@ class TestQueuesAndIds:
         assert display["unit"] == "task"
         assert display["total"] == 3
 
-    def test_it_names_its_tasks(
-        self, executor, ds_client, pilot_jobs, worker_thread, mapreduce_env
-    ):
+    def test_it_names_its_tasks(self, executor, ds_client, pilot_jobs, worker_thread):
         """What `swtop` shows for a mapreduce task."""
         pilot_jobs("cpu")
         worker_thread(expect_tasks=2)
@@ -536,7 +526,7 @@ class TestEdgeCases:
         assert got is not init
 
     def test_fewer_items_than_tasks(
-        self, executor, ds_client, pilot_jobs, worker_thread, mapreduce_env
+        self, executor, ds_client, pilot_jobs, worker_thread
     ):
         """`num_tasks` is an upper bound: no task is submitted for no item."""
         pilot_jobs("cpu")
@@ -609,9 +599,7 @@ class TestEdgeCases:
             )
         assert ds_client.task_search_id(ALL_TASK_IDS) == []
 
-    def test_a_failing_map_fn_raises(
-        self, executor, pilot_jobs, worker_thread, mapreduce_env
-    ):
+    def test_a_failing_map_fn_raises(self, executor, pilot_jobs, worker_thread):
         """The worker turns it into a `RemoteExecutionError`, and the wait raises."""
         pilot_jobs("cpu")
         worker_thread(expect_tasks=1)

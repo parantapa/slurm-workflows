@@ -16,6 +16,7 @@ Two deliberate choices here:
 
 from __future__ import annotations
 
+import os
 import sys
 import signal
 import subprocess
@@ -74,6 +75,25 @@ def _hang_guard():
 
     with _time_limit(60.0, "test exceeded its 60s time limit"):
         yield
+
+
+@pytest.fixture(autouse=True)
+def _restore_environ():
+    """Put `os.environ` back after each test.
+
+    `PilotWorkerProcess.__init__` writes `DS_SERVER_ADDRESS` and the
+    `PILOT_WORKER_*` variables, and undoes neither.
+    In a worker the process is the worker, so nothing there has to.
+    Without this fixture, one test leaves a dead server's address behind
+    for every later test.
+    That is exactly the value `DsServiceClient()` falls back to
+    when the caller gives it no address.
+    """
+
+    env = dict(os.environ)
+    yield
+    os.environ.clear()
+    os.environ.update(env)
 
 
 # --------------------------------------------------------------------------

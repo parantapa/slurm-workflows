@@ -265,6 +265,8 @@ No worker group serves that queue.
 Only that call's own tasks claim from it.
 Each of them opens a `ds-service` client of its own,
 from the `DS_SERVER_ADDRESS` the worker puts in the environment.
+Each claims its items under `PILOT_WORKER_ID`,
+so `task_get_worker_id` on an item names the worker that folded it.
 
 Each item becomes a task on it, `<queue>.item.<i>`.
 That task holds the pickled item and no function.
@@ -442,8 +444,12 @@ Inside a task, these environment variables exist:
 
 - `PILOT_WORKER_NAME`, for example `demo.worker.cpu.0`
 - `PILOT_WORKER_GROUP`, the group name
+- `PILOT_WORKER_ID`, the id the worker claims tasks under
 - `DS_SERVER_ADDRESS`, the queue server address
 - plus the usual Slurm variables (`SLURM_JOB_ID`, ...)
+
+The worker process sets the first four when it starts,
+before it builds its actor and before it takes a task.
 
 **The executor publishes each pilot job as it submits it**,
 under `worker_job_info:<worker-name>`, as a JSON object:

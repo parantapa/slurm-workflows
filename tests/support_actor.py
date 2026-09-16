@@ -53,3 +53,13 @@ class NoCloseActor:
 
     def ping(self) -> str:
         return "pong"
+
+
+class EnvironmentActor:
+    """Reads the worker environment at construction, as a real actor can."""
+
+    def __init__(self) -> None:
+        import os
+
+        self.server_address = os.environ["DS_SERVER_ADDRESS"]
+        self.worker_id = os.environ["PILOT_WORKER_ID"]

@@ -13,7 +13,6 @@ import time
 import json
 import uuid
 import pickle
-import socket
 import logging
 import subprocess
 from enum import Enum, auto
@@ -189,12 +188,6 @@ class _Progress:
         )
 
 
-def _mapreduce_worker_id() -> str:
-    """The id a mapreduce task claims items under."""
-    name = os.environ.get("PILOT_WORKER_NAME", "mapreduce")
-    return f"{name}.mapreduce.{socket.gethostname()}.{os.getpid()}"
-
-
 def _mapreduce_task(
     mr_queue: str,
     map_fn: Callable,
@@ -206,7 +199,10 @@ def _mapreduce_task(
     reduce_kwargs: dict,
 ) -> Any:
     """Map and fold every item this task claims from `mr_queue`."""
-    worker_id = _mapreduce_worker_id()
+    # The id of the worker that runs this task, from the environment.
+    # One worker runs one task at a time,
+    # so its id names this mapreduce task as well.
+    worker_id = os.environ["PILOT_WORKER_ID"]
     result = init
 
     # A client of this task's own.
