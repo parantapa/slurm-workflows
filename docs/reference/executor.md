@@ -59,6 +59,7 @@ Generated scripts and all logs land there.
 | `define_worker(name, sbatch_args, ...)` | Register a worker group. Submits nothing. The group name is also the queue name. A second identical definition does nothing. A definition that differs raises `AssertionError`. |
 | `scale_workers(name, count)` | Submit or cancel pilot jobs so the group has `count` jobs. |
 | `submit(queue, fn, *args, **kwargs) -> Task` | Enqueue one task and return a `Task` straight away. `queue` is a group name or a list of them; `fn` is a callable, or a method name (`str`) for actor workers. |
+| `mapreduce(description, queue, map_fn, reduce_fn, iterable, init, num_tasks, ...)` | Map an iterable across the pool and fold the results into one value. Blocks. `init` must be the identity of `reduce_fn`. |
 | `as_completed(tasks, desc, unit="task", raise_on_error=...)` | Yield tasks as their results arrive. `desc` and `unit` label the progress `swtop` draws. Raises `RuntimeError` rather than blocking forever on a task that can never finish. |
 | `wait(tasks, desc, unit="task", raise_on_error=...)` | Same, but discards the iterator. Blocks until all are done. |
 | `set_task_name(task, name)` | Name a task, on the queue server as well as locally. |
@@ -167,6 +168,153 @@ The call appends the count at most once a second while tasks arrive.
 The next call overwrites the key.
 The server therefore holds the display for the most recent wait,
 and the series holds the history of each.
+
+## `mapreduce`
+
+```python
+result = executor.mapreduce(
+    description="counting words",
+    queue="cpu",
+    map_fn=count_words,
+    reduce_fn=operator.add,
+    iterable=chunks,
+    init=0,
+    num_tasks=40,
+)
+```
+
+`mapreduce` runs one function over a whole iterable
+and folds what it produces into a single value.
+It puts each item on a queue of its own.
+Tasks on `queue` drain that queue,
+and the call blocks until all of them are back.
+
+Each task claims items one at a time and computes
+
+```python
+result = reduce_fn(
+    result,
+    map_fn(item, *map_extra_args, **map_extra_kwargs),
+    *reduce_extra_args,
+    **reduce_extra_kwargs,
+)
+```
+
+starting from `init`,
+until the queue holds nothing it can claim.
+It returns that partial result.
+The call then folds the partial results the same way,
+and returns the value.
+
+Nothing divides the items up in advance.
+A task takes the next item whenever it is free,
+so a slow item slows one task rather than a fixed share of the work.
+
+| Argument | Meaning |
+| --- | --- |
+| `description` | Labels the progress `swtop` draws for this call |
+| `queue` | A worker group name, or a list of them, as in `submit` |
+| `map_fn` | Runs once per item, on a worker |
+| `reduce_fn` | Folds one mapped value into the running result |
+| `iterable` | The items. Read out in full before any task starts |
+| `init` | Where every fold starts. Must be the identity of `reduce_fn` |
+| `num_tasks` | How many tasks drain the queue, as an upper bound |
+| `map_extra_args`, `map_extra_kwargs` | Passed to `map_fn` after the item |
+| `reduce_extra_args`, `reduce_extra_kwargs` | Passed to `reduce_fn` after the two values |
+
+Everything here travels by cloudpickle,
+so `map_fn`, `reduce_fn`, `init`, every item
+and every extra argument must be picklable.
+
+### What `reduce_fn` and `init` must satisfy
+
+**`reduce_fn` must be associative.**
+It must also take a partial result as its second argument
+as readily as a mapped one.
+The final fold hands it two partial results.
+Which items a task claimed depends on how busy the pool was,
+so the grouping differs from one run to the next.
+
+**`init` must be the identity of `reduce_fn`.**
+Every task starts its fold at `init`, and so does the call.
+`init` therefore enters the fold once per task, and once more at the end.
+
+```python
+# Right: sum, with 0.
+map_fn=length, reduce_fn=operator.add, init=0
+
+# Right: gather, where map_fn returns a list and reduce_fn concatenates.
+map_fn=lambda x: [work(x)], reduce_fn=operator.add, init=[]
+
+# Wrong: `init` is not an identity, so each task adds 1 of its own.
+map_fn=length, reduce_fn=operator.add, init=1
+
+# Wrong: appending a partial result nests it inside a list.
+map_fn=work, reduce_fn=lambda acc, x: acc + [x], init=[]
+```
+
+The call folds into a copy of `init`,
+so a `reduce_fn` that folds in place cannot write into the caller's value.
+
+### The queue it creates
+
+A call creates a queue named `<executor-name>.mapreduce.<n>.<token>`,
+where `<n>` counts the calls on this executor
+and `<token>` is 8 hex characters of a UUID4.
+No worker group serves that queue.
+Only that call's own tasks claim from it.
+Each of them opens a `ds-service` client of its own,
+from the `DS_SERVER_ADDRESS` the worker puts in the environment.
+
+Each item becomes a task on it, `<queue>.item.<i>`.
+That task holds the pickled item and no function.
+A task marks its item complete once it folds the value in,
+and the output it records is empty.
+The value travels home inside the task that computed it.
+`ds-service` has no way to delete a task,
+so those item tasks stay on the server for the life of the run.
+They are what `swtop` counts,
+and the `.mapreduce.` in the id is how a reader tells them apart.
+
+The tasks that do the folding are ordinary tasks on `queue`,
+named `<mr-queue>.task.<i>`.
+
+### What it costs
+
+Enqueueing is one RPC per item, from the coordinator, before any work starts,
+and there is no batched form of it.
+The whole iterable is also held in memory twice,
+once on the coordinator and once on the server.
+Both say the same thing:
+an item must carry enough work to be worth a round trip.
+Group small units into chunks and map over the chunks
+when the work per item is smaller than the round trip that ships it.
+
+### What it refuses
+
+- A `num_tasks` below 1 raises `ValueError`.
+- A `queue` whose worker group has an actor raises `ValueError`.
+    A worker with an actor looks its function up by name on the actor,
+    and `mapreduce` sends a callable.
+- A `queue` where no worker group has a worker started
+    raises `RuntimeError`, before it enqueues anything.
+    Unlike `submit`, this call blocks,
+    so it cannot wait for workers that do not exist yet.
+- A task that fails raises `RuntimeError`, the way `wait` does.
+    The other tasks keep draining the queue, and their results are discarded.
+
+### Progress
+
+The progress `swtop` draws counts the tasks, not the items,
+so the bar moves `num_tasks` times over the whole call.
+`unit` is `task`.
+`swtop`'s task table is the finer view,
+where the item tasks complete one by one.
+
+Two more things follow from `num_tasks` being an upper bound.
+A call with fewer items than tasks submits one task per item.
+An empty `iterable` returns a copy of `init`,
+creates no queue, submits nothing, and needs no worker.
 
 ## Errors that end a wait
 
@@ -306,6 +454,11 @@ under `worker_job_info:<worker-name>`, as a JSON object:
 | `group` | The group whose queue it will serve |
 | `slurm_job_id` | The job `sbatch` returned |
 | `submit_time` | When it was submitted, an ISO 8601 timestamp with an offset |
+
+**A `mapreduce` call publishes one task per item**,
+on a queue of its own, under `<executor-name>.mapreduce.`.
+Those tasks outlive the call.
+The [`mapreduce`](#mapreduce) section covers the ids and what they hold.
 
 **Each worker process publishes where it runs when it starts**,
 under `worker_process_info:<worker-id>`,

@@ -88,6 +88,7 @@ They wait on the queue until a pilot job starts and takes them.
 | [How to install slurm-workflows on Rivanna](docs/how-to-guides/install-on-rivanna.md) | Installing the package and the `ds-service` binary on Rivanna. |
 | [How to run the task-queue server](docs/how-to-guides/run-the-task-queue-server.md) | Starting a `ds-service` server from the driver and binding it where workers can reach it. |
 | [How to keep per-worker state with actors](docs/how-to-guides/keep-per-worker-state-with-actors.md) | Loading an expensive model or connection once per worker instead of once per task. |
+| [How to fold results across workers](docs/how-to-guides/fold-results-across-workers.md) | Using `mapreduce` to run one function over a whole collection and bring back a single value. |
 | [How to watch a run with `swtop`](docs/how-to-guides/watch-a-run-with-swtop.md) | Following a live run from another shell, and keeping a record of one. |
 | [How to troubleshoot a failing run](docs/how-to-guides/troubleshoot-a-failing-run.md) | Finding the right log, and what each `RuntimeError` means. |
 | [How to resume a search](docs/how-to-guides/resume-a-search.md) | Carrying an optimization on across a walltime limit. |

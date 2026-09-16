@@ -333,6 +333,87 @@ The template inlines `setup_script` verbatim
 into the generated worker script (`{{ setup_script }}`).
 Nothing validates it.
 
+### Mapreduce
+
+**`mapreduce` puts every item on the queue before it submits the first task.**
+This is the whole basis of the call,
+and it is what lets a task read `NoTaskAvailable` as "the work is done".
+`task_get` raises it when no queue it polled has a *ready* task.
+On its own that means everything is claimed,
+not that nothing more arrives.
+The ordering supplies the other half:
+no task can run before every item exists,
+and `mapreduce` adds nothing to the queue afterward.
+
+Break that ordering, by streaming the iterable or by topping the queue up.
+A fast task then drains what is there and sees an empty queue.
+It returns a partial result that covers part of the input.
+Nothing raises.
+The call returns a plausible wrong answer.
+That is why `mapreduce` reads the iterable out into a list first,
+and why a test asserts on the order of the `task_add` calls.
+
+**A mapreduce call gets a queue of its own,
+and no worker group serves it.**
+Workers poll their own group's queue only,
+so that call's own tasks drain the item queue and nothing else does.
+It also stays clear of `_starved_tasks` and `_stranded_tasks`.
+Both look at the queues of the tasks handed to the wait,
+never at the item queue.
+
+The queue name carries a UUID token as well as a counter.
+The counter restarts at 0 in a new process.
+Without the token, a re-run of one executor name against a surviving server
+collides with the item tasks the first run left behind.
+`task_add` refuses a duplicate id,
+so that collision fails the call with items already on the server.
+
+**A mapreduce task builds a client of its own.**
+A task has no handle on the worker's client,
+and that client belongs to the worker's own loop in any case.
+`DsServiceClient()` reads `DS_SERVER_ADDRESS`,
+which the worker's CLI entry point puts in the environment.
+`PilotWorkerProcess` does not,
+so a test that drives the class directly must set it.
+
+A `with` block closes the client.
+A pilot worker runs many tasks over the life of its Slurm job.
+A leaked gRPC channel per task therefore accumulates for all of it.
+
+**A `TimeoutError` in a mapreduce task is not retried.**
+`task_get` is not idempotent.
+A deadline can fire after the server recorded the claim.
+A retry then skips that item.
+The item stays `Running`, and the server never dispatches it again.
+The task then returns a partial result that is silently missing an item.
+
+The error propagates instead, which is loud:
+the worker turns it into a `RemoteExecutionError`,
+and the wait raises.
+
+**A task marks its item done after it folds the value in, not before,
+and it records an empty output.**
+`Complete` on the item queue therefore means "counted",
+which is what a reader of the queue expects.
+The mapped value travels home inside the task that computed it.
+A second copy on the item task
+holds the whole iterable on the server twice.
+
+**The coordinator folds into a copy of `init`.**
+Each task already folds into a copy of its own,
+the one its input deserialized into.
+A `reduce_fn` that folds in place is therefore correct on a worker.
+Without the copy it is not correct at the coordinator.
+There it writes into the caller's own value,
+and a second call starts from the answer of the first.
+
+The copy is a cloudpickle round trip rather than `copy.deepcopy`.
+The local fold and the remote folds then get the same kind of copy,
+and an `init` that cannot travel fails at the call.
+
+The copy does not remove the requirement that `init` be an identity.
+Every task folds it in once, and the call folds it in once more.
+
 ### Logging
 
 **The executor's logger carries the executor's name**
