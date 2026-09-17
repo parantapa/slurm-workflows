@@ -2,7 +2,10 @@
 
 [<- back to the main README](../../README.md)
 
-These steps set up `slurm-workflows` for use on the Rivanna cluster at UVA.
+Nothing here runs until you have two things on Rivanna.
+You need a Python 3.12 environment with `slurm-workflows` in it,
+and the `ds-service` binary on your `PATH`.
+These steps give you both.
 
 ## 1. Load miniforge
 
@@ -30,11 +33,20 @@ conda activate slurm-workflows
 ## 3. Install slurm-workflows
 
 ```sh
+pip install -U slurm-workflows
+```
+
+If you will run a Bayesian search,
+install the `botorch` extra instead:
+
+```sh
 pip install -U "slurm-workflows[botorch]"
 ```
 
-The `botorch` extra installs botorch and torch.
-The Bayesian optimizer needs both.
+That extra brings in botorch and torch,
+which the Bayesian optimizer needs.
+Leave it out for anything else,
+and you leave torch out with it.
 
 ## 4. Install the ds-service binary
 
@@ -68,6 +80,8 @@ Both must print usage text.
 
 * `ds-service: command not found` means the `PATH` change in step 4
     is not active in this shell.
+    Run the `export PATH` line from step 4 again,
+    or open a new shell.
 * `swtop: command not found` means the `slurm-workflows` environment
     is not active.
     Run `conda activate slurm-workflows` again.
@@ -75,6 +89,6 @@ Both must print usage text.
 ## Related
 
 - [Computing pi on a Slurm cluster](../tutorials/computing-pi.md),
-    the first tutorial, which this setup is what you need for
-- [How to run the task-queue server](run-the-task-queue-server.md),
+    the first tutorial, which needs exactly this setup
+- [How to run the `ds-service` server](run-the-ds-service-server.md),
     for what `ds-service` is doing in a run

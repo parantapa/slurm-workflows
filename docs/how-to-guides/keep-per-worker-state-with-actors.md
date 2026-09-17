@@ -9,7 +9,7 @@ Register an **actor class** instead.
 Each worker creates it once at startup,
 and you dispatch **method names** (as strings) instead of functions.
 
-## 1. Write the class
+## Write the actor class
 
 Put the expensive work in `__init__`,
 and the per-task work in a method:
@@ -32,49 +32,37 @@ By default, each worker adds the executor's current working directory
 to its own `sys.path`.
 Add more paths with `python_paths=[...]`.
 
-## 2. Name the class when you define the worker group
+## Name the class when you define the job group
 
 ```python
-executor.define_worker(
+executor.define_job_group(
     name="gpu",
     sbatch_args=["-A my_alloc", "-p gpu", "--gres=gpu:1", "-t 02:00:00"],
     setup_script=SETUP_SCRIPT,
     actor_class_name="my_pkg.model.Model",
 )
-executor.scale_workers("gpu", 2)
+executor.scale_jobs("gpu", 2)
 ```
 
-## 3. Submit method names instead of functions
+## Submit method names instead of functions
 
 ```python
 tasks = [executor.submit("gpu", "predict", item) for item in dataset]
 executor.wait(tasks, desc="predict")
 ```
 
-A callable still runs on a worker with an actor.
-The worker takes a string as a method name, and a callable as itself.
-A group with an actor therefore also serves ordinary tasks.
+If you also have work that needs no actor,
+submit it to this same job group.
+The worker reads a string as a method name, and a callable as itself.
+So a job group with an actor serves ordinary tasks as well.
 
-## Fold the results on the workers
+## If you want the fold to reach the actor
 
-`mapreduce` takes a method name for its `map_fn`.
-A fold over a large dataset therefore reaches the actor as well:
-
-```python
-score = executor.mapreduce(
-    description="scoring",
-    queue="gpu",
-    map_fn="predict",
-    reduce_fn=operator.add,
-    iterable=batches,
-    init=0,
-    num_tasks=16,
-)
-```
-
-`reduce_fn` stays a callable, because that fold also runs on the coordinator.
-[How to fold results across workers](fold-results-across-workers.md)
-covers the rest.
+Give `mapreduce` a method name for its `map_fn`.
+The fold then runs against the actor, not against a shipped function.
+`reduce_fn` stays a callable, because that fold also runs on the driver.
+For the rest, see
+[How to fold results across workers](fold-results-across-workers.md).
 
 ## If the class takes constructor arguments
 
@@ -85,7 +73,7 @@ class Model:
     def __init__(self, checkpoint, device="cpu"):
         self.model = load_expensive_model(checkpoint, device)
 
-executor.define_worker(
+executor.define_job_group(
     name="gpu",
     sbatch_args=["-A my_alloc", "-p gpu", "--gres=gpu:1", "-t 02:00:00"],
     actor_class_name="my_pkg.model.Model",
@@ -94,21 +82,21 @@ executor.define_worker(
 )
 ```
 
-They travel through the queue server, so they must be picklable.
+They travel through the server, so they must be picklable.
 Anything they refer to must be importable on the compute node,
 exactly as for the actor class itself.
 
 ## If you change the arguments mid-run
 
-You can redefine a group with different actor arguments.
+You can redefine a job group with different actor arguments.
 Different `sbatch_args` raise an `AssertionError` instead.
 Only the workers that start after that call read the new values.
-The reason is that each worker creates its actor once, at startup.
-Scale the group down and back up to rebuild the actors.
+Scale the job group down and back up to rebuild the actors.
+Each worker creates its actor once, at startup.
 
 ## Related
 
-- [`define_worker` options](../reference/executor.md#define_worker-options)
+- [`define_job_group` options](../reference/executor.md#define_job_group-options)
 - [How to fold results across workers](fold-results-across-workers.md)
 - [How to troubleshoot a failing run](troubleshoot-a-failing-run.md),
     for a `ModuleNotFoundError` from an actor's constructor

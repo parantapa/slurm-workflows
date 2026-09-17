@@ -34,7 +34,7 @@ from slurm_workflows.swtop import (
     ProgressInfo,
     TaskInfo,
     WorkerInfo,
-    WorkerJobInfo,
+    PilotJobInfo,
     open_collector,
 )
 from slurm_workflows.swtop_tui import SwtopApp, sync_table
@@ -71,14 +71,14 @@ def snapshot(**kwargs) -> Snapshot:
         counts={"ready": 1, "running": 2, "complete": 3, "canceled": 0},
         progress=ProgressInfo("p-1", "explore", "point", 8, 2),
         worker_jobs=[
-            WorkerJobInfo("run.worker.cpu.0", "cpu", "42", "2026-09-07T11:04:57-04:00")
+            PilotJobInfo("run.job.cpu.0", "cpu", "42", "2026-09-07T11:04:57-04:00")
         ],
-        workers=[WorkerInfo("w-id", "cpu", "run.worker.cpu.0", "42", "node-1", "17")],
+        workers=[WorkerInfo("w-id", "cpu", "run.job.cpu.0", "42", "node-1", "17")],
         hosts=[
             SubjectInfo("node-1", {"free_memory": 2 * 1024**3, "load_average": 3.5})
         ],
         jobs=[SubjectInfo("42", {"memory": 1024**3, "cpu": 12.4})],
-        tasks=[TaskInfo("run.task.0", "train-7", "Running", "run.worker.cpu.0")],
+        tasks=[TaskInfo("run.task.0", "train-7", "Running", "run.job.cpu.0")],
     )
     return replace(filled, **kwargs)
 
@@ -192,16 +192,16 @@ class TestDisplay:
                 await pilot.pause()
                 app.apply(snapshot())
 
-                assert rows_of(app, "worker-jobs") == [
-                    ["run.worker.cpu.0", "cpu", "42", "2026-09-07T11:04:57-04:00"]
+                assert rows_of(app, "pilot-jobs") == [
+                    ["run.job.cpu.0", "cpu", "42", "2026-09-07T11:04:57-04:00"]
                 ]
                 assert rows_of(app, "workers") == [
-                    ["run.worker.cpu.0", "cpu", "node-1", "42", "17"]
+                    ["run.job.cpu.0", "cpu", "node-1", "42", "17"]
                 ]
                 assert rows_of(app, "hosts")[0][:3] == ["node-1", "2.0G", "3.50"]
                 assert rows_of(app, "jobs") == [["42", "1.0G", "12.4 cores"]]
                 assert rows_of(app, "tasks") == [
-                    ["train-7", "run.task.0", "Running", "run.worker.cpu.0"]
+                    ["train-7", "run.task.0", "Running", "run.job.cpu.0"]
                 ]
 
         drive(scenario)
@@ -216,10 +216,10 @@ class TestDisplay:
                 await pilot.pause()
                 app.apply(snapshot(workers=[]))
 
-                assert len(rows_of(app, "worker-jobs")) == 1
+                assert len(rows_of(app, "pilot-jobs")) == 1
                 assert rows_of(app, "workers") == []
                 empty = app.query_one("#workers").query_one(".block-empty", Static)
-                assert "no worker processes have registered" in text_of(empty)
+                assert "no workers have registered" in text_of(empty)
 
         drive(scenario)
 
@@ -298,7 +298,7 @@ class TestDisplay:
                 )
 
                 title = app.query_one("#workers").query_one(".block-title", Static)
-                assert text_of(title) == "worker processes (3)"
+                assert text_of(title) == "workers (3)"
 
         drive(scenario)
 
@@ -328,10 +328,8 @@ class TestDisplay:
                 app.apply(snapshot())
 
                 more = [
-                    WorkerInfo("w-id", "cpu", "run.worker.cpu.0", "42", "node-1", "17"),
-                    WorkerInfo(
-                        "w-id2", "cpu", "run.worker.cpu.1", "42", "node-2", "18"
-                    ),
+                    WorkerInfo("w-id", "cpu", "run.job.cpu.0", "42", "node-1", "17"),
+                    WorkerInfo("w-id2", "cpu", "run.job.cpu.1", "42", "node-2", "18"),
                 ]
                 app.apply(snapshot(workers=more))
 
@@ -368,7 +366,7 @@ class TestFailedPoll:
                 app.apply(snapshot(error="TimeoutError: server unreachable"))
 
                 assert rows_of(app, "workers") == [
-                    ["run.worker.cpu.0", "cpu", "node-1", "42", "17"]
+                    ["run.job.cpu.0", "cpu", "node-1", "42", "17"]
                 ]
 
         drive(scenario)

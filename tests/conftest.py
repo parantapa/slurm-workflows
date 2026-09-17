@@ -81,7 +81,7 @@ def _hang_guard():
 def _restore_environ():
     """Put `os.environ` back after each test.
 
-    `PilotWorkerProcess.__init__` writes `DS_SERVER_ADDRESS` and the
+    `PilotWorker.__init__` writes `DS_SERVER_ADDRESS` and the
     `PILOT_WORKER_*` variables, and undoes neither.
     In a worker the process is the worker, so nothing there has to.
     Without this fixture, one test leaves a dead server's address behind
@@ -298,7 +298,7 @@ def fake_slurm(monkeypatch: pytest.MonkeyPatch) -> Generator[FakeSlurm]:
 
 @pytest.fixture
 def executor(ds_service_address: str, fake_slurm: FakeSlurm, tmp_path: Path):
-    """An executor wired to the real queue server and the fake Slurm."""
+    """An executor wired to the real server and the fake Slurm."""
     ex = SlurmPilotExecutor(
         name="testex", server_address=ds_service_address, work_dir=tmp_path / "work"
     )
@@ -322,13 +322,13 @@ def pilot_jobs(executor):
 
     def declare(*names: str) -> None:
         for name in names:
-            executor.define_worker(name, [])
-            executor.scale_workers(name, 1)
+            executor.define_job_group(name, [])
+            executor.scale_jobs(name, 1)
 
     return declare
 
 
 @pytest.fixture
 def setup_script() -> str:
-    """A setup script body, as define_worker expects."""
+    """A setup script body, as define_job_group expects."""
     return "module load gcc/14.2.0\nexport TEST_SETUP=1\n"

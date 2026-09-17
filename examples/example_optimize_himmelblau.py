@@ -7,10 +7,10 @@ import math
 
 from ds_service_client import DsServiceServer
 from slurm_workflows import (
-    ExplorationTask,
+    ExplorationStudy,
     ExploreSpaceSobolQMC,
     FloatRange,
-    OptimizationTask,
+    OptimizationStudy,
     OptimizeSpaceBotorch,
     SlurmPilotExecutor,
 )
@@ -19,12 +19,12 @@ EVAL_SETUP_SCRIPT = ""
 OPTIMIZER_SETUP_SCRIPT = EVAL_SETUP_SCRIPT
 
 NUM_NODES = 2
-TASKS_PER_NODE = 40
+NTASKS_PER_NODE = 40
 
 EVAL_SBATCH_ARGS = [
     "--account=bii_nssac",
     f"--partition=bii --nodes={NUM_NODES}",
-    f"--ntasks-per-node={TASKS_PER_NODE} --cpus-per-task=1 --mem=0",
+    f"--ntasks-per-node={NTASKS_PER_NODE} --cpus-per-task=1 --mem=0",
     "--time=1:00:00",
 ]
 
@@ -35,7 +35,7 @@ OPTIMIZER_SBATCH_ARGS = [
     "--time=1:00:00",
 ]
 
-JOB_NAME = "himmelblau"
+RUN_NAME = "himmelblau"
 
 EXPLORE_RESULTS = "himmelblau-explore.pkl.gz"
 SEARCH_RESULTS = "himmelblau-search.pkl.gz"
@@ -49,10 +49,10 @@ SEARCH_SPACE = {
 
 EXPLORATION_POINTS = 64
 
-SEARCH_PARALLELISM = NUM_NODES * TASKS_PER_NODE
+SEARCH_PARALLELISM = NUM_NODES * NTASKS_PER_NODE
 
-MIN_SEARCH_ITERATIONS = 5
-MAX_SEARCH_ITERATIONS = 30
+MIN_SEARCH_ROUNDS = 5
+MAX_SEARCH_ROUNDS = 30
 PATIENCE = 3
 MIN_IMPROVEMENT = 0.05
 
@@ -76,25 +76,25 @@ def main():
         ds_service.wait_until_ready()
         address = ds_service.address
 
-        with SlurmPilotExecutor(JOB_NAME, address) as executor:
-            executor.define_worker(
+        with SlurmPilotExecutor(RUN_NAME, address) as executor:
+            executor.define_job_group(
                 name="eval",
                 sbatch_args=EVAL_SBATCH_ARGS,
                 setup_script=EVAL_SETUP_SCRIPT,
             )
-            executor.define_worker(
+            executor.define_job_group(
                 name="opt",
                 sbatch_args=OPTIMIZER_SBATCH_ARGS,
                 setup_script=OPTIMIZER_SETUP_SCRIPT,
             )
 
-            executor.scale_workers("eval", 1)
-            executor.scale_workers("opt", 1)
+            executor.scale_jobs("eval", 1)
+            executor.scale_jobs("opt", 1)
 
-            sweep = ExploreSpaceSobolQMC(
+            exploration = ExploreSpaceSobolQMC(
                 [
-                    ExplorationTask(
-                        JOB_NAME,
+                    ExplorationStudy(
+                        RUN_NAME,
                         SEARCH_SPACE,
                         himmelblau,
                         "eval",
@@ -106,23 +106,23 @@ def main():
             )
 
             print(
-                f"\n=== exploration: {sweep.tasks[0].num_exploration_points}"
+                f"\n=== exploration: {exploration.studies[0].num_exploration_points}"
                 f" points, one batch ==="
             )
-            sweep.run()
-            sweep.save(EXPLORE_RESULTS)
+            exploration.run()
+            exploration.save(EXPLORE_RESULTS)
 
             opt = OptimizeSpaceBotorch(
                 [
-                    OptimizationTask(
-                        JOB_NAME,
+                    OptimizationStudy(
+                        RUN_NAME,
                         SEARCH_SPACE,
                         himmelblau,
                         "eval",
                         "opt",
                         SEARCH_PARALLELISM,
-                        min_search_iterations=MIN_SEARCH_ITERATIONS,
-                        max_search_iterations=MAX_SEARCH_ITERATIONS,
+                        min_search_rounds=MIN_SEARCH_ROUNDS,
+                        max_search_rounds=MAX_SEARCH_ROUNDS,
                         patience=PATIENCE,
                         min_improvement=MIN_IMPROVEMENT,
                     )
@@ -132,19 +132,19 @@ def main():
             )
 
             print(
-                f"\n=== search: up to {MAX_SEARCH_ITERATIONS} rounds"
+                f"\n=== search: up to {MAX_SEARCH_ROUNDS} rounds"
                 f" of {SEARCH_PARALLELISM} points ==="
             )
             opt.run()
             opt.save(SEARCH_RESULTS)
 
-    params, value = opt.best_point(JOB_NAME)
+    params, value = opt.best_point(RUN_NAME)
     nearest = min(
         KNOWN_MINIMA,
         key=lambda m: (m[0] - params["x"]) ** 2 + (m[1] - params["y"]) ** 2,
     )
     print(f"\nbest f = {value:.6g} (true minimum is 0)")
-    print(f"  full result: {opt.best_output(JOB_NAME)}")
+    print(f"  full result: {opt.best_output(RUN_NAME)}")
     print(f"  found at x = {params['x']:.4f}, y = {params['y']:.4f}")
     print(f"  nearest known minimum: x = {nearest[0]:.4f}, y = {nearest[1]:.4f}")
 

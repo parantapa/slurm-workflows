@@ -14,7 +14,7 @@ The suite takes about 55s end to end.
 Everything but the botorch tests takes about 26s,
 and GP fits take the rest.
 Most of that first 26s goes to one ds-service process per test.
-A test against the real queue costs that time.
+A test against the real server costs that time.
 
 The `[test]` extra installs botorch, and so torch.
 That download is large.
@@ -38,7 +38,7 @@ A test can also inject a command failure
 
 **ds-service is real.**
 Each test gets its own server process on a random port.
-So the tests exercise the queue against the real implementation,
+So the tests run against the real server,
 not against a stand-in that can drift from it.
 The server is in-memory,
 so a fresh process per test also means no state leaks between tests.
@@ -48,7 +48,7 @@ so a fresh process per test also means no state leaks between tests.
 `$DS_SERVICE_BIN` if you set it, otherwise `ds-service` on `$PATH`.
 `$DS_SERVICE_BIN` can be a whole command line rather than a path.
 
-If neither finds it, the tests that need a queue skip.
+If neither finds it, the tests that need a server skip.
 The template and `slurm_utils` tests still run.
 
 ## Layout
@@ -59,10 +59,10 @@ Paths are relative to [`tests/`](../tests).
 | --- | --- |
 | `test_templates.py` | The multi-template-per-file loader and every template |
 | `test_slurm_utils.py` | `sbatch`/`squeue`/`scancel` wrappers, `get_clean_environ` |
-| `test_executor.py` | `SlurmPilotExecutor`: worker groups, scaling, submit/poll, lifecycle |
-| `test_worker.py` | `PilotWorkerProcess` and the `slurm-pilot-worker` CLI |
+| `test_executor.py` | `SlurmPilotExecutor`: job groups, scaling, submit/poll, lifecycle |
+| `test_worker.py` | `PilotWorker` and the `slurm-pilot-worker` CLI |
 | `test_monitors.py` | The host and cgroup samplers and the monitor threads |
-| `test_swtop.py` | The `swtop` monitor: what it collects, how it renders as text, and the CLI |
+| `test_swtop.py` | The `swtop` collector: what it collects, how it renders as text, and the CLI |
 | `test_swtop_tui.py` | The Textual app: table updates, what each block shows, and polling |
 | `test_search_space.py` | The range types and the unit cube mapping (no botorch needed) |
 | `test_explore_space.py` | `ExploreSpaceSobolQMC`: the design it draws and what it records (no botorch needed) |
@@ -70,12 +70,12 @@ Paths are relative to [`tests/`](../tests).
 | `test_optimize_space_botorch.py` | `OptimizeSpaceBotorch`: the observations it starts from, rounds, acquisition, search behavior, resuming (skips without botorch) |
 | `conftest.py` | Fixtures: real ds-service, fake Slurm, executor, hang guards |
 | `worker_harness.py` | Runs a real worker's main loop for a bounded number of tasks, or of queue polls |
-| `support_actor.py` | Actor classes; must stay importable by name for actor tests |
+| `support_actor.py` | Actor classes. They must stay importable by name for the actor tests |
 
 ## Notes for future changes
 
 - **Worker tests run a real worker.**
-  `PilotWorkerProcess.main()` loops forever by design,
+  `PilotWorker.main()` loops forever by design,
   and swallows every `Exception`, so a bad task cannot kill a worker.
   `run_worker()` stops it with a `BaseException` from `task_done`,
   after the expected number of tasks.
@@ -132,9 +132,9 @@ Paths are relative to [`tests/`](../tests).
   All four use unimodal objectives on purpose:
   an earlier Himmelblau version of the random-search comparison
   lost 1 run in 10.
-- **Queue name == worker group name.**
-  Only the workers in group `cpu` serve a task on queue `cpu`.
-  The tests rely on this rule to keep groups isolated.
+- **Queue name == job group name.**
+  Only the workers in job group `cpu` serve a task on queue `cpu`.
+  The tests rely on this rule to keep job groups isolated.
 - **Do not wait on an RPC to detect server readiness.**
   A failed first RPC puts the gRPC channel into a ~1s reconnect backoff.
   `DsServiceServer.wait_until_ready()` polls the TCP socket instead.
@@ -147,4 +147,4 @@ Paths are relative to [`tests/`](../tests).
   and translates a missing binary into a skip.
 - **The test server binds `lo`.**
   `DsServiceServer` takes an interface name rather than an address.
-  Loopback keeps a test's queue unreachable from outside the machine.
+  Loopback keeps a test's server unreachable from outside the machine.

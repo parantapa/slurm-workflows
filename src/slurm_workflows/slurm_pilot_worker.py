@@ -1,4 +1,4 @@
-"""The pilot worker: the process that runs tasks on a compute node.
+"""The worker: the process that claims and runs tasks on a compute node.
 
 The generated worker script starts it inside a pilot job.
 User code never constructs it.
@@ -29,10 +29,10 @@ from .monitors import (
 
 NEXT_TASK_RETRY_TIME_S: float = 0.1
 
-# One JSON key per worker process, keyed on its worker id.
+# One JSON key per worker, keyed on its worker id.
 # `swtop` reads it.
 # `docs/reference/executor.md` lists the fields.
-WORKER_PROCESS_INFO_PREFIX = "worker_process_info:"
+WORKER_INFO_PREFIX = "worker_info:"
 
 # The actor of the worker running in this process, or None.
 # A task reads it through `current_actor()`,
@@ -43,7 +43,7 @@ _CURRENT_ACTOR: Any | None = None
 def current_actor() -> Any | None:
     """The actor of the worker in this process, or None.
 
-    A pilot worker runs one process and builds one actor,
+    A worker is one process and builds one actor,
     so a task that needs the actor reads it here.
     """
     return _CURRENT_ACTOR
@@ -55,8 +55,8 @@ def _set_current_actor(actor: Any | None) -> None:
     _CURRENT_ACTOR = actor
 
 
-class PilotWorkerProcess:
-    """One worker process that pulls tasks from its group's queue and runs them.
+class PilotWorker:
+    """One worker that claims tasks from its job group's queue and runs them.
 
     The worker runs on a compute node inside a pilot job.
     The generated worker script starts it.
@@ -75,7 +75,7 @@ class PilotWorkerProcess:
         pid: int,
         monitor_interval: float = DEFAULT_MONITOR_INTERVAL_S,
     ) -> None:
-        """Register this worker on the queue server and build its actor.
+        """Register this worker on the server and build its actor.
 
         Puts this worker's identity in the environment first,
         so the actor and every task it runs can read it.
@@ -96,7 +96,7 @@ class PilotWorkerProcess:
         self.logger = logging.getLogger("worker_process")
 
         # Before the client and the actor, so a task this worker runs
-        # can reach the queue server and name itself on it.
+        # can reach the server and name itself on it.
         self._publish_environment()
 
         self.client = DsServiceClient(self.server_address)
@@ -122,7 +122,7 @@ class PilotWorkerProcess:
         _set_current_actor(self.actor_instance)
 
     def _build_actor(self, actor_class_name: str) -> Any | None:
-        """Import and construct this group's actor, if it has one."""
+        """Import and construct this job group's actor, if it has one."""
         if actor_class_name == "":
             return None
 
@@ -139,13 +139,13 @@ class PilotWorkerProcess:
 
     def _publish_environment(self) -> None:
         """Put this worker's identity in the environment, for its tasks."""
-        os.environ["PILOT_WORKER_NAME"] = self.name
-        os.environ["PILOT_WORKER_GROUP"] = self.group
+        os.environ["PILOT_JOB_NAME"] = self.name
+        os.environ["PILOT_JOB_GROUP"] = self.group
         os.environ["PILOT_WORKER_ID"] = self.worker_id
         os.environ["DS_SERVER_ADDRESS"] = self.server_address
 
     def _publish_identity(self, slurm_job_id: int, hostname: str, pid: int) -> None:
-        """Record who this worker is in the key value store, as one JSON key."""
+        """Record who this worker is in the map, as one JSON key."""
         identity = {
             "group": self.group,
             "name": self.name,
@@ -154,7 +154,7 @@ class PilotWorkerProcess:
             "pid": pid,
         }
         self.client.map_set(
-            f"{WORKER_PROCESS_INFO_PREFIX}{self.worker_id}",
+            f"{WORKER_INFO_PREFIX}{self.worker_id}",
             json.dumps(identity).encode("utf-8"),
         )
 
@@ -180,7 +180,7 @@ class PilotWorkerProcess:
             )
 
     def _get_actor_ctor_arg(self, key: str, default: Any) -> Any:
-        """Read one cloudpickled constructor argument from the key value store.
+        """Read one cloudpickled constructor argument from the map.
 
         A missing key means the caller passed none.
         """
@@ -195,7 +195,7 @@ class PilotWorkerProcess:
         if self.actor_instance is None:
             raise RuntimeError(
                 f"Task names the method {name!r}, "
-                f"but worker group {self.group!r} has no actor"
+                f"but job group {self.group!r} has no actor"
             )
         return getattr(self.actor_instance, name)
 
@@ -284,15 +284,17 @@ class PilotWorkerProcess:
 
 
 @click.command()
-@click.option("--group", type=str, required=True, help="Worker group.")
-@click.option("--name", type=str, required=True, help="Worker job name.")
+@click.option("--group", type=str, required=True, help="Job group name.")
+@click.option("--name", type=str, required=True, help="Pilot job name.")
 @click.option(
     "--actor-class-name",
     type=str,
     required=True,
-    help="Name for actor class in DS server store.",
+    help="Fully qualified class name of the actor, or the empty string.",
 )
-@click.option("--server-address", type=str, required=True, help="Pilot server address.")
+@click.option(
+    "--server-address", type=str, required=True, help="ds-service server address."
+)
 @click.option(
     "--work-dir",
     type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
@@ -313,7 +315,7 @@ def slurm_pilot_worker(
     work_dir: Path,
     python_paths_json: str,
 ) -> None:
-    """Start a slurm pilot worker."""
+    """Start a worker."""
     slurm_job_id = int(os.environ.get("SLURM_JOB_ID", -1))
     hostname = socket.gethostname()
     pid = os.getpid()
@@ -324,7 +326,7 @@ def slurm_pilot_worker(
     for path in python_paths:
         sys.path.insert(0, path)
 
-    worker = PilotWorkerProcess(
+    worker = PilotWorker(
         group=group,
         name=name,
         actor_class_name=actor_class_name,

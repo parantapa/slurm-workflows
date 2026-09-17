@@ -6,7 +6,7 @@ Some work produces one number, not a result per task.
 Counting the rows that match a filter, across ten thousand files, is one.
 Totaling the events a whole set of runs recorded is another.
 One task per item does the job, and it costs twice.
-The coordinator holds every intermediate result,
+The driver holds every intermediate result,
 and each item pays a task's overhead.
 
 `mapreduce` does the summing on the workers instead.
@@ -23,40 +23,17 @@ def count_hits(path, threshold):
         return sum(1 for line in fobj if float(line.split(",")[2]) > threshold)
 ```
 
-## Pick a `reduce_fn` and an `init` that go together
-
-`reduce_fn` folds one value into the running result.
-Each task folds the items it claimed,
-and the call folds the partial results the tasks return.
-Both folds use the same function, so **`reduce_fn` must be associative**,
-and **`init` must be its identity**.
-
-For a count or a total, that is `operator.add` and `0`:
-
-```python
-from operator import add
-```
-
-To gather values rather than total them,
-map each item to a one-item list and concatenate:
-
-```python
-map_fn=lambda path: [summarize(path)], reduce_fn=add, init=[]
-```
-
-Appending instead of concatenating looks equivalent and is not.
-The final fold hands `reduce_fn` a partial result,
-and `acc + [partial]` puts a whole list inside the answer.
-
 ## Call it
 
 ```python
+from operator import add
+
 with SlurmPilotExecutor("scan", address) as executor:
-    executor.define_worker(name="cpu", sbatch_args=SBATCH_ARGS)
-    executor.scale_workers("cpu", 4)
+    executor.define_job_group(name="cpu", sbatch_args=SBATCH_ARGS)
+    executor.scale_jobs("cpu", 4)
 
     hits = executor.mapreduce(
-        description="scanning",
+        desc="scanning",
         queue="cpu",
         map_fn=count_hits,
         reduce_fn=add,
@@ -73,64 +50,65 @@ print(hits)
 which is how `threshold` gets there.
 `reduce_extra_args` and `reduce_extra_kwargs` do the same for `reduce_fn`.
 
-The call blocks until every task is back.
-Scale the workers up first.
-Unlike `submit`, this call cannot wait for workers that do not exist yet.
-It raises `RuntimeError` instead.
+The call blocks until every task is back,
+so scale the job group up before you call it.
+Unlike `submit`, it cannot wait for workers that do not exist yet,
+and raises `RuntimeError` instead.
+
+## Pick a `reduce_fn` and an `init` that go together
+
+Each task folds the items it claimed,
+and the call folds the partial results those tasks return.
+Both folds use the same function,
+so **`reduce_fn` must be associative**, and **`init` must be its identity**.
+For a count or a total, that is `operator.add` and `0`.
+
+To gather values rather than total them,
+map each item to a one-item list and concatenate:
+
+```python
+map_fn=lambda path: [summarize(path)], reduce_fn=add, init=[]
+```
+
+Appending instead of concatenating looks equivalent and is not.
+`acc + [partial]` puts a whole partial result inside the answer.
+
+For the wrong pairings worked through, see
+[What `reduce_fn` and `init` must satisfy](../reference/mapreduce.md#what-reduce_fn-and-init-must-satisfy).
 
 ## Map with an actor's method
 
 An expensive load belongs in an actor, once per worker.
-Give `map_fn` the name of one of its methods instead of a callable:
+On a job group you gave an `actor_class_name`,
+give `map_fn` the name of one of its methods instead of a callable:
 
 ```python
-executor.define_worker(
-    name="gpu",
-    sbatch_args=SBATCH_ARGS,
-    actor_class_name="my_pkg.model.Model",
-)
-executor.scale_workers("gpu", 2)
-
-score = executor.mapreduce(
-    description="scoring",
-    queue="gpu",
-    map_fn="predict",
-    reduce_fn=add,
-    iterable=batches,
-    init=0,
-    num_tasks=16,
-)
+map_fn="predict", reduce_fn=add, init=0
 ```
 
-Each task looks `predict` up once, on the actor its worker built at startup.
-The model loads once per worker, whatever the number of items.
-`map_extra_args` and `map_extra_kwargs` reach the method after the item,
-as they reach a callable.
-
-Only `map_fn` takes a method name.
-`reduce_fn` runs here as well as on the workers,
-and there is no actor here.
-Give the name of a method the actor has,
-on a group you declared an actor for.
-Anything else raises `ValueError` before the call enqueues a thing.
+The model loads once per worker, whatever the number of items,
+because each task resolves the name against the actor
+its worker built at startup.
+For the rules, and for what a job group without an actor raises, see
+[Mapping with an actor's method](../reference/mapreduce.md#mapping-with-an-actors-method).
 
 ## Choose the two numbers separately
 
-`num_tasks` is how many tasks drain the queue, not how many items there are.
+Set `num_tasks` to how many tasks you want draining the queue,
+not to the number of items.
 Size it by the pool, as you size any batch of tasks.
-A few times the number of worker processes is a reasonable start.
+A few times the number of workers is a reasonable start.
 A task that draws slow items then does not hold up the end of the run.
 
-Nothing divides the items up in advance.
-Each task takes the next item whenever it is free.
-The pool therefore absorbs an uneven item, rather than one task's share.
+Nothing divides the items up in advance,
+so each task takes the next item whenever it is free.
 
 ## Chunk the items when each one is small
 
-Every item becomes a task on the queue server,
+Every item becomes a task on the server,
 which costs one round trip to put there.
 Work that takes less time than that round trip
-belongs in groups:
+belongs in chunks:
 
 ```python
 def count_hits_in_chunk(paths, threshold):
@@ -143,26 +121,8 @@ chunks = [paths[i : i + 50] for i in range(0, len(paths), 50)]
 Then map over `chunks` rather than over `paths`.
 The fold is unchanged, because the chunk's count folds like a file's count.
 
-## Watch it
-
-`description` labels the progress `swtop` draws.
-That bar counts the tasks, not the items.
-A run over ten thousand files moves it a few dozen times.
-The items appear in `swtop`'s task table instead,
-under ids that carry `.mapreduce.`.
-They complete one by one while the bar sits still.
-
-## What it will not do
-
-- **Take a method name for `reduce_fn`.**
-    That fold runs on the coordinator too, where no actor exists.
-    Only `map_fn` takes one.
-- **Return a partial answer.**
-    A task that fails raises `RuntimeError`, as `wait` does.
-    A fold missing a shard of its input is not worth returning.
-
 ## Related
 
-- [`mapreduce`](../reference/executor.md#mapreduce)
+- [`mapreduce`](../reference/mapreduce.md)
 - [How to keep per-worker state with actors](keep-per-worker-state-with-actors.md)
 - [How to watch a run with `swtop`](watch-a-run-with-swtop.md)

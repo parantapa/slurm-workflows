@@ -2,10 +2,12 @@
 
 [<- back to the main README](../../README.md)
 
-`swtop` shows a live view of a running workflow.
-The view holds the tasks, the pilot jobs and worker processes,
-and the compute nodes they run on.
-`swtop` needs nothing on the cluster side.
+A run in progress tells you almost nothing.
+The driver prints little,
+and the work is on nodes you are not logged in to.
+`swtop` gives you a live view of the tasks, the pilot jobs and the workers,
+and of the compute nodes they run on.
+It needs nothing on the cluster side.
 
 For the options, the blocks and the columns, see
 [`swtop` reference](../reference/swtop.md).
@@ -22,7 +24,7 @@ swtop 10.0.0.1:5051
 
 If the driver prints its address, copy it from there.
 If not, use `ds.address`
-from the [queue server](run-the-task-queue-server.md) you started.
+from the [`ds-service` server](run-the-ds-service-server.md) you started.
 
 You can start `swtop` before the server is up.
 `swtop` waits, and fills the blocks once there is something to read.
@@ -41,8 +43,9 @@ since `my-run.task.412` says nothing about which point it is.
 You can name a task after you submit it,
 and the name appears at the next poll.
 
-`ExploreSpaceSobolQMC` and `OptimizeSpaceBotorch` name what they submit.
-So a sweep or a search is readable here with no extra work.
+If you are running an exploration or a search, you need do none of this:
+`ExploreSpaceSobolQMC` and `OptimizeSpaceBotorch` name what they submit,
+and the tasks block is readable without your help.
 
 ## Keep a record of a run instead of a live view
 

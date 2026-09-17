@@ -41,8 +41,8 @@ def num_workers(ex: SlurmPilotExecutor, detail: bool = False):
     """Pilot jobs submitted, in total or per group."""
 
     if detail:
-        return {g.name: len(g.workers) for g in ex.groups.values()}
-    return sum(len(g.workers) for g in ex.groups.values())
+        return {g.name: len(g.jobs) for g in ex.groups.values()}
+    return sum(len(g.jobs) for g in ex.groups.values())
 
 
 def drain(ds_client, queue: str, count: int) -> list[str]:
@@ -122,10 +122,10 @@ class TestExecutorName:
         assert task.task_id == "testex.task.0"
 
     def test_it_prefixes_worker_job_names(self, executor, setup_script):
-        executor.define_worker(name="cpu", sbatch_args=[], setup_script=setup_script)
-        executor.scale_workers("cpu", 1)
+        executor.define_job_group(name="cpu", sbatch_args=[], setup_script=setup_script)
+        executor.scale_jobs("cpu", 1)
 
-        assert list(executor.groups["cpu"].workers) == ["testex.worker.cpu.0"]
+        assert list(executor.groups["cpu"].jobs) == ["testex.job.cpu.0"]
 
     @pytest.mark.parametrize("name", ["ab", "a", ""])
     def test_a_short_name_is_rejected(self, ds_service_address, name):
@@ -141,7 +141,7 @@ class TestExecutorName:
             "abc def",  # a job name and a directory name
             "abc.def",  # the separator in task ids and worker names
             "abc/def",
-            "abc:def",  # the separator in key value store keys
+            "abc:def",  # the separator in map keys
         ],
     )
     def test_an_unusable_name_is_rejected(self, ds_service_address, name):
@@ -176,7 +176,7 @@ class TestExecutorName:
 
 
 # --------------------------------------------------------------------------
-# define_worker
+# define_job_group
 # --------------------------------------------------------------------------
 
 
@@ -253,36 +253,36 @@ class TestDefineWorker:
     def test_registers_group_without_launching(
         self, executor, fake_slurm, setup_script
     ):
-        executor.define_worker(
+        executor.define_job_group(
             name="cpu", sbatch_args=["-A alloc"], setup_script=setup_script
         )
 
         assert num_groups(executor) == 1
         assert num_workers(executor) == 0
-        assert fake_slurm.submissions == [], "define_worker must not submit jobs"
+        assert fake_slurm.submissions == [], "define_job_group must not submit jobs"
 
     def test_is_idempotent_for_identical_definitions(self, executor, setup_script):
         for _ in range(3):
-            executor.define_worker(
+            executor.define_job_group(
                 name="cpu", sbatch_args=["-A alloc"], setup_script=setup_script
             )
 
         assert num_groups(executor) == 1
 
     def test_conflicting_redefinition_is_rejected(self, executor, setup_script):
-        executor.define_worker(
+        executor.define_job_group(
             name="cpu", sbatch_args=["-A alloc"], setup_script=setup_script
         )
 
         with pytest.raises(AssertionError):
-            executor.define_worker(
+            executor.define_job_group(
                 name="cpu", sbatch_args=["-A other"], setup_script=setup_script
             )
 
     def test_actor_class_args_are_stored_in_the_key_value_store(
         self, executor, ds_client
     ):
-        executor.define_worker(
+        executor.define_job_group(
             name="cpu",
             sbatch_args=[],
             actor_class_name="support_actor.ConfiguredActor",
@@ -296,7 +296,7 @@ class TestDefineWorker:
         assert kwargs == {"flag": True}
 
     def test_the_keys_are_named_for_the_group(self, executor, ds_client):
-        executor.define_worker(
+        executor.define_job_group(
             name="gpu",
             sbatch_args=[],
             actor_class_name="support_actor.ConfiguredActor",
@@ -308,7 +308,7 @@ class TestDefineWorker:
             ds_client.map_get("actor_class_args:cpu")
 
     def test_an_actor_without_arguments_stores_nothing(self, executor, ds_client):
-        executor.define_worker(
+        executor.define_job_group(
             name="cpu",
             sbatch_args=[],
             actor_class_name="support_actor.CounterActor",
@@ -328,7 +328,7 @@ class TestDefineWorker:
     )
     def test_actor_arguments_need_an_actor_class(self, executor, extra):
         with pytest.raises(ValueError):
-            executor.define_worker(name="cpu", sbatch_args=[], **extra)
+            executor.define_job_group(name="cpu", sbatch_args=[], **extra)
 
     def test_redefining_a_group_replaces_the_stored_arguments(
         self, executor, ds_client
@@ -337,22 +337,22 @@ class TestDefineWorker:
             sbatch_args=[],
             actor_class_name="support_actor.ConfiguredActor",
         )
-        executor.define_worker(name="cpu", actor_class_args=[1], **common)
+        executor.define_job_group(name="cpu", actor_class_args=[1], **common)
 
         # The arguments are not part of the group's identity,
         # so this is not a conflict. Differing `sbatch_args` are one.
-        executor.define_worker(name="cpu", actor_class_args=[2], **common)
+        executor.define_job_group(name="cpu", actor_class_args=[2], **common)
 
         assert num_groups(executor) == 1
         assert cloudpickle.loads(ds_client.map_get("actor_class_args:cpu")) == [2]
 
     def test_cwd_is_added_to_python_path_by_default(self, executor, setup_script):
-        executor.define_worker(name="cpu", sbatch_args=[], setup_script=setup_script)
+        executor.define_job_group(name="cpu", sbatch_args=[], setup_script=setup_script)
 
         assert executor.groups["cpu"].python_paths == [str(Path.cwd())]
 
     def test_python_paths_are_stringified_and_ordered(self, executor, setup_script):
-        executor.define_worker(
+        executor.define_job_group(
             name="cpu",
             sbatch_args=[],
             setup_script=setup_script,
@@ -362,7 +362,7 @@ class TestDefineWorker:
         assert executor.groups["cpu"].python_paths == ["/a", "/b", str(Path.cwd())]
 
     def test_cwd_can_be_omitted(self, executor, setup_script):
-        executor.define_worker(
+        executor.define_job_group(
             name="cpu",
             sbatch_args=[],
             setup_script=setup_script,
@@ -373,35 +373,35 @@ class TestDefineWorker:
         assert executor.groups["cpu"].python_paths == ["/a"]
 
     def test_setup_script_body_reaches_the_worker_script(self, executor, setup_script):
-        executor.define_worker(name="cpu", sbatch_args=[], setup_script=setup_script)
-        executor.scale_workers("cpu", 1)
+        executor.define_job_group(name="cpu", sbatch_args=[], setup_script=setup_script)
+        executor.scale_jobs("cpu", 1)
 
-        script = (executor.work_dir / "testex.worker.cpu.0.sh").read_text()
+        script = (executor.work_dir / "testex.job.cpu.0.sh").read_text()
         assert "module load gcc/14.2.0" in script
         assert "export TEST_SETUP=1" in script
 
     def test_accepts_an_empty_body(self, executor):
-        executor.define_worker(name="cpu", sbatch_args=[], setup_script="")
+        executor.define_job_group(name="cpu", sbatch_args=[], setup_script="")
 
         assert executor.groups["cpu"].setup_script == ""
 
     def test_setup_script_is_optional(self, executor):
-        executor.define_worker(name="cpu", sbatch_args=[])
+        executor.define_job_group(name="cpu", sbatch_args=[])
 
         assert executor.groups["cpu"].setup_script == ""
 
     def test_omitted_setup_script_still_yields_a_runnable_script(self, executor):
-        executor.define_worker(name="cpu", sbatch_args=[])
-        executor.scale_workers("cpu", 1)
+        executor.define_job_group(name="cpu", sbatch_args=[])
+        executor.scale_jobs("cpu", 1)
 
-        script = (executor.work_dir / "testex.worker.cpu.0.sh").read_text()
+        script = (executor.work_dir / "testex.job.cpu.0.sh").read_text()
         assert script.startswith("#!/bin/bash")
         assert ". '/etc/profile'" in script
         assert "slurm-pilot-worker \\" in script
 
     def test_rejects_wrong_argument_types(self, executor, setup_script):
         with pytest.raises(TypeCheckError):
-            executor.define_worker(
+            executor.define_job_group(
                 name="cpu",
                 sbatch_args="-A alloc",  # must be a list
                 setup_script=setup_script,
@@ -409,14 +409,14 @@ class TestDefineWorker:
 
 
 # --------------------------------------------------------------------------
-# scale_workers
+# scale_jobs
 # --------------------------------------------------------------------------
 
 
 class TestScaleWorkers:
     @pytest.fixture
     def defined(self, executor, setup_script):
-        executor.define_worker(
+        executor.define_job_group(
             name="cpu",
             sbatch_args=["-A alloc", "-t 01:00:00"],
             setup_script=setup_script,
@@ -424,105 +424,105 @@ class TestScaleWorkers:
         return executor
 
     def test_unknown_group_is_rejected(self, executor):
-        with pytest.raises(AssertionError, match="Unknown worker type"):
-            executor.scale_workers("nope", 1)
+        with pytest.raises(AssertionError, match="Unknown job group"):
+            executor.scale_jobs("nope", 1)
 
     def test_a_submitted_job_is_published(self, defined, ds_client, fake_slurm):
         """`swtop` reads the jobs from the store. Nothing else announces them."""
-        defined.scale_workers("cpu", 1)
+        defined.scale_jobs("cpu", 1)
 
-        (worker_name,) = defined.groups["cpu"].workers
-        published = json.loads(ds_client.map_get(f"worker_job_info:{worker_name}"))
+        (job_name,) = defined.groups["cpu"].jobs
+        published = json.loads(ds_client.map_get(f"pilot_job_info:{job_name}"))
 
-        assert published["name"] == worker_name
+        assert published["name"] == job_name
         assert published["group"] == "cpu"
         assert published["slurm_job_id"] == fake_slurm.submissions[0].job_id
         # An offset-aware ISO timestamp, so a reader knows which zone it is in.
         assert datetime.fromisoformat(published["submit_time"]).tzinfo is not None
 
     def test_every_job_is_published_under_its_own_key(self, defined, ds_client):
-        defined.scale_workers("cpu", 3)
+        defined.scale_jobs("cpu", 3)
 
-        keys = ds_client.map_search_key("^worker_job_info:")
+        keys = ds_client.map_search_key("^pilot_job_info:")
 
         assert len(keys) == 3
         assert set(keys) == {
-            f"worker_job_info:{name}" for name in defined.groups["cpu"].workers
+            f"pilot_job_info:{name}" for name in defined.groups["cpu"].jobs
         }
 
     def test_a_canceled_job_keeps_its_key(self, defined, ds_client):
         """Nothing deletes it: the store records what the executor submitted."""
-        defined.scale_workers("cpu", 2)
-        defined.scale_workers("cpu", 0)
+        defined.scale_jobs("cpu", 2)
+        defined.scale_jobs("cpu", 0)
 
-        assert len(ds_client.map_search_key("^worker_job_info:")) == 2
+        assert len(ds_client.map_search_key("^pilot_job_info:")) == 2
 
     def test_scaling_up_submits_one_job_per_worker(self, defined, fake_slurm):
-        defined.scale_workers("cpu", 3)
+        defined.scale_jobs("cpu", 3)
 
         assert len(fake_slurm.submissions) == 3
         assert num_workers(defined) == 3
         assert num_workers(defined, detail=True) == {"cpu": 3}
 
     def test_submitted_script_carries_sbatch_args(self, defined, fake_slurm):
-        defined.scale_workers("cpu", 1)
+        defined.scale_jobs("cpu", 1)
 
         directives = fake_slurm.submissions[0].sbatch_directives
         assert directives == ["-A alloc", "-t 01:00:00"]
 
     def test_worker_names_are_unique_and_indexed(self, defined, fake_slurm):
-        defined.scale_workers("cpu", 2)
+        defined.scale_jobs("cpu", 2)
 
         names = [s.job_name for s in fake_slurm.submissions]
-        assert names == ["testex.worker.cpu.0", "testex.worker.cpu.1"]
+        assert names == ["testex.job.cpu.0", "testex.job.cpu.1"]
 
     def test_worker_script_is_written_and_executable(self, defined, fake_slurm):
-        defined.scale_workers("cpu", 1)
+        defined.scale_jobs("cpu", 1)
 
-        script = defined.work_dir / "testex.worker.cpu.0.sh"
+        script = defined.work_dir / "testex.job.cpu.0.sh"
         assert script.exists()
         assert script.stat().st_mode & 0o111
         assert f"--server-address '{defined.server_address}'" in script.read_text()
 
     def test_scaling_up_again_only_adds_the_difference(self, defined, fake_slurm):
-        defined.scale_workers("cpu", 2)
-        defined.scale_workers("cpu", 5)
+        defined.scale_jobs("cpu", 2)
+        defined.scale_jobs("cpu", 5)
 
         assert len(fake_slurm.submissions) == 5
         assert num_workers(defined) == 5
         # Indices keep increasing rather than restarting.
         names = [s.job_name for s in fake_slurm.submissions]
-        assert names[-1] == "testex.worker.cpu.4"
+        assert names[-1] == "testex.job.cpu.4"
 
     def test_scaling_to_same_count_is_a_no_op(self, defined, fake_slurm):
-        defined.scale_workers("cpu", 2)
-        defined.scale_workers("cpu", 2)
+        defined.scale_jobs("cpu", 2)
+        defined.scale_jobs("cpu", 2)
 
         assert len(fake_slurm.submissions) == 2
         assert fake_slurm.cancelled_job_ids == []
 
     def test_scaling_down_cancels_jobs(self, defined, fake_slurm):
-        defined.scale_workers("cpu", 3)
-        defined.scale_workers("cpu", 1)
+        defined.scale_jobs("cpu", 3)
+        defined.scale_jobs("cpu", 1)
 
         assert num_workers(defined) == 1
         assert len(fake_slurm.cancelled_job_ids) == 2
 
     def test_scaling_to_zero_cancels_everything(self, defined, fake_slurm):
-        defined.scale_workers("cpu", 2)
+        defined.scale_jobs("cpu", 2)
         job_ids = [s.job_id for s in fake_slurm.submissions]
 
-        defined.scale_workers("cpu", 0)
+        defined.scale_jobs("cpu", 0)
 
         assert num_workers(defined) == 0
         assert sorted(fake_slurm.cancelled_job_ids) == sorted(job_ids)
 
     def test_already_finished_jobs_are_not_cancelled(self, defined, fake_slurm):
         """Nothing scancels a worker whose job already exited."""
-        defined.scale_workers("cpu", 2)
+        defined.scale_jobs("cpu", 2)
         fake_slurm.running_job_ids.clear()  # both jobs finished on their own
 
-        defined.scale_workers("cpu", 0)
+        defined.scale_jobs("cpu", 0)
 
         assert fake_slurm.cancelled_job_ids == []
         assert num_workers(defined) == 0
@@ -531,35 +531,37 @@ class TestScaleWorkers:
         fake_slurm.fail_command("sbatch", stderr="invalid account")
 
         with pytest.raises(Exception):
-            defined.scale_workers("cpu", 1)
+            defined.scale_jobs("cpu", 1)
 
     def test_squeue_failure_becomes_runtime_error(self, defined, fake_slurm):
-        defined.scale_workers("cpu", 2)
+        defined.scale_jobs("cpu", 2)
         fake_slurm.fail_command("squeue")
 
         with pytest.raises(RuntimeError, match="Failed to get running slurm job ids"):
-            defined.scale_workers("cpu", 0)
+            defined.scale_jobs("cpu", 0)
 
     def test_scancel_failure_becomes_runtime_error(self, defined, fake_slurm):
-        defined.scale_workers("cpu", 2)
+        defined.scale_jobs("cpu", 2)
         fake_slurm.fail_command("scancel")
 
         with pytest.raises(RuntimeError, match="Failed to cancel slurm jobs"):
-            defined.scale_workers("cpu", 0)
+            defined.scale_jobs("cpu", 0)
 
     def test_batch_worker_uses_srun_or_not(
         self, executor, fake_slurm, setup_script, srun_lines
     ):
-        executor.define_worker(
+        executor.define_job_group(
             name="batch",
             sbatch_args=[],
             setup_script=setup_script,
             is_batch_worker=True,
         )
-        executor.define_worker(name="fanout", sbatch_args=[], setup_script=setup_script)
+        executor.define_job_group(
+            name="fanout", sbatch_args=[], setup_script=setup_script
+        )
 
-        executor.scale_workers("batch", 1)
-        executor.scale_workers("fanout", 1)
+        executor.scale_jobs("batch", 1)
+        executor.scale_jobs("fanout", 1)
 
         batch_script, fanout_script = fake_slurm.submissions
         batch_cmds = srun_lines(batch_script.script_text)
@@ -577,15 +579,16 @@ class TestScaleWorkers:
     def test_srun_output_files_are_per_task_and_in_the_work_dir(
         self, executor, fake_slurm, setup_script, srun_lines
     ):
-        executor.define_worker(name="fanout", sbatch_args=[], setup_script=setup_script)
+        executor.define_job_group(
+            name="fanout", sbatch_args=[], setup_script=setup_script
+        )
 
-        executor.scale_workers("fanout", 1)
+        executor.scale_jobs("fanout", 1)
 
         (submission,) = fake_slurm.submissions
         _, per_task = srun_lines(submission.script_text)
         assert (
-            f"--output '{executor.work_dir}/testex.worker.fanout.0-%j-%t.out'"
-            in per_task
+            f"--output '{executor.work_dir}/testex.job.fanout.0-%j-%t.out'" in per_task
         )
 
 
@@ -947,23 +950,23 @@ class TestLiveQueues:
         assert executor._live_queues() == set()
 
     def test_a_defined_but_unscaled_group_is_not_live(self, executor, setup_script):
-        executor.define_worker("cpu", [], setup_script)
+        executor.define_job_group("cpu", [], setup_script)
 
         assert executor._live_queues() == set()
 
     def test_a_group_with_a_queued_job_is_live(self, executor, setup_script):
-        executor.define_worker("cpu", [], setup_script)
-        executor.scale_workers("cpu", 1)
+        executor.define_job_group("cpu", [], setup_script)
+        executor.scale_jobs("cpu", 1)
 
         assert executor._live_queues() == {"cpu"}
 
     def test_only_groups_with_jobs_still_on_the_cluster_are_live(
         self, executor, fake_slurm, setup_script
     ):
-        executor.define_worker("cpu", [], setup_script)
-        executor.define_worker("gpu", [], setup_script)
-        executor.scale_workers("cpu", 1)
-        executor.scale_workers("gpu", 1)
+        executor.define_job_group("cpu", [], setup_script)
+        executor.define_job_group("gpu", [], setup_script)
+        executor.scale_jobs("cpu", 1)
+        executor.scale_jobs("gpu", 1)
         gpu_job = fake_slurm.submissions[-1].job_id
 
         # The gpu job ends, so its group has nothing left on the cluster.
@@ -974,8 +977,8 @@ class TestLiveQueues:
     def test_a_group_is_live_while_any_of_its_jobs_survives(
         self, executor, fake_slurm, setup_script
     ):
-        executor.define_worker("cpu", [], setup_script)
-        executor.scale_workers("cpu", 3)
+        executor.define_job_group("cpu", [], setup_script)
+        executor.scale_jobs("cpu", 3)
         first = fake_slurm.submissions[0].job_id
 
         fake_slurm.running_job_ids.remove(first)
@@ -983,26 +986,26 @@ class TestLiveQueues:
         assert executor._live_queues() == {"cpu"}
 
     def test_queues_argument_restricts_the_answer(self, executor, setup_script):
-        executor.define_worker("cpu", [], setup_script)
-        executor.define_worker("gpu", [], setup_script)
-        executor.scale_workers("cpu", 1)
-        executor.scale_workers("gpu", 1)
+        executor.define_job_group("cpu", [], setup_script)
+        executor.define_job_group("gpu", [], setup_script)
+        executor.scale_jobs("cpu", 1)
+        executor.scale_jobs("gpu", 1)
 
         assert executor._live_queues(["cpu"]) == {"cpu"}
         assert executor._live_queues(["cpu", "gpu"]) == {"cpu", "gpu"}
         assert executor._live_queues([]) == set()
 
     def test_unknown_queue_names_are_absent_not_an_error(self, executor, setup_script):
-        executor.define_worker("cpu", [], setup_script)
-        executor.scale_workers("cpu", 1)
+        executor.define_job_group("cpu", [], setup_script)
+        executor.scale_jobs("cpu", 1)
 
         assert executor._live_queues(["nope"]) == set()
         assert executor._live_queues(["cpu", "nope"]) == {"cpu"}
 
     def test_squeue_failure_propagates(self, executor, fake_slurm, setup_script):
         """`_live_queues` must not report unknown liveness as "nothing is live"."""
-        executor.define_worker("cpu", [], setup_script)
-        executor.scale_workers("cpu", 1)
+        executor.define_job_group("cpu", [], setup_script)
+        executor.scale_jobs("cpu", 1)
         fake_slurm.fail_command("squeue")
 
         with pytest.raises(subprocess.CalledProcessError):
@@ -1019,7 +1022,7 @@ class TestNoWorkerStarted:
 
     def test_a_group_that_was_never_scaled_is_rejected(self, executor, setup_script):
         """Defining a group submits nothing, so no worker exists for it."""
-        executor.define_worker("cpu", [], setup_script)
+        executor.define_job_group("cpu", [], setup_script)
         task = executor.submit("cpu", square, 2)
 
         with pytest.raises(RuntimeError, match="no worker started"):
@@ -1048,8 +1051,8 @@ class TestNoWorkerStarted:
         self, executor, ds_client, setup_script
     ):
         """A finished task in the same batch must not mask the bad one."""
-        executor.define_worker("cpu", [], setup_script)
-        executor.scale_workers("cpu", 1)
+        executor.define_job_group("cpu", [], setup_script)
+        executor.scale_jobs("cpu", 1)
         done = executor.submit("cpu", square, 3)
         drain(ds_client, "cpu", 1)
         executor.wait([done], desc="test")
@@ -1067,8 +1070,8 @@ class TestNoWorkerStarted:
         self, executor, ds_client, setup_script
     ):
         """A queue nobody scaled says nothing about the queues that were."""
-        executor.define_worker("cpu", [], setup_script)
-        executor.scale_workers("cpu", 1)
+        executor.define_job_group("cpu", [], setup_script)
+        executor.scale_jobs("cpu", 1)
         good = [executor.submit("cpu", square, i) for i in range(3)]
         starved = executor.submit("ghost", square, 9)
         drain(ds_client, "cpu", 3)
@@ -1084,8 +1087,8 @@ class TestNoWorkerStarted:
         self, executor, ds_client, setup_script
     ):
         """What RAISE_AFTER_COMPLETED promises: everything that can finish."""
-        executor.define_worker("cpu", [], setup_script)
-        executor.scale_workers("cpu", 1)
+        executor.define_job_group("cpu", [], setup_script)
+        executor.scale_jobs("cpu", 1)
         good = [executor.submit("cpu", square, i) for i in range(3)]
         starved = executor.submit("ghost", square, 9)
         drain(ds_client, "cpu", 3)
@@ -1103,8 +1106,8 @@ class TestNoWorkerStarted:
         self, executor, ds_client, setup_script
     ):
         """One message covers every task on a dead queue."""
-        executor.define_worker("cpu", [], setup_script)
-        executor.scale_workers("cpu", 1)
+        executor.define_job_group("cpu", [], setup_script)
+        executor.scale_jobs("cpu", 1)
         done = executor.submit("cpu", square, 1)
         starved = [executor.submit("ghost", square, i) for i in range(3)]
         drain(ds_client, "cpu", 1)
@@ -1118,8 +1121,8 @@ class TestNoWorkerStarted:
 
     def test_one_live_queue_is_enough(self, executor, ds_client, setup_script):
         """A task submitted to several queues needs a worker on only one."""
-        executor.define_worker("cpu", [], setup_script)
-        executor.scale_workers("cpu", 1)
+        executor.define_job_group("cpu", [], setup_script)
+        executor.scale_jobs("cpu", 1)
         task = executor.submit(["cpu", "ghost"], square, 4)
 
         drain(ds_client, "cpu", 1)
@@ -1129,8 +1132,8 @@ class TestNoWorkerStarted:
 
     def test_finished_tasks_need_no_worker(self, executor, ds_client, setup_script):
         """Nothing is pending, so there is nothing a worker can still run."""
-        executor.define_worker("cpu", [], setup_script)
-        executor.scale_workers("cpu", 1)
+        executor.define_job_group("cpu", [], setup_script)
+        executor.scale_jobs("cpu", 1)
         task = executor.submit("cpu", square, 5)
         drain(ds_client, "cpu", 1)
         executor.wait([task], desc="test")
@@ -1150,7 +1153,7 @@ def check_immediately(monkeypatch):
     """Collapse the liveness interval so one poll triggers a check.
 
     The real 60s gap exists
-    so that a submit before a scale_workers call still works.
+    so that a submit before a scale_jobs call still works.
     These tests are about what happens after the gap elapsed.
     """
 
@@ -1161,8 +1164,8 @@ class TestStrandedTasks:
     def test_raises_when_the_queue_has_no_live_job(
         self, executor, fake_slurm, setup_script, check_immediately, time_limit
     ):
-        executor.define_worker("cpu", [], setup_script)
-        executor.scale_workers("cpu", 1)
+        executor.define_job_group("cpu", [], setup_script)
+        executor.scale_jobs("cpu", 1)
         task = executor.submit("cpu", square, 2)
 
         # Every pilot job for `cpu` ends without draining the queue.
@@ -1175,8 +1178,8 @@ class TestStrandedTasks:
     def test_error_names_the_dead_queues(
         self, executor, fake_slurm, setup_script, check_immediately, time_limit
     ):
-        executor.define_worker("gpu", [], setup_script)
-        executor.scale_workers("gpu", 1)
+        executor.define_job_group("gpu", [], setup_script)
+        executor.scale_jobs("gpu", 1)
         task = executor.submit("gpu", square, 2)
         fake_slurm.running_job_ids.clear()
 
@@ -1188,10 +1191,10 @@ class TestStrandedTasks:
         self, executor, fake_slurm, setup_script, ds_client, check_immediately
     ):
         """Submitting to several queues survives losing one of them."""
-        executor.define_worker("cpu", [], setup_script)
-        executor.define_worker("gpu", [], setup_script)
-        executor.scale_workers("cpu", 1)
-        executor.scale_workers("gpu", 1)
+        executor.define_job_group("cpu", [], setup_script)
+        executor.define_job_group("gpu", [], setup_script)
+        executor.scale_jobs("cpu", 1)
+        executor.scale_jobs("gpu", 1)
         gpu_job = fake_slurm.submissions[-1].job_id
 
         task = executor.submit(["cpu", "gpu"], square, 3)
@@ -1205,8 +1208,8 @@ class TestStrandedTasks:
     def test_wait_raises_too(
         self, executor, fake_slurm, setup_script, check_immediately, time_limit
     ):
-        executor.define_worker("cpu", [], setup_script)
-        executor.scale_workers("cpu", 1)
+        executor.define_job_group("cpu", [], setup_script)
+        executor.scale_jobs("cpu", 1)
         task = executor.submit("cpu", square, 2)
         fake_slurm.running_job_ids.clear()
 
@@ -1217,15 +1220,15 @@ class TestStrandedTasks:
     def test_only_the_stranded_tasks_are_given_up_on(
         self, executor, fake_slurm, setup_script, ds_client, check_immediately
     ):
-        """A group that reaches its walltime must not discard another's work.
+        """A job group that reaches its time limit must not discard another's work.
 
         The shape of a real run: a one-job `opt` pool dies
         while the `eval` pool still works through its round.
         """
-        executor.define_worker("eval", [], setup_script)
-        executor.define_worker("opt", [], setup_script)
-        executor.scale_workers("eval", 1)
-        executor.scale_workers("opt", 1)
+        executor.define_job_group("eval", [], setup_script)
+        executor.define_job_group("opt", [], setup_script)
+        executor.scale_jobs("eval", 1)
+        executor.scale_jobs("opt", 1)
         opt_job = fake_slurm.submissions[-1].job_id
 
         working = [executor.submit("eval", square, i) for i in range(3)]
@@ -1244,10 +1247,10 @@ class TestStrandedTasks:
     def test_the_stranded_count_is_of_tasks(
         self, executor, fake_slurm, setup_script, ds_client, check_immediately
     ):
-        executor.define_worker("eval", [], setup_script)
-        executor.define_worker("opt", [], setup_script)
-        executor.scale_workers("eval", 1)
-        executor.scale_workers("opt", 1)
+        executor.define_job_group("eval", [], setup_script)
+        executor.define_job_group("opt", [], setup_script)
+        executor.scale_jobs("eval", 1)
+        executor.scale_jobs("opt", 1)
         opt_job = fake_slurm.submissions[-1].job_id
 
         working = executor.submit("eval", square, 1)
@@ -1269,8 +1272,8 @@ class TestStrandedTasks:
         self, executor, fake_slurm, setup_script, ds_client, check_immediately
     ):
         """Nothing is pending, so a dead queue is irrelevant."""
-        executor.define_worker("cpu", [], setup_script)
-        executor.scale_workers("cpu", 1)
+        executor.define_job_group("cpu", [], setup_script)
+        executor.scale_jobs("cpu", 1)
         task = executor.submit("cpu", square, 4)
         drain(ds_client, "cpu", 1)
         executor.wait([task], desc="test")
@@ -1283,8 +1286,8 @@ class TestStrandedTasks:
         self, executor, fake_slurm, setup_script, ds_client, check_immediately
     ):
         """Unknown liveness is not dead liveness: keep waiting."""
-        executor.define_worker("cpu", [], setup_script)
-        executor.scale_workers("cpu", 1)
+        executor.define_job_group("cpu", [], setup_script)
+        executor.scale_jobs("cpu", 1)
         task = executor.submit("cpu", square, 5)
         fake_slurm.fail_command("squeue")
 
@@ -1302,11 +1305,11 @@ class TestStrandedTasks:
         submit first, scale workers after.
         Without the initial delay, `as_completed` raises instead of waiting.
         """
-        executor.define_worker("cpu", [], setup_script)
+        executor.define_job_group("cpu", [], setup_script)
         task = executor.submit("cpu", square, 6)
         assert fake_slurm.running_job_ids == []
 
-        executor.scale_workers("cpu", 1)
+        executor.scale_jobs("cpu", 1)
         drain(ds_client, "cpu", 1)
 
         (done,) = list(executor.as_completed([task], desc="test"))
@@ -1350,12 +1353,14 @@ class TestLogging:
             "sharedB", ds_service_address, work_dir=tmp_path / "second"
         )
 
-        # scale_workers is what logs. Anything that writes a record will do.
-        second.define_worker("cpu", [], setup_script)
-        second.scale_workers("cpu", 1)
+        # scale_jobs is what logs. Anything that writes a record will do.
+        second.define_job_group("cpu", [], setup_script)
+        second.scale_jobs("cpu", 1)
 
         assert not (tmp_path / "first" / "executor.log").exists()
-        assert "Starting worker" in (tmp_path / "second" / "executor.log").read_text()
+        assert (
+            "Starting pilot job" in (tmp_path / "second" / "executor.log").read_text()
+        )
 
         first.close()
         second.close()
@@ -1384,8 +1389,8 @@ class TestLogging:
         ex = SlurmPilotExecutor(
             "closes", ds_service_address, work_dir=tmp_path / "work"
         )
-        ex.define_worker("cpu", [], setup_script)
-        ex.scale_workers("cpu", 1)
+        ex.define_job_group("cpu", [], setup_script)
+        ex.scale_jobs("cpu", 1)
 
         ex.close()
 
@@ -1410,10 +1415,10 @@ class TestLogging:
         )
 
         with caplog.at_level(logging.INFO):
-            ex.define_worker("cpu", [], setup_script)
-            ex.scale_workers("cpu", 1)
+            ex.define_job_group("cpu", [], setup_script)
+            ex.scale_jobs("cpu", 1)
 
-        assert "Starting worker" not in caplog.text
+        assert "Starting pilot job" not in caplog.text
         ex.close()
 
 
@@ -1430,8 +1435,8 @@ class TestLifecycle:
     def test_stop_cancels_jobs_but_keeps_executor_usable(
         self, executor, fake_slurm, setup_script
     ):
-        executor.define_worker(name="cpu", sbatch_args=[], setup_script=setup_script)
-        executor.scale_workers("cpu", 2)
+        executor.define_job_group(name="cpu", sbatch_args=[], setup_script=setup_script)
+        executor.scale_jobs("cpu", 2)
         job_ids = [s.job_id for s in fake_slurm.submissions]
 
         executor.stop()
@@ -1442,10 +1447,10 @@ class TestLifecycle:
         assert executor.submit("cpu", square, 2) is not None
 
     def test_close_cancels_all_groups(self, executor, fake_slurm, setup_script):
-        executor.define_worker("a", [], setup_script)
-        executor.define_worker("b", [], setup_script)
-        executor.scale_workers("a", 1)
-        executor.scale_workers("b", 2)
+        executor.define_job_group("a", [], setup_script)
+        executor.define_job_group("b", [], setup_script)
+        executor.scale_jobs("a", 1)
+        executor.scale_jobs("b", 2)
         job_ids = [s.job_id for s in fake_slurm.submissions]
 
         executor.close()
@@ -1455,15 +1460,15 @@ class TestLifecycle:
 
     def test_close_tolerates_squeue_failure(self, executor, fake_slurm, setup_script):
         """Cleanup must not raise when the cluster is unreachable."""
-        executor.define_worker("a", [], setup_script)
-        executor.scale_workers("a", 1)
+        executor.define_job_group("a", [], setup_script)
+        executor.scale_jobs("a", 1)
         fake_slurm.fail_command("squeue")
 
         executor.close()  # must not raise
 
     def test_close_is_idempotent(self, executor, fake_slurm, setup_script):
-        executor.define_worker("a", [], setup_script)
-        executor.scale_workers("a", 1)
+        executor.define_job_group("a", [], setup_script)
+        executor.scale_jobs("a", 1)
 
         executor.close()
         executor.close()  # must not raise
@@ -1474,8 +1479,8 @@ class TestLifecycle:
 
     def test_context_manager_closes_on_exit(self, executor, fake_slurm, setup_script):
         with executor:
-            executor.define_worker("a", [], setup_script)
-            executor.scale_workers("a", 2)
+            executor.define_job_group("a", [], setup_script)
+            executor.scale_jobs("a", 2)
             job_ids = [s.job_id for s in fake_slurm.submissions]
 
         assert sorted(fake_slurm.cancelled_job_ids) == sorted(job_ids)
@@ -1487,8 +1492,8 @@ class TestLifecycle:
         """The executor still cancels the jobs, and the exception still escapes."""
         with pytest.raises(ValueError, match="boom"):
             with executor:
-                executor.define_worker("a", [], setup_script)
-                executor.scale_workers("a", 1)
+                executor.define_job_group("a", [], setup_script)
+                executor.scale_jobs("a", 1)
                 raise ValueError("boom")
 
         assert fake_slurm.cancelled_job_ids == [fake_slurm.submissions[0].job_id]

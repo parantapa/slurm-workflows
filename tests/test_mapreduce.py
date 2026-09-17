@@ -7,10 +7,10 @@ Every test that needs a result therefore runs a real worker in a thread,
 the way `test_explore_space.py` does.
 
 The worker-side function `_mapreduce_task` reads two variables
-that `PilotWorkerProcess.__init__` sets,
+that `PilotWorker.__init__` sets,
 `DS_SERVER_ADDRESS` and `PILOT_WORKER_ID`.
-A test that runs a real worker therefore gets them from the worker,
-which is what makes those tests a check on the worker as well.
+A test that runs a real worker therefore gets them from the worker.
+That makes those tests a check on the worker as well.
 A test that calls `_mapreduce_task` directly sets them itself,
 through the `mapreduce_env` fixture.
 """
@@ -156,7 +156,7 @@ class TestResults:
         worker_thread(expect_tasks=4)
 
         total = executor.mapreduce(
-            description="sum",
+            desc="sum",
             queue="cpu",
             map_fn=identity,
             reduce_fn=add,
@@ -173,7 +173,7 @@ class TestResults:
         worker_thread(expect_tasks=3)
 
         got = executor.mapreduce(
-            description="collect",
+            desc="collect",
             queue="cpu",
             map_fn=wrap,
             reduce_fn=add,
@@ -189,7 +189,7 @@ class TestResults:
         worker_thread(expect_tasks=2)
 
         total = executor.mapreduce(
-            description="weighted",
+            desc="weighted",
             queue="cpu",
             map_fn=scale,
             reduce_fn=add_mod,
@@ -209,7 +209,7 @@ class TestResults:
         worker_thread(expect_tasks=1 + 8)
 
         one = executor.mapreduce(
-            description="one",
+            desc="one",
             queue="cpu",
             map_fn=identity,
             reduce_fn=add,
@@ -218,7 +218,7 @@ class TestResults:
             num_tasks=1,
         )
         many = executor.mapreduce(
-            description="many",
+            desc="many",
             queue="cpu",
             map_fn=identity,
             reduce_fn=add,
@@ -234,7 +234,7 @@ class TestResults:
         worker_thread(expect_tasks=2)
 
         total = executor.mapreduce(
-            description="sum",
+            desc="sum",
             queue=["cpu"],
             map_fn=identity,
             reduce_fn=add,
@@ -252,7 +252,7 @@ class TestResults:
         init: list[int] = []
 
         got = executor.mapreduce(
-            description="collect",
+            desc="collect",
             queue="cpu",
             map_fn=wrap,
             reduce_fn=extend_in_place,
@@ -278,7 +278,7 @@ class TestResults:
             paths.append(str(path))
 
         hits = executor.mapreduce(
-            description="scanning",
+            desc="scanning",
             queue="cpu",
             map_fn=count_hits,
             reduce_fn=operator.add,
@@ -298,7 +298,7 @@ class TestResults:
         worker_thread(expect_tasks=2)
 
         got = executor.mapreduce(
-            description="gather",
+            desc="gather",
             queue="cpu",
             map_fn=lambda x: [x * x],
             reduce_fn=operator.add,
@@ -316,18 +316,18 @@ class TestResults:
 
 
 class TestActors:
-    """`map_fn` as the name of a method on the worker group's actor."""
+    """`map_fn` as the name of a method on the job group's actor."""
 
     @pytest.fixture
     def actor_group(self, executor):
-        """A worker group whose workers build a `MapActor` with `factor=3`."""
-        executor.define_worker(
+        """A job group whose workers build a `MapActor` with `factor=3`."""
+        executor.define_job_group(
             "act",
             [],
             actor_class_name="support_actor.MapActor",
             actor_class_args=[3],
         )
-        executor.scale_workers("act", 1)
+        executor.scale_jobs("act", 1)
 
     def test_a_method_name_maps_on_the_actor(
         self, executor, actor_group, worker_thread
@@ -337,7 +337,7 @@ class TestActors:
         )
 
         total = executor.mapreduce(
-            description="scale",
+            desc="scale",
             queue="act",
             map_fn="scale",
             reduce_fn=add,
@@ -358,7 +358,7 @@ class TestActors:
         )
 
         executor.mapreduce(
-            description="scale",
+            desc="scale",
             queue="act",
             map_fn="scale",
             reduce_fn=add,
@@ -379,7 +379,7 @@ class TestActors:
         )
 
         total = executor.mapreduce(
-            description="offset",
+            desc="offset",
             queue="act",
             map_fn="offset",
             reduce_fn=add,
@@ -399,7 +399,7 @@ class TestActors:
 
         with pytest.raises(RuntimeError, match="failed on its worker"):
             executor.mapreduce(
-                description="boom",
+                desc="boom",
                 queue="act",
                 map_fn="explode",
                 reduce_fn=add,
@@ -417,7 +417,7 @@ class TestActors:
         )
 
         total = executor.mapreduce(
-            description="sum",
+            desc="sum",
             queue="act",
             map_fn=identity,
             reduce_fn=add,
@@ -508,7 +508,7 @@ class TestQueuesAndIds:
         executor.client = recorder
 
         executor.mapreduce(
-            description="sum",
+            desc="sum",
             queue="cpu",
             map_fn=identity,
             reduce_fn=add,
@@ -530,7 +530,7 @@ class TestQueuesAndIds:
         worker_thread(expect_tasks=2)
 
         executor.mapreduce(
-            description="sum",
+            desc="sum",
             queue="cpu",
             map_fn=identity,
             reduce_fn=add,
@@ -559,7 +559,7 @@ class TestQueuesAndIds:
 
         for _ in range(2):
             executor.mapreduce(
-                description="sum",
+                desc="sum",
                 queue="cpu",
                 map_fn=identity,
                 reduce_fn=add,
@@ -579,7 +579,7 @@ class TestQueuesAndIds:
         worker_thread(expect_tasks=3)
 
         executor.mapreduce(
-            description="counting things",
+            desc="counting things",
             queue="cpu",
             map_fn=identity,
             reduce_fn=add,
@@ -599,7 +599,7 @@ class TestQueuesAndIds:
         worker_thread(expect_tasks=2)
 
         executor.mapreduce(
-            description="sum",
+            desc="sum",
             queue="cpu",
             map_fn=identity,
             reduce_fn=add,
@@ -629,7 +629,7 @@ class TestEdgeCases:
         """No worker, no queue, no task: the call never waits."""
         assert (
             executor.mapreduce(
-                description="nothing",
+                desc="nothing",
                 queue="cpu",
                 map_fn=identity,
                 reduce_fn=add,
@@ -645,7 +645,7 @@ class TestEdgeCases:
     def test_an_empty_iterable_copies_init(self, executor):
         init: list[int] = []
         got = executor.mapreduce(
-            description="nothing",
+            desc="nothing",
             queue="cpu",
             map_fn=wrap,
             reduce_fn=extend_in_place,
@@ -664,7 +664,7 @@ class TestEdgeCases:
         worker_thread(expect_tasks=3)
 
         total = executor.mapreduce(
-            description="sum",
+            desc="sum",
             queue="cpu",
             map_fn=identity,
             reduce_fn=add,
@@ -680,7 +680,7 @@ class TestEdgeCases:
     def test_num_tasks_below_one_raises(self, executor, ds_client):
         with pytest.raises(ValueError, match="num_tasks"):
             executor.mapreduce(
-                description="sum",
+                desc="sum",
                 queue="cpu",
                 map_fn=identity,
                 reduce_fn=add,
@@ -693,7 +693,7 @@ class TestEdgeCases:
     def test_a_non_int_num_tasks_raises(self, executor):
         with pytest.raises(TypeCheckError):
             executor.mapreduce(
-                description="sum",
+                desc="sum",
                 queue="cpu",
                 map_fn=identity,
                 reduce_fn=add,
@@ -703,11 +703,11 @@ class TestEdgeCases:
             )
 
     def test_a_method_name_needs_an_actor(self, executor, pilot_jobs, ds_client):
-        """Only a worker group with an actor can resolve a method name."""
+        """Only a job group with an actor can resolve a method name."""
         pilot_jobs("cpu")
         with pytest.raises(ValueError, match="actor"):
             executor.mapreduce(
-                description="sum",
+                desc="sum",
                 queue="cpu",
                 map_fn="scale",
                 reduce_fn=add,
@@ -727,7 +727,7 @@ class TestEdgeCases:
     def test_a_queue_with_no_worker_raises_before_enqueueing(self, executor, ds_client):
         with pytest.raises(RuntimeError, match="no worker started"):
             executor.mapreduce(
-                description="sum",
+                desc="sum",
                 queue="cpu",
                 map_fn=identity,
                 reduce_fn=add,
@@ -744,7 +744,7 @@ class TestEdgeCases:
 
         with pytest.raises(RuntimeError, match="failed on its worker"):
             executor.mapreduce(
-                description="boom",
+                desc="boom",
                 queue="cpu",
                 map_fn=explode,
                 reduce_fn=add,

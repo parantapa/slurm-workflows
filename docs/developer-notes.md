@@ -25,9 +25,9 @@ This file does not keep a second copy of it.
 docs/
   tutorials/        lessons: a learner runs a worked example end to end
   how-to-guides/    directions: a competent user solving one stated problem
-  reference/        neutral description, one page per public module of src/
+  reference/        neutral description, one page per piece of the public surface
   explanation/      why the code is the way it is, for users
-  developer-notes.md, how-to-run-tests.md    for contributors
+  developer-notes.md, terminology.md, how-to-run-tests.md    for contributors
 ```
 
 For new user-facing documentation,
@@ -38,9 +38,14 @@ Keep each document inside its type:
 a tutorial that stops to explain links out to `explanation/` instead,
 and reference describes rather than recommends.
 
-The reference tree mirrors `src/slurm_workflows/`,
-so you find a module and its reference page the same way.
-A new public module needs a new page under `reference/`.
+A reference page covers one thing a user reaches for.
+The page is named after that class, that command or that subject,
+rather than after the module it happens to live in.
+`swtop.md` covers `swtop.py` and `swtop_tui.py` together.
+What the worker and the monitors publish is documented
+where a user meets it, rather than under its own module.
+A new public class or command needs a page under `reference/`
+and a row in the README's table.
 
 Nothing user-facing goes in `README.md` beyond that list.
 
@@ -98,19 +103,19 @@ See `.cpush.json5` for the `rivanna` remote.
 
 | Module | Holds |
 | --- | --- |
-| `slurm_pilot_executor.py` | `SlurmPilotExecutor`, the coordinator that runs on a login node or in a Slurm job, and `WorkerGroup` |
-| `slurm_pilot_worker.py` | `PilotWorkerProcess` (runs inside Slurm jobs) and the `slurm-pilot-worker` CLI |
+| `slurm_pilot_executor.py` | `SlurmPilotExecutor`, which the driver uses from a login node or from inside a Slurm job, and `JobGroup` |
+| `slurm_pilot_worker.py` | `PilotWorker` (runs inside Slurm jobs) and the `slurm-pilot-worker` CLI |
 | `slurm_utils.py` | `sbatch` / `squeue` / `scancel` wrappers, `get_clean_environ()` |
-| `optimize_space_botorch.py` | `OptimizationTask` and `OptimizeSpaceBotorch`, the botorch searches |
+| `optimize_space_botorch.py` | `OptimizationStudy` and `OptimizeSpaceBotorch`, the botorch searches |
 | `search_space.py` | `SearchSpace`, the `ParameterRange` types, and the unit cube mapping |
-| `explore_space.py` | `ExplorationTask` and `ExploreSpaceSobolQMC`, Sobol' sweeps with no model behind them |
+| `explore_space.py` | `ExplorationStudy` and `ExploreSpaceSobolQMC`, Sobol' explorations with no model behind them |
 | `monitors.py` | Host and cgroup sampling, and the threads that publish it |
-| `swtop.py` | The `swtop` monitor: `Collector`, the row builders, the text frames and the CLI |
+| `swtop.py` | `swtop` itself: `Collector`, the row builders, the text frames and the CLI |
 | `swtop_tui.py` | The Textual app `swtop` runs in |
 | `templates/` | Jinja templates and their loader |
 | `utils.py` | `RemoteExecutionError`, id and logging helpers, `floor_power_of_two` and `index_width`, the progress-line formatters |
 
-The coordinator and the workers never talk to each other directly.
+The driver and the workers never talk to each other directly.
 They talk only through the `ds-service` server,
 via `DsServiceClient` from the external `ds-service-client` package.
 `swtop` uses `DsServiceClientAsync` instead,
@@ -131,7 +136,7 @@ This table says what each one is here for.
 
 | Dependency | Used by | For |
 | --- | --- | --- |
-| `ds-service-client` | executor, worker, `swtop` | The queue server's client and its `DsServiceServer` launcher. The one channel between coordinator and workers. It also provides `task_search_id`, which is how `swtop` lists the tasks on a server. |
+| `ds-service-client` | executor, worker, `swtop` | The `ds-service` server's client and its `DsServiceServer` launcher. The one channel between the driver and the workers. It also provides `task_search_id`, which is how `swtop` lists the tasks on a server. |
 | `cloudpickle` | `slurm_pilot_executor`, `slurm_pilot_worker` | Serializing functions, arguments and return values, so a locally defined function can cross to a compute node. |
 | `jinja2` | `templates/` | Rendering the worker shell script and its sbatch wrapper. |
 | `json5` | `templates/` | Parsing the `{#- name: ... -#}` headers of the multi-template files. |
@@ -150,8 +155,8 @@ Development tooling, behind the `dev` and `test` extras:
 | --- | --- | --- |
 | `pytest` | `test` | The suite. See [`how-to-run-tests.md`](how-to-run-tests.md). |
 | `botorch` | `test` | So the optimizer tests run rather than skip. |
-| `black` | `dev` | Formatting. Configured in `pyproject.toml`; run bare. |
-| `pyright` | `dev` | Type checking. Configured in `pyproject.toml`; run bare. |
+| `black` | `dev` | Formatting. Configured in `pyproject.toml`. Run it bare. |
+| `pyright` | `dev` | Type checking. Configured in `pyproject.toml`. Run it bare. |
 | `setuptools_scm` | build | Deriving the version from git tags, with a `1.0.0-dev` fallback. |
 | `cpush` | external | Deploying to clusters. See `.cpush.json5`. |
 
@@ -175,22 +180,23 @@ so each finished task then needs its own `task_get_output`.
 `_starved_tasks` and `_stranded_tasks` return the subset they object to,
 rather than raising, because the answer is always a subset.
 A queue nobody scaled says nothing about the queues that were.
-Jobs in one group that reach their walltime
-say nothing about a task on another group's queue.
+Jobs in one job group that reach their time limit
+say nothing about a task on another job group's queue.
 
-A driver that abandons the rest of `pending`
+A wait that abandons the rest of `pending`
 loses results the server already has, silently under `RAISE_NEVER`.
-Such a driver also breaks what `RAISE_AFTER_COMPLETED` promises.
+Such a wait also breaks what `RAISE_AFTER_COMPLETED` promises.
 The failure count in the deferred exception counts *tasks* for the same reason:
 one message covers every task on a dead queue.
 
-**Both drivers record what came back, even when the batch failed.**
-Both drivers wait with `RAISE_AFTER_COMPLETED` and then record.
+**Both space classes record what came back, even when the batch failed.**
+`ExploreSpaceSobolQMC` and `OptimizeSpaceBotorch`
+wait with `RAISE_AFTER_COMPLETED` and then record.
 On the failure path they record what returned before re-raising.
-A sweep of a few thousand points must not lose all of them to one,
+An exploration of a few thousand points must not lose all of them to one,
 and `save()` is what the next run reads.
 
-**The driver warns about every failure, whatever `RaiseOnError` says.**
+**The executor warns about every failure, whatever `RaiseOnError` says.**
 The warning is the part a caller cannot switch off,
 because `RAISE_NEVER` otherwise loses a failure entirely.
 `task.output` is the only other record,
@@ -204,9 +210,9 @@ and `swtop` is what turns that into a bar.
 The driver prints nothing,
 so a run under `nohup` leaves no progress bar in its output file.
 A run that someone watches from another shell shows one.
-The driver appends the count at most once a second,
+A wait appends the count at most once a second,
 so the cost does not grow with the batch.
-The driver appends the final count even when the wait raises,
+A wait appends the final count even when it raises,
 since the exception says nothing about how far it got.
 
 **Only `wait` can defer.**
@@ -236,7 +242,7 @@ A `TimeoutError` there means an unreachable server
 and must stay distinguishable.
 
 **One executor per `ds-service` server.**
-A server's queues, its `worker_job_info:`, `worker_process_info:`,
+A server's queues, its `pilot_job_info:`, `worker_info:`,
 `task_name:` and `actor_class_args:` keys and its monitor counters
 are one flat namespace with no executor in it.
 For this reason, the design assumes a server belongs to a single executor.
@@ -246,7 +252,7 @@ and overwrite each other's actor arguments.
 Nothing enforces this rule, because the executor cannot see another one.
 That blindness is also why `_starved_tasks` and `_stranded_tasks`
 refuse a queue served by jobs this executor did not start.
-Task ids and worker names are still executor-prefixed,
+Task ids and worker ids are still executor-prefixed,
 because a *cluster* holds many runs even when a server holds one.
 
 **`submit` sets `priority` to a *negated* wall clock.**
@@ -262,8 +268,8 @@ But a stale `Task` from a restarted driver still produces that case.
 **The payload decides how the worker resolves a task's function.**
 `main` looks a `str` up on the actor, and calls a callable as it is.
 The check is the type of what `task.function` unpickles to,
-never whether the group has an actor.
-A group with an actor therefore still runs a plain callable,
+never whether the job group has an actor.
+A job group with an actor therefore still runs a plain callable,
 which is what lets `mapreduce` submit its own task function there.
 A `str` with no actor to find it on raises,
 rather than failing later as a call on a string.
@@ -271,30 +277,30 @@ rather than failing later as a call on a string.
 **The worker publishes its actor to the process, as `current_actor()`.**
 A task the worker runs has no argument that carries the actor,
 so `_mapreduce_task` reads it from the module.
-One pilot worker is one process and one actor, so a module global holds it.
+One worker is one process and one actor, so a module global holds it.
 `close()` clears it, and only when the actor it holds is this worker's own,
 because a test builds two workers in one process.
 
-**Actor constructor arguments travel through the key value store.**
-`define_worker` cloudpickles `actor_class_args` and `actor_class_kwargs`
+**Actor constructor arguments travel through the map.**
+`define_job_group` cloudpickles `actor_class_args` and `actor_class_kwargs`
 into `actor_class_args:<group>` and `actor_class_kwargs:<group>`,
-and `PilotWorkerProcess.__init__` reads them back under the same names.
+and `PilotWorker.__init__` reads them back under the same names.
 The two sides agree by convention alone,
 so the key format is part of the contract.
 Change it in one place, and workers silently construct actors
 with default arguments.
 
-`define_worker` writes a key only when the caller gives a value.
+`define_job_group` writes a key only when the caller gives a value.
 For this reason, the worker treats `KeyError` as "the caller passed none"
 rather than an error.
-The `WorkerGroup` deliberately does not keep the values,
+The `JobGroup` deliberately does not keep the values,
 so a redefinition check never sees them.
-The store is the only copy, and the last `define_worker` call wins.
-The key holds the group name and not the executor's,
+The map is the only copy, and the last `define_job_group` call wins.
+The key holds the job group name and not the executor's,
 which is safe only because a server belongs to one executor.
 
 **The executor's name is its identity.**
-The name prefixes task ids, worker job names, script file names and the log,
+The name prefixes task ids, pilot job names, script file names and the log,
 and it keys the executor's logger.
 Two live executors that share a name collide on all of those.
 Their log lines land in both work dirs,
@@ -306,16 +312,16 @@ a directory name and a task id
 are the intersection of three sets, not one.
 
 **A run publishes itself in two halves, one key each.**
-`SlurmPilotExecutor._add_worker` writes `worker_job_info:<worker-name>`
+`SlurmPilotExecutor._add_job` writes `pilot_job_info:<job-name>`
 as soon as `sbatch` returns, so a queued job is visible before it runs,
-and `PilotWorkerProcess.__init__` writes `worker_process_info:<worker-id>`
+and `PilotWorker.__init__` writes `worker_info:<worker-id>`
 when the process starts.
 `swtop` shows them as two blocks, and the difference between them
 marks a job that is still queued.
 Nothing ever updates either key, which is what makes both cacheable.
 
 **Workers publish their identity at startup, as one key.**
-`PilotWorkerProcess.__init__` writes `worker_process_info:<worker-id>`,
+`PilotWorker.__init__` writes `worker_info:<worker-id>`,
 a JSON object, before it builds the actor.
 A worker that dies in its actor's constructor
 therefore still records which job and node it died on.
@@ -323,11 +329,11 @@ One key and not five, because `swtop` caches what it reads.
 A reader that lands between two writes otherwise remembers
 a worker whose host it never learned.
 
-`WORKER_PROCESS_INFO_PREFIX` lives in `slurm_pilot_worker.py`
-and `WORKER_JOB_INFO_PREFIX` in `slurm_pilot_executor.py`.
+`WORKER_INFO_PREFIX` lives in `slurm_pilot_worker.py`
+and `PILOT_JOB_INFO_PREFIX` in `slurm_pilot_executor.py`.
 `swtop.py` imports both, so the writers and the reader cannot drift apart.
 Nothing deletes the key:
-the store is in memory and dies with the server,
+the map is in memory and dies with the server,
 which is the only cleanup there is.
 
 **Anything `__init__` starts, a failed `__init__` has to stop.**
@@ -336,13 +342,13 @@ An actor constructor that raises means nothing ever calls `close()`.
 The worker therefore stops its own monitors and closes its own channel
 before it re-raises.
 
-**Task names are UTF-8 in the store, not pickles.**
+**Task names are UTF-8 in the map, not pickles.**
 `set_task_name` writes `task_name:<task_id>` as encoded text,
 unlike the actor arguments beside it.
 The reason is that a name is a string,
 and something other than this library has to read it.
 `Task.task_name` is read-only for the same reason.
-The store holds the other copy,
+The map holds the other copy,
 and an assignment to the attribute renames the task in this process alone.
 
 The template inlines `setup_script` verbatim
@@ -351,28 +357,29 @@ Nothing validates it.
 
 ### Mapreduce
 
-**`mapreduce` puts every item on the queue before it submits the first task.**
+**`mapreduce` puts every item task on the item queue
+before it submits the first map task.**
 This is the whole basis of the call,
-and it is what lets a task read `NoTaskAvailable` as "the work is done".
+and it is what lets a map task read `NoTaskAvailable` as "the work is done".
 `task_get` raises it when no queue it polled has a *ready* task.
 On its own that means everything is claimed,
 not that nothing more arrives.
 The ordering supplies the other half:
-no task can run before every item exists,
-and `mapreduce` adds nothing to the queue afterward.
+no map task can run before every item task exists,
+and `mapreduce` adds nothing to the item queue afterward.
 
-Break that ordering, by streaming the iterable or by topping the queue up.
-A fast task then drains what is there and sees an empty queue.
+Break that ordering, by streaming the iterable or by topping the item queue up.
+A fast map task then drains what is there and sees an empty item queue.
 It returns a partial result that covers part of the input.
 Nothing raises.
 The call returns a plausible wrong answer.
 That is why `mapreduce` reads the iterable out into a list first,
 and why a test asserts on the order of the `task_add` calls.
 
-**A mapreduce call gets a queue of its own,
-and no worker group serves it.**
-Workers poll their own group's queue only,
-so that call's own tasks drain the item queue and nothing else does.
+**A mapreduce call gets an item queue of its own,
+and no job group serves it.**
+Workers poll their own job group's queue only,
+so that call's own map tasks drain the item queue and nothing else does.
 It also stays clear of `_starved_tasks` and `_stranded_tasks`.
 Both look at the queues of the tasks handed to the wait,
 never at the item queue.
@@ -384,50 +391,50 @@ collides with the item tasks the first run left behind.
 `task_add` refuses a duplicate id,
 so that collision fails the call with items already on the server.
 
-**A mapreduce task resolves a method name once, not once per item.**
-A worker builds its actor at startup and keeps it for the Slurm job.
-The bound method is therefore the same for every item the task folds.
+**A map task resolves a method name once, not once per item.**
+A worker builds its actor at startup and keeps it for the pilot job.
+The bound method is therefore the same for every item the map task folds.
 `reduce_fn` takes no method name at all,
-because the coordinator folds the partial results with it
+because the driver folds the partial results with it
 and there is no actor there.
 
-**A mapreduce task builds a client of its own.**
-A task has no handle on the worker's client,
+**A map task builds a client of its own.**
+A map task has no handle on the worker's client,
 and that client belongs to the worker's own loop in any case.
 `DsServiceClient()` reads `DS_SERVER_ADDRESS`,
 and the task claims its items under `PILOT_WORKER_ID`.
-`PilotWorkerProcess.__init__` puts both in the environment.
+`PilotWorker.__init__` puts both in the environment.
 A test that drives that class gets them,
 and one that calls the task function directly sets them itself.
 
 A `with` block closes the client.
-A pilot worker runs many tasks over the life of its Slurm job.
+A worker runs many tasks over the life of its pilot job.
 A leaked gRPC channel per task therefore accumulates for all of it.
 
-**A `TimeoutError` in a mapreduce task is not retried.**
+**A `TimeoutError` in a map task is not retried.**
 `task_get` is not idempotent.
 A deadline can fire after the server recorded the claim.
 A retry then skips that item.
-The item stays `Running`, and the server never dispatches it again.
-The task then returns a partial result that is silently missing an item.
+The item task stays `Running`, and the server never dispatches it again.
+The map task then returns a partial result that is silently missing an item.
 
 The error propagates instead, which is loud:
 the worker turns it into a `RemoteExecutionError`,
 and the wait raises.
 
-**A task marks its item done after it folds the value in, not before,
+**A map task marks its item task done after it folds the value in, not before,
 and it records an empty output.**
 `Complete` on the item queue therefore means "counted",
-which is what a reader of the queue expects.
-The mapped value travels home inside the task that computed it.
+which is what a reader of the item queue expects.
+The mapped value travels home inside the map task that computed it.
 A second copy on the item task
 holds the whole iterable on the server twice.
 
-**The coordinator folds into a copy of `init`.**
-Each task already folds into a copy of its own,
+**The driver folds into a copy of `init`.**
+Each map task already folds into a copy of its own,
 the one its input deserialized into.
 A `reduce_fn` that folds in place is therefore correct on a worker.
-Without the copy it is not correct at the coordinator.
+Without the copy it is not correct on the driver.
 There it writes into the caller's own value,
 and a second call starts from the answer of the first.
 
@@ -436,7 +443,7 @@ The local fold and the remote folds then get the same kind of copy,
 and an `init` that cannot travel fails at the call.
 
 The copy does not remove the requirement that `init` be an identity.
-Every task folds it in once, and the call folds it in once more.
+Every map task folds it in once, and the call folds it in once more.
 
 ### Logging
 
@@ -493,7 +500,7 @@ are different spaces to a model fit on one of them.
 
 **scipy's Sobol', not botorch's.**
 `ExploreSpaceSobolQMC` draws with `scipy.stats.qmc.Sobol`,
-so a sweep needs neither torch nor botorch,
+so an exploration needs neither torch nor botorch,
 and `tests/test_explore_space.py` runs without them.
 `rng=` is the seed argument (`seed=` is the older spelling),
 which is what the `scipy>=1.15` floor in `pyproject.toml` is for.
@@ -506,17 +513,17 @@ a request in scipy's own terms is the same draw without the warning.
 
 **`run` submits every task before it waits for any of them.**
 This order is what "simultaneously" means here:
-one `submit` loop over every task's design, then a single `wait`.
-A submit and a wait per task leaves the pool idle
-whenever a small sweep finishes ahead of a large one.
-That order also serializes tasks that name different queues,
+one `submit` loop over every study's design, then a single `wait`.
+A submit and a wait per study leaves the pool idle
+whenever a small study finishes ahead of a large one.
+That order also serializes studies that name different queues,
 even though nothing makes them wait for each other.
 
-**`ExploreSpaceSobolQMC` validates a task in its constructor, not when the task runs.**
+**`ExploreSpaceSobolQMC` validates a study in its constructor, not when the study runs.**
 `_resolve` reports an empty space, a shadowed parameter or a missing point count
 before anything reaches the cluster.
 `_resolve` returns a copy with the point count and seed filled in,
-so `self.tasks` says what will actually run.
+so `self.studies` says what will actually run.
 The caller's own dataclass stays as they wrote it.
 
 **`ExploreSpaceSobolQMC` shares the shape of `OptimizeSpaceBotorch`, not its code.**
@@ -541,16 +548,16 @@ and a stored copy can come from a different space.
 
 **`OptimizeSpaceBotorch` never explores.**
 You construct an `OptimizeSpaceBotorch` from results files,
-and it fails if a task has no observations in them.
+and it fails if a study has no observations in them.
 That dependence on files is what makes a search resumable.
-The state that has to survive a walltime limit is a file, not an object.
+The state that has to survive a time limit is a file, not an object.
 `save` writes only what its own run measured,
 so the files concatenate without double counting.
 
-**A round is two batches, not two per task.**
-`OptimizeSpaceBotorch` submits every active task's fit before it waits for any,
-then every active task's proposed points.
-Tasks therefore advance in step and drop out independently,
+**A round is two batches, not two per study.**
+`OptimizeSpaceBotorch` submits every active study's fit before it waits for any,
+then every active study's candidates.
+The studies therefore advance in step and drop out independently,
 each against its own `patience`, floor and ceiling.
 
 - **`fit_and_propose` fits the model to `-f`.**
@@ -562,7 +569,7 @@ each against its own `patience`, floor and ceiling.
   Get the sign backwards and the search quietly walks uphill
   instead of failing.
 - **`unit_points` holds the point actually evaluated**,
-  re-standardized *after* rounding, never the continuous proposal.
+  re-standardized *after* rounding, never the continuous candidate.
   Otherwise the fit tells the GP about a location the objective never ran at.
 - **The fit runs on a worker, not on the driver.**
   `_fit_and_propose` submits `fit_and_propose` to `optimizer_queue`
@@ -573,18 +580,19 @@ each against its own `patience`, floor and ceiling.
   and no torch object has to survive a hop between hosts.
   Its workers need botorch.
   The workers of `objective_queue` do not.
-- **The four acquisition knobs belong to the task, not to the process.**
+- **The four acquisition knobs belong to the study, not to the process.**
   `num_restarts`, `raw_samples`, `mc_samples` and `acqf_timeout_s`
-  are `OptimizationTask` fields with literal defaults,
+  are `OptimizationStudy` fields with literal defaults,
   passed to every `fit_and_propose` task.
   A value read inside `fit_and_propose` is the *worker's*,
   and it ignores how the caller configured the search.
   Tests assert them by constructing with them
-  (`make_task(acqf_timeout_s=...)`) or against `opt.tasks[i].<knob>`,
+  (`make_task(acqf_timeout_s=...)`) or against `opt.studies[i].<knob>`,
   never against a literal.
 - **The stall counter runs from round 1.
-  `min_search_iterations` gates the stop, not the counting.**
-  Report the gap to the stop as `max(patience - stalled, min_search_iterations - iteration)`.
+  `min_search_rounds` gates the stop, not the counting.**
+  Report the gap to the stop as
+  `max(patience - stalled, min_search_rounds - round_number)`.
   A bare `stalled`/`patience` ratio runs past its own denominator
   whenever the floor outlasts the streak, which the defaults do.
 - **One acquisition, one `optimize_acqf` call per round**,
@@ -596,13 +604,12 @@ each against its own `patience`, floor and ceiling.
 - **Ask for the batch jointly, never `sequential=True`.**
   The sequential path is the usual advice for large batches,
   and it is wrong here.
-  That path ran 10-15x *slower* on a low-dimensional space,
-  because the greedy path pays
-  the restart cost once per point instead of once per batch.
+  The greedy path pays the restart cost
+  once per point instead of once per batch.
 - **Ranges clamp in `unstandardize`**,
   because `optimize_acqf` can return a point slightly outside the bounds.
 - **Never import this module eagerly from the package `__init__.py`.**
-  `OptimizeSpaceBotorch` and `OptimizationTask` are importable
+  `OptimizeSpaceBotorch` and `OptimizationStudy` are importable
   from the package root, but through the `__getattr__` there.
   That `__getattr__` imports this module on first use,
   so `import slurm_workflows` still works without botorch installed.
@@ -637,7 +644,7 @@ the series stops, and `swtop` marks it stale.
 A re-election needs a heartbeat and a lease, and this design has neither.
 
 **Sampling threads are daemons that swallow their errors.**
-A monitor must not hold open a worker that Slurm kills at its walltime,
+A monitor must not hold open a worker that Slurm kills at its time limit,
 and a failed sample must not end the series.
 A node briefly unreachable is the common case, and a gap beats a stop.
 `close()` stops them before closing the client whose channel they use.
@@ -654,8 +661,8 @@ That includes ones the worker never started.
 `task_get_count_by_state` covers every task,
 and `task_search_id` enumerates them.
 Nothing enumerates workers, hosts or jobs,
-so `swtop` builds those tables by a key space search
-for keys the workers and the monitors publish.
+so `swtop` builds those tables by searching the map
+for the keys the workers and the monitors publish.
 `swtop` cannot list a worker that did not publish its identity.
 That limit belongs to the server, and this library does not work around it.
 
@@ -676,7 +683,7 @@ so a task polled between the two
 otherwise stays `-` for the rest of the run.
 
 **`swtop` draws a failed poll, and does not raise it.**
-A monitor that exits when the server blinks
+A display that exits when the server blinks
 takes the screen down with it.
 In the UI the tables stay as they were,
 because the last good reading beats a blank screen
@@ -687,14 +694,14 @@ A poll is a handful of key searches plus a read per worker,
 per named task and per monitored series.
 One after another, that is a round trip apiece,
 and a few hundred workers do not fit in a two-second interval.
-`Collector` issues each group with `asyncio.gather`,
+`Collector` issues each set of reads with `asyncio.gather`,
 so a poll costs about one round trip however wide the pool is.
 The cache means `Collector` reads only what is new.
 
-**The UI polls in a worker, never inline.**
+**The UI polls in a Textual worker, never inline.**
 An awaited poll cannot block the interface the way a blocking one can.
 Such a poll still must not run inside a message handler or a timer tick.
-`run_worker(..., exclusive=True)` gives the poll a worker of its own
+`run_worker(..., exclusive=True)` gives the poll a Textual worker of its own
 and cancels the poll already in flight, RPCs and all.
 A slow server therefore cannot pile up a poll per interval.
 The UI applies the result on the event loop like any other update,
@@ -708,7 +715,7 @@ which a 3600-worker pool needs to keep.
 Those keys come from the row builders in `swtop.py`.
 
 **Both displays read the same row builders.**
-`worker_job_rows`, `worker_rows`, `host_rows`, `job_rows` and `task_rows`
+`pilot_job_rows`, `worker_rows`, `host_rows`, `job_rows` and `task_rows`
 are the one definition of what each block shows.
 The text frames and the UI differ only in how they draw them.
 
@@ -717,29 +724,29 @@ The text frames and the UI differ only in how they draw them.
 `is_batch_worker=False` wraps the worker script in `srun`
 and passes `--output <work_dir>/<name>-%j-%t.out`.
 That is why the `worker_sbatch_script` template takes `name` and `work_dir`.
-[`reference/executor.md`](reference/executor.md#logs) documents for users
+[`reference/what-a-run-publishes.md`](reference/what-a-run-publishes.md#logs) documents for users
 which file a worker's log ends up in.
 This section says why the shell decides it rather than Python.
 
-**The generated script drops `--output` for a job of exactly one task**,
+**The generated script drops `--output` for a job of exactly one Slurm task**,
 which then writes to the batch job's own output file.
-A per-task file only duplicates it.
+A file per Slurm task only duplicates it.
 The job decides at run time, in the shell,
 because Python cannot know the answer when it renders the script.
 
-`SLURM_NTASKS` is the number of tasks in the job
+`SLURM_NTASKS` is the number of Slurm tasks in the job
 whenever the submission gave `--ntasks` or any `--ntasks-per-*` option.
 `SLURM_NTASKS` settles the question alone.
 Do not let anything else override it.
 
-Slurm leaves it unset only when the submission asked for no task count.
-That case is exactly when one task per node is the default,
+Slurm leaves it unset only when the submission asked for no Slurm task count.
+That case is exactly when one Slurm task per node is the default,
 so `SLURM_JOB_NUM_NODES` stands in there.
 The count is per *job*, not per node:
-`--nodes=4 --ntasks-per-node=1` is four tasks
-and keeps its per-task files.
+`--nodes=4 --ntasks-per-node=1` is four Slurm tasks
+and keeps a file for each of them.
 
-**The worker process must not redirect `sys.stdout` or `sys.stderr`.**
+**The worker must not redirect `sys.stdout` or `sys.stderr`.**
 Slurm writes those files itself via `--output`,
 and `logging.basicConfig` leaves the streams on the inherited handles.
 A second redirect leaves the Slurm-written files empty.
@@ -750,10 +757,10 @@ otherwise turns a successful submission into a parse failure.
 
 **`sbatch` gets an environment with no Slurm variables in it.**
 `get_clean_environ` drops `SLURM_`, `SLURMD_`, `PMI_` and `SRUN_`.
-The coordinator runs inside a Slurm job as well as on a login node.
+The driver runs inside a Slurm job as well as on a login node.
 `sbatch` reads several `SLURM_*` variables as defaults for the job it submits.
 If those variables reach `sbatch`,
-every pilot job takes the coordinator's own node count and task count.
+every pilot job takes the driver's own node count and Slurm task count.
 `get_clean_environ` runs on every submission,
 because a login node carries none of those variables anyway.
 
@@ -814,6 +821,11 @@ because a login node carries none of those variables anyway.
   Exempt: anything whose line structure is already meaningful.
   That covers code inside fences, Markdown tables, headings,
   and ASCII section banners (`# ---- name ----`).
+- **[`terminology.md`](terminology.md) decides what a thing is called.**
+  It binds prose and identifiers alike,
+  so a name carries the same word the prose does.
+  Where a concept has no row there, add one
+  rather than coin a second word for something the tables already name.
 - Cleanup is per-class.
   There is no shared base class for it.
 - `setuptools_scm` derives the version from git tags,

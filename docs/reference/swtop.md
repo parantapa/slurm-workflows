@@ -4,7 +4,7 @@
 
 `slurm_workflows.swtop` and `slurm_workflows.swtop_tui`:
 the live view of a `slurm-workflows` run.
-It shows the tasks, the pilot jobs and worker processes,
+It shows the tasks, the pilot jobs and the workers,
 and the compute nodes they run on.
 
 To watch a run with it, see
@@ -44,14 +44,14 @@ tasks  ready 118  running 40  complete 242  canceled 0  total 400
 
 explore  [###############---------]  242/400 point  60%  working
 
-worker jobs (1)
-NAME                  GROUP  JOB      SUBMITTED
-my-run.worker.cpu.0   cpu    1846231  2026-01-30T10:58:12-05:00
+pilot jobs (1)
+NAME              GROUP  JOB      SUBMITTED
+my-run.job.cpu.0  cpu    1846231  2026-01-30T10:58:12-05:00
 
-worker processes (40)
-NAME                  GROUP  HOST      JOB      PID
-my-run.worker.cpu.0   cpu    udc-an28  1846231  31402
-my-run.worker.cpu.1   cpu    udc-an28  1846231  31403
+workers (40)
+NAME              GROUP  HOST      JOB      PID
+my-run.job.cpu.0  cpu    udc-an28  1846231  31402
+my-run.job.cpu.0  cpu    udc-an28  1846231  31403
 
 hosts (2)
 HOST      FREE MEM  LOAD   /dev/shm  /tmp
@@ -64,7 +64,7 @@ JOB      MEMORY  CPU
 
 tasks (3)
 NAME     TASK ID         STATE    WORKER
-train-7  my-run.task.7   Running  my-run.worker.cpu.0
+train-7  my-run.task.7   Running  my-run.job.cpu.0
 eval-2   my-run.task.12  Ready
 -        my-run.task.13  Ready
 ```
@@ -89,23 +89,23 @@ The blocks come from different places:
 - **Task counts** are a single RPC, so they always cover every task.
     A server belongs to one executor,
     so every task on it is a task of the run `swtop` watches.
-- **Worker jobs** are the pilot jobs the executor submitted.
+- **Pilot jobs** are the ones the executor submitted.
     The executor publishes each one as it submits it.
-    A job appears here the moment `scale_workers` returns,
+    A job appears here the moment `scale_jobs` returns,
     whether or not Slurm started it.
-- **Worker processes** are the ones that registered themselves,
-    which each pilot worker does when it starts.
-    A job in the worker jobs block with no process against it
+- **Workers** are the ones that registered themselves,
+    which each worker does when it starts.
+    A job in the pilot jobs block with no worker against it
     is still queued, or its setup script did not finish.
-    One job usually holds many processes, one per task slot,
+    One job usually holds many workers, one per Slurm task,
     so the two counts differ by design.
-- **Hosts and Slurm jobs** are what worker threads sample every 5 seconds:
+- **Hosts and Slurm jobs** are what the monitors sample every 5 seconds:
     see [What the hosts and jobs blocks measure](#what-the-hosts-and-jobs-blocks-measure).
 - **Tasks** are all tasks on the server, named or not.
 
 Every block says why it is empty, and never shows a bare header.
-A worker job or worker process whose description the collector
-cannot read yet shows `?` in the fields it could not read.
+A pilot job or a worker whose description the collector
+cannot read yet shows `?` in those fields.
 
 ## Task names
 
@@ -115,18 +115,20 @@ A name published after the task was submitted
 appears at the next poll.
 
 `ExploreSpaceSobolQMC` and `OptimizeSpaceBotorch` name what they submit.
-A point of a sweep gets `<task>-explore-<index>`.
+A point of an exploration gets `<study>-explore-<index>`.
 The two kinds of task in a search round get
-`<task>-fit-<round>` and `<task>-search-<round>-<index>`.
+`<study>-fit-<round>` and `<study>-search-<round>-<index>`.
 They zero pad the index to the width of the batch,
 so the names sort in submission order.
 
 ## What the hosts and jobs blocks measure
 
 Nothing has to be started for these.
-The pilot workers sample the nodes and jobs themselves.
-One worker per node and one per job runs a sampling thread,
-and every 5 seconds each appends to a `ds-service` time series:
+The workers sample the nodes and jobs themselves
+and publish the readings:
+see [What a run publishes](what-a-run-publishes.md).
+
+The two blocks show these columns:
 
 | Column | What it is |
 | --- | --- |

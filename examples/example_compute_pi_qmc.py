@@ -1,4 +1,4 @@
-"""Compute pi with a Sobol' QMC sweep on Rivanna's BII cluster.
+"""Compute pi with a Sobol' QMC exploration on Rivanna's BII cluster.
 
 `docs/tutorials/computing-pi-qmc.md` walks through this program.
 """
@@ -7,7 +7,7 @@ import math
 
 from ds_service_client import DsServiceServer
 from slurm_workflows import (
-    ExplorationTask,
+    ExplorationStudy,
     ExploreSpaceSobolQMC,
     FloatRange,
     SlurmPilotExecutor,
@@ -16,16 +16,16 @@ from slurm_workflows import (
 SETUP_SCRIPT = ""
 
 NUM_NODES = 2
-TASKS_PER_NODE = 40
+NTASKS_PER_NODE = 40
 
 SBATCH_ARGS = [
     "--account=bii_nssac",
     f"--partition=bii --nodes={NUM_NODES}",
-    f"--ntasks-per-node={TASKS_PER_NODE} --cpus-per-task=1 --mem=0",
+    f"--ntasks-per-node={NTASKS_PER_NODE} --cpus-per-task=1 --mem=0",
     "--time=1:00:00",
 ]
 
-JOB_NAME = "compute-pi-qmc"
+RUN_NAME = "compute-pi-qmc"
 RESULTS_FILE = "compute-pi-qmc.pkl.gz"
 
 NUM_SAMPLE_POINTS = 4096
@@ -48,18 +48,18 @@ def main():
         ds_service.wait_until_ready()
         address = ds_service.address
 
-        with SlurmPilotExecutor(JOB_NAME, address) as executor:
-            executor.define_worker(
+        with SlurmPilotExecutor(RUN_NAME, address) as executor:
+            executor.define_job_group(
                 name="bii",
                 sbatch_args=SBATCH_ARGS,
                 setup_script=SETUP_SCRIPT,
             )
-            executor.scale_workers("bii", 1)
+            executor.scale_jobs("bii", 1)
 
-            sweep = ExploreSpaceSobolQMC(
+            exploration = ExploreSpaceSobolQMC(
                 [
-                    ExplorationTask(
-                        name=JOB_NAME,
+                    ExplorationStudy(
+                        name=RUN_NAME,
                         space=SAMPLE_SPACE,
                         objective=inside_quarter_circle,
                         objective_queue="bii",
@@ -71,10 +71,10 @@ def main():
                 executor,
             )
 
-            sweep.run()
-            sweep.save(RESULTS_FILE)
+            exploration.run()
+            exploration.save(RESULTS_FILE)
 
-    scores = sweep.results[JOB_NAME].values
+    scores = exploration.results[RUN_NAME].values
     pi = sum(scores) / len(scores)
     print(f"pi = {pi} (from {len(scores)} sample points)")
 

@@ -5,11 +5,11 @@ echo "Running batch worker."
 
 . '{{ worker_script_path }}'
 {% else %}
-# If a slurm job runs more than one task,
-# srun writes the output of each task to a separate file.
-num_tasks="${SLURM_NTASKS:-${SLURM_JOB_NUM_NODES:-}}"
-echo "Num tasks: ${num_tasks}"
-if [[ "${num_tasks}" = "1" ]] ; then
+# If a slurm job runs more than one Slurm task,
+# srun writes the output of each Slurm task to a separate file.
+num_slurm_tasks="${SLURM_NTASKS:-${SLURM_JOB_NUM_NODES:-}}"
+echo "Num Slurm tasks: ${num_slurm_tasks}"
+if [[ "${num_slurm_tasks}" = "1" ]] ; then
     set -x
     srun /bin/bash '{{ worker_script_path }}'
 else

@@ -1,4 +1,4 @@
-"""The coordinator: worker groups, pilot jobs, and the tasks they run.
+"""The executor: job groups, pilot jobs, and the tasks they run.
 
 One executor per `ds-service` server.
 `docs/explanation/about-the-pilot-job-model.md` explains the model.
@@ -51,7 +51,7 @@ NoOutput = object()
 # One JSON key per submitted pilot job, keyed on the worker name.
 # `swtop` reads it.
 # `docs/reference/executor.md` lists the fields.
-WORKER_JOB_INFO_PREFIX = "worker_job_info:"
+PILOT_JOB_INFO_PREFIX = "pilot_job_info:"
 
 # What `wait` and `as_completed` work through, for `swtop` to draw.
 # Each call overwrites the key.
@@ -85,7 +85,7 @@ class RaiseOnError(Enum):
     """What `as_completed` and `wait` do about a task that fails.
 
     A failure is a task whose worker raised,
-    one canceled on the queue server,
+    one canceled on the server,
     or one the server does not know.
     A pending task is also a failure
     when its queues have no pilot job left to run it.
@@ -146,11 +146,13 @@ class Task:
 
 
 @dataclass
-class WorkerGroup:
-    """A named recipe for starting workers, and the queue they serve.
+class JobGroup:
+    """A named recipe for pilot jobs, and the queue their workers serve.
 
+    `scale_jobs` sets how many pilot jobs the group has.
+    How many workers those jobs start is decided by the sbatch arguments.
     The name is also the queue name:
-    only workers of this group serve a task on the queue `name`.
+    only workers of this job group serve a task on the queue `name`.
     """
 
     name: str
@@ -160,8 +162,8 @@ class WorkerGroup:
     actor_class_name: str
     setup_script: str
     python_paths: list[str]
-    workers: dict[str, SlurmJob] = field(default_factory=dict, compare=False)
-    next_worker_index: int = field(default=0, compare=False)
+    jobs: dict[str, SlurmJob] = field(default_factory=dict, compare=False)
+    next_job_index: int = field(default=0, compare=False)
 
 
 @dataclass
@@ -246,7 +248,7 @@ def _mapreduce_task(
 
 
 class SlurmPilotExecutor:
-    """Runs Python callables on a Slurm cluster through a pool of pilot workers.
+    """Runs Python callables on a Slurm cluster through a pool of workers.
 
     Give each executor a `ds-service` server of its own:
     everything on a server belongs to one run.
@@ -261,9 +263,9 @@ class SlurmPilotExecutor:
         server_address: str,
         work_dir: Path | str | None = None,
     ) -> None:
-        """Connect to a queue server and open a work directory for this run.
+        """Connect to a `ds-service` server and open a work directory for this run.
 
-        `name` prefixes task ids, worker job names and the log,
+        `name` prefixes task ids, pilot job names and the log,
         so two executors on one cluster need two names.
         `name` must match `[A-Za-z][A-Za-z0-9_-]*`
         and hold at least `MIN_EXECUTOR_NAME_LEN` characters.
@@ -311,10 +313,10 @@ class SlurmPilotExecutor:
         # Detached and closed by `close()`, which releases the log file.
         self._log_handler: logging.FileHandler | None = handler
 
-        self.groups: dict[str, WorkerGroup] = {}
+        self.groups: dict[str, JobGroup] = {}
 
     @typechecked
-    def define_worker(
+    def define_job_group(
         self,
         name: str,
         sbatch_args: list[str],
@@ -327,7 +329,7 @@ class SlurmPilotExecutor:
         python_paths: list[str | Path] | None = None,
         add_cwd_to_python_path: bool = True,
     ) -> None:
-        """Register a worker group. `scale_workers` submits the jobs.
+        """Register a job group. `scale_jobs` submits the jobs.
 
         `name` is also the queue name.
         `setup_script` is shell text, not a path.
@@ -352,7 +354,7 @@ class SlurmPilotExecutor:
                 )
             actor_class_name = ""
 
-        group = WorkerGroup(
+        group = JobGroup(
             name=name,
             sbatch_args=sbatch_args,
             worker_exe=worker_exe,
@@ -367,7 +369,7 @@ class SlurmPilotExecutor:
         else:
             self.groups[group.name] = group
 
-        # These go into the store, cloudpickled and keyed on the group name.
+        # These go into the map, cloudpickled and keyed on the job group name.
         # Each worker reads them at startup.
         if actor_class_args is not None:
             self.client.map_set(
@@ -380,16 +382,16 @@ class SlurmPilotExecutor:
                 cloudpickle.dumps(actor_class_kwargs, protocol=pickle.HIGHEST_PROTOCOL),
             )
 
-    def _add_worker(self, group: WorkerGroup) -> None:
+    def _add_job(self, group: JobGroup) -> None:
         """Render one worker's scripts and submit the pilot job that runs them."""
-        worker_index = group.next_worker_index
-        group.next_worker_index += 1
-        worker_name = f"{self.name}.worker.{group.name}.{worker_index}"
+        job_index = group.next_job_index
+        group.next_job_index += 1
+        job_name = f"{self.name}.job.{group.name}.{job_index}"
 
         worker_script = render_template(
             "slurm_pilot:worker_script",
             group=group.name,
-            name=worker_name,
+            name=job_name,
             server_address=self.server_address,
             worker_exe=group.worker_exe,
             work_dir=self.work_dir,
@@ -397,28 +399,28 @@ class SlurmPilotExecutor:
             setup_script=group.setup_script,
             actor_class_name=group.actor_class_name,
         )
-        worker_script_path = self.work_dir / f"{worker_name}.sh"
+        worker_script_path = self.work_dir / f"{job_name}.sh"
         worker_script_path.write_text(worker_script)
         worker_script_path.chmod(0o755)
 
         worker_sbatch_script = render_template(
             "slurm_pilot:worker_sbatch_script",
-            name=worker_name,
+            name=job_name,
             work_dir=self.work_dir,
             is_batch_worker=group.is_batch_worker,
             worker_script_path=worker_script_path,
         )
 
-        self.logger.info("Starting worker %s", worker_name)
+        self.logger.info("Starting pilot job %s", job_name)
         try:
             slurm_job = submit_sbatch_job(
-                name=worker_name,
+                name=job_name,
                 sbatch_args=group.sbatch_args,
                 script=worker_sbatch_script,
                 work_dir=self.work_dir,
             )
-            group.workers[worker_name] = slurm_job
-            self._publish_worker_job(worker_name, group.name, slurm_job.job_id)
+            group.jobs[job_name] = slurm_job
+            self._publish_pilot_job(job_name, group.name, slurm_job.job_id)
         except subprocess.CalledProcessError as cp:
             print(f"Failed to submit slurm job: returncode={cp.returncode}")
             if cp.stdout.strip():
@@ -427,37 +429,37 @@ class SlurmPilotExecutor:
                 print(cp.stderr)
             raise cp
 
-    def _publish_worker_job(
-        self, worker_name: str, group_name: str, slurm_job_id: int
+    def _publish_pilot_job(
+        self, job_name: str, group_name: str, slurm_job_id: int
     ) -> None:
-        """Record one submitted pilot job in the key value store, as JSON."""
+        """Record one submitted pilot job in the map, as JSON."""
         info = {
-            "name": worker_name,
+            "name": job_name,
             "group": group_name,
             "slurm_job_id": slurm_job_id,
             "submit_time": datetime.now().astimezone().isoformat(timespec="seconds"),
         }
         self.client.map_set(
-            f"{WORKER_JOB_INFO_PREFIX}{worker_name}",
+            f"{PILOT_JOB_INFO_PREFIX}{job_name}",
             json.dumps(info).encode("utf-8"),
         )
 
     @typechecked
-    def scale_workers(self, name: str, count: int) -> None:
+    def scale_jobs(self, name: str, count: int) -> None:
         """Submit or cancel pilot jobs so the group holds `count` of them.
 
         Returns as soon as `sbatch` accepts the jobs, not when they start.
         """
-        assert name in self.groups, "Unknown worker type"
+        assert name in self.groups, "Unknown job group"
 
         group = self.groups[name]
-        if len(group.workers) < count:
-            to_hire = count - len(group.workers)
-            for _ in range(to_hire):
-                self._add_worker(group)
+        if len(group.jobs) < count:
+            to_start = count - len(group.jobs)
+            for _ in range(to_start):
+                self._add_job(group)
 
-        if len(group.workers) > count:
-            to_retire = len(group.workers) - count
+        if len(group.jobs) > count:
+            to_cancel = len(group.jobs) - count
 
             try:
                 running_jobids = get_running_jobids()
@@ -474,11 +476,11 @@ class SlurmPilotExecutor:
                 raise RuntimeError("Failed to get running slurm job ids")
 
             to_cancel_jobids = []
-            for _ in range(to_retire):
-                _, worker = group.workers.popitem()
-                self.logger.info("Canceling worker: %s", worker.name)
-                if worker.job_id in running_jobids:
-                    to_cancel_jobids.append(worker.job_id)
+            for _ in range(to_cancel):
+                _, job = group.jobs.popitem()
+                self.logger.info("Canceling pilot job: %s", job.name)
+                if job.job_id in running_jobids:
+                    to_cancel_jobids.append(job.job_id)
 
             if not to_cancel_jobids:
                 return
@@ -534,7 +536,7 @@ class SlurmPilotExecutor:
 
     @typechecked
     def set_task_name(self, task: Task, name: str) -> None:
-        """Give `task` a name, on the queue server as well as locally.
+        """Give `task` a name, on the server as well as locally.
 
         The name is for whoever reads the queue.
         Nothing here dispatches on it.
@@ -552,7 +554,7 @@ class SlurmPilotExecutor:
         `fn` is a callable, or a method name for a group with an actor.
         This method does not check the queue name.
         `wait` and `as_completed` report a task on a queue no group serves.
-        The queue server dispatches tasks on one queue oldest first.
+        The server dispatches tasks on one queue oldest first.
         """
         if isinstance(queue, str):
             queue = [queue]
@@ -560,7 +562,7 @@ class SlurmPilotExecutor:
         return self._submit(queue, fn, *args, **kwargs)
 
     def _require_actor_queues(self, queue: list[str], what: str) -> None:
-        """Refuse a method name where a worker group has no actor to find it on."""
+        """Refuse a method name where a job group has no actor to find it on."""
         plain = sorted(
             name
             for name in queue
@@ -569,23 +571,23 @@ class SlurmPilotExecutor:
         )
         if plain:
             raise ValueError(
-                f"{what} names a method, which only a worker group with an "
+                f"{what} names a method, which only a job group with an "
                 f"actor can resolve, and these groups have none: {plain}"
             )
 
     def _require_started_queues(self, queue: list[str], what: str) -> None:
         """Refuse a blocking call whose queues have no worker started."""
-        started = {name for name, group in self.groups.items() if group.workers}
+        started = {name for name, group in self.groups.items() if group.jobs}
         if not set(queue) & started:
             raise RuntimeError(
                 f"{what} targets queues with no worker started: {sorted(queue)}. "
-                f"Call scale_workers() for a worker group of that name first."
+                f"Call scale_jobs() for a job group of that name first."
             )
 
     @typechecked
     def mapreduce(
         self,
-        description: str,
+        desc: str,
         queue: str | list[str],
         map_fn: Callable | str,
         reduce_fn: Callable,
@@ -611,7 +613,7 @@ class SlurmPilotExecutor:
         The first `previous` is `init`.
 
         `map_fn` is a callable, or the name of a method
-        on the actor of the worker group it runs on.
+        on the actor of the job group it runs on.
         A method name reaches the actor that worker built at startup,
         so an expensive load happens once per worker rather than once per item.
         `reduce_fn` is always a callable,
@@ -627,7 +629,7 @@ class SlurmPilotExecutor:
         so a `reduce_fn` that folds in place
         cannot write into the caller's own value.
 
-        `description` labels the progress `swtop` draws for this call,
+        `desc` labels the progress `swtop` draws for this call,
         which counts tasks rather than items.
         `num_tasks` is an upper bound.
         A call with fewer items than that submits one task per item.
@@ -636,8 +638,8 @@ class SlurmPilotExecutor:
 
         Raises `ValueError` for a `num_tasks` below 1.
         Raises it as well for a `map_fn` given as a method name
-        where a worker group named in `queue` has no actor to find it on.
-        Raises `RuntimeError` when no worker group named in `queue`
+        where a job group named in `queue` has no actor to find it on.
+        Raises `RuntimeError` when no job group named in `queue`
         has a worker started,
         and when any of the tasks fails, as `wait` does.
         """
@@ -675,9 +677,7 @@ class SlurmPilotExecutor:
             token=uuid.uuid4().hex[:MAPREDUCE_TOKEN_LEN],
         )
         self.next_mapreduce_index += 1
-        self.logger.info(
-            "mapreduce %s: %d items on %s", description, len(items), mr_queue
-        )
+        self.logger.info("mapreduce %s: %d items on %s", desc, len(items), mr_queue)
 
         for index, item in enumerate(items):
             self.client.task_add(
@@ -710,8 +710,8 @@ class SlurmPilotExecutor:
             tasks.append(task)
 
         # Folded as they arrive,
-        # so the coordinator never holds every partial result at once.
-        for task in self.as_completed(tasks, desc=description, unit="task"):
+        # so the driver never holds every partial result at once.
+        for task in self.as_completed(tasks, desc=desc, unit="task"):
             result = reduce_fn(result, task.output, *reduce_args, **reduce_kwargs)
         return result
 
@@ -908,14 +908,14 @@ class SlurmPilotExecutor:
         return {
             group.name
             for group in groups
-            if any(worker.job_id in job_ids for worker in group.workers.values())
+            if any(job.job_id in job_ids for job in group.jobs.values())
         }
 
     def _starved_tasks(self, pending: list[Task]) -> tuple[list[Task], str]:
         """Pending tasks with no worker ever started for them, and a message."""
         # This executor's own bookkeeping, not a question to the cluster:
         # the check must work before any job can start.
-        started = {name for name, group in self.groups.items() if group.workers}
+        started = {name for name, group in self.groups.items() if group.jobs}
 
         starved = [task for task in pending if not set(task.queue) & started]
         if not starved:
@@ -925,7 +925,7 @@ class SlurmPilotExecutor:
         return starved, (
             f"{len(starved)} of {len(pending)} pending tasks are on queues with "
             f"no worker started: {queues}. "
-            f"Call scale_workers() for a worker group of that name "
+            f"Call scale_jobs() for a job group of that name "
             f"before waiting on them."
         )
 
@@ -951,7 +951,7 @@ class SlurmPilotExecutor:
         return stranded, (
             f"{len(stranded)} of {len(pending)} pending tasks are on queues with "
             f"no live pilot job, so they can never run: {queues}. "
-            f"Scale up a worker group named after one of those queues, "
+            f"Scale up a job group named after one of those queues, "
             f"or cancel the wait."
         )
 
@@ -975,9 +975,9 @@ class SlurmPilotExecutor:
 
         to_cancel_jobids = []
         for group in self.groups.values():
-            for worker in group.workers.values():
-                if worker.job_id in job_ids:
-                    to_cancel_jobids.append(worker.job_id)
+            for job in group.jobs.values():
+                if job.job_id in job_ids:
+                    to_cancel_jobids.append(job.job_id)
 
         if not to_cancel_jobids:
             return
@@ -1012,7 +1012,7 @@ class SlurmPilotExecutor:
         """
         self._cleanup_all_workers()
         for group in self.groups.values():
-            group.workers.clear()
+            group.jobs.clear()
 
         self.client.close()
         self._close_log_handler()
@@ -1021,7 +1021,7 @@ class SlurmPilotExecutor:
         """Cancel every pilot job, and leave the executor usable."""
         self._cleanup_all_workers()
         for group in self.groups.values():
-            group.workers.clear()
+            group.jobs.clear()
 
     def __enter__(self) -> "SlurmPilotExecutor":
         return self

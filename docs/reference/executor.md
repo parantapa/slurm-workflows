@@ -3,9 +3,12 @@
 [<- back to the main README](../../README.md)
 
 `slurm_workflows.slurm_pilot_executor`:
-the coordinator, the `Task` handle it returns,
+the executor, the `Task` handle it returns,
 and the `RaiseOnError` policy that decides what a failure does.
-The coordinator runs on a login node, or inside a Slurm job.
+[`mapreduce`](mapreduce.md)
+and [what a run publishes](what-a-run-publishes.md)
+have pages of their own.
+The driver runs on a login node, or inside a Slurm job.
 
 Everything public is importable from the package root,
 except `NoOutput`:
@@ -14,7 +17,7 @@ except `NoOutput`:
 from slurm_workflows import SlurmPilotExecutor, RaiseOnError, RemoteExecutionError
 ```
 
-The botorch names, `OptimizeSpaceBotorch` and `OptimizationTask`,
+The botorch names, `OptimizeSpaceBotorch` and `OptimizationStudy`,
 import from there too.
 The package resolves them on first use rather than at import time,
 so `import slurm_workflows` still works without botorch installed.
@@ -29,7 +32,7 @@ executor = SlurmPilotExecutor(name, server_address, work_dir=None)
 
 `name` identifies the executor.
 It prefixes every task id (`<name>.task.<n>`)
-and every worker's Slurm job name (`<name>.worker.<group>.<index>`),
+and every pilot job's Slurm job name (`<name>.job.<group>.<index>`),
 and it names the executor's log.
 Two executors on one cluster must have two names.
 A shared one collides on all three,
@@ -44,9 +47,9 @@ Anything else raises `ValueError`.
 Each executor must have a server of its own.
 A server holds one run's tasks, worker registrations and actor arguments.
 The library assumes everything on it belongs to the executor that uses it.
-Two executors pointed at one server share a queue namespace:
-same-named worker groups serve each other's tasks,
-and same-named groups overwrite each other's actor arguments.
+Two executors pointed at one server share a queue namespace.
+Same-named job groups serve each other's tasks,
+and they overwrite each other's actor arguments.
 
 `work_dir` defaults to a timestamped directory under
 `<platform cache dir>/slurm-workflows/<name>`
@@ -54,17 +57,19 @@ and same-named groups overwrite each other's actor arguments.
 so one executor's runs sit together.
 Generated scripts and all logs land there.
 
+## Methods
+
 | Method | What it does |
 | --- | --- |
-| `define_worker(name, sbatch_args, ...)` | Register a worker group. Submits nothing. The group name is also the queue name. A second identical definition does nothing. A definition that differs raises `AssertionError`. |
-| `scale_workers(name, count)` | Submit or cancel pilot jobs so the group has `count` jobs. |
-| `submit(queue, fn, *args, **kwargs) -> Task` | Enqueue one task and return a `Task` straight away. `queue` is a group name or a list of them; `fn` is a callable, or a method name (`str`) for actor workers. |
-| `mapreduce(description, queue, map_fn, reduce_fn, iterable, init, num_tasks, ...)` | Map an iterable across the pool and fold the results into one value. Blocks. `init` must be the identity of `reduce_fn`. |
+| `define_job_group(name, sbatch_args, ...)` | Register a job group. Submits nothing. The job group name is also the queue name. A second identical definition does nothing. A definition that differs raises `AssertionError`. |
+| `scale_jobs(name, count)` | Submit or cancel pilot jobs so the job group has `count` jobs. |
+| `submit(queue, fn, *args, **kwargs) -> Task` | Enqueue one task and return a `Task` straight away. `queue` is a job group name or a list of them. `fn` is a callable, or a method name (`str`) for actor workers. |
+| [`mapreduce(desc, queue, ...)`](mapreduce.md) | Map an iterable across the pool and fold the results into one value. Blocks. `init` must be the identity of `reduce_fn`. |
 | `as_completed(tasks, desc, unit="task", raise_on_error=...)` | Yield tasks as their results arrive. `desc` and `unit` label the progress `swtop` draws. Raises `RuntimeError` rather than blocking forever on a task that can never finish. |
 | `wait(tasks, desc, unit="task", raise_on_error=...)` | Same, but discards the iterator. Blocks until all are done. |
-| `set_task_name(task, name)` | Name a task, on the queue server as well as locally. |
+| `set_task_name(task, name)` | Name a task, on the server as well as locally. |
 | `stop()` | Cancel all pilot jobs, keep the executor usable. |
-| `close()` | Cancel all pilot jobs and close the queue-server connection. |
+| `close()` | Cancel all pilot jobs and close the server connection. |
 
 It is also a context manager.
 On leaving the block, Python calls `close()`.
@@ -73,19 +78,19 @@ An exception raised inside the block still propagates:
 
 ```python
 with SlurmPilotExecutor(name="demo", server_address=address) as executor:
-    executor.define_worker(name="cpu", sbatch_args=[...])
-    executor.scale_workers("cpu", 4)
+    executor.define_job_group(name="cpu", sbatch_args=[...])
+    executor.scale_jobs("cpu", 4)
     ...
 # close() has run: every pilot job is canceled
-# and the queue connection is shut.
+# and the server connection is shut.
 ```
 
 A whole run is five calls:
 
 ```python
 with SlurmPilotExecutor("my-run", address) as executor:
-    executor.define_worker(name="cpu", sbatch_args=SBATCH_ARGS, setup_script=SETUP)
-    executor.scale_workers("cpu", 1)
+    executor.define_job_group(name="cpu", sbatch_args=SBATCH_ARGS, setup_script=SETUP)
+    executor.scale_jobs("cpu", 1)
 
     tasks = [executor.submit("cpu", square, i) for i in range(100)]
     executor.wait(tasks, desc="squaring")
@@ -95,33 +100,33 @@ results = [task.output for task in tasks]
 
 The executor passes `sbatch_args` straight through to `sbatch`,
 so any Slurm option works.
-Tasks can be submitted before any worker exists:
-they wait on the queue until something pulls them.
+The executor accepts tasks before any worker exists:
+they wait on the queue until a worker claims them.
 
-## `define_worker` options
+## `define_job_group` options
 
 | Argument | Default | Meaning |
 | --- | --- | --- |
-| `setup_script` | `""` | Shell snippet run on the compute node before the worker starts. The text, not a path. Must be a `str`; omit it (or pass `""`) if `/etc/profile` (always sourced) already gives workers the right environment. |
-| `is_batch_worker` | `False` | See [One worker per job, or one per task](#one-worker-per-job-or-one-per-task). |
+| `setup_script` | `""` | Shell snippet run on the compute node before the worker starts. The text, not a path. Must be a `str`. An omitted value (or `""`) leaves each worker with what `/etc/profile`, which is always sourced, gives it. |
+| `worker_exe` | `"slurm-pilot-worker"` | Worker entry point, for a wrapped or renamed one. |
+| `is_batch_worker` | `False` | See [One worker per pilot job, or one per Slurm task](#one-worker-per-pilot-job-or-one-per-slurm-task). |
 | `actor_class_name` | `None` | Fully qualified class name to instantiate once per worker. |
 | `actor_class_args` | `None` | Positional arguments for that class's constructor. Only valid with `actor_class_name`. |
 | `actor_class_kwargs` | `None` | Keyword arguments for that class's constructor. Only valid with `actor_class_name`. |
 | `python_paths` | `None` | Extra paths prepended to the workers' `sys.path`. |
-| `add_cwd_to_python_path` | `True` | Also add the coordinator's cwd. |
-| `worker_exe` | `"slurm-pilot-worker"` | Worker entry point, for a wrapped or renamed one. |
+| `add_cwd_to_python_path` | `True` | Also add the driver's cwd. |
 
 The executor cloudpickles the actor arguments
-and puts them in the `ds-service` key value store.
+and puts them in the `ds-service` map.
 The keys are `actor_class_args:<name>` and `actor_class_kwargs:<name>`,
-where `<name>` is the worker group's name.
+where `<name>` is the job group's name.
 Each worker reads them back at startup.
 
 They must be picklable.
 Anything they refer to must be importable on the compute node,
 exactly as for the actor class itself.
-They are not part of the group's identity,
-so a group can be redefined with different ones.
+They are not part of the job group's identity,
+so a later call can redefine a job group with different ones.
 `sbatch_args` are part of it, and a different value asserts.
 Only the workers started after that call read the new values.
 A worker constructs its actor once, when it starts.
@@ -129,245 +134,31 @@ A worker constructs its actor once, when it starts.
 For the task-side view of actors, see
 [How to keep per-worker state with actors](../how-to-guides/keep-per-worker-state-with-actors.md).
 
-## One worker per job, or one per task
+## One worker per pilot job, or one per Slurm task
 
-`is_batch_worker` controls how many worker processes each Slurm job starts:
+`is_batch_worker` controls how many workers each pilot job starts:
 
-| Setting | Script is run with | Workers per job |
+| Setting | Script is run with | Workers per pilot job |
 | --- | --- | --- |
 | `is_batch_worker=False` (default) | `srun` | one per Slurm task in the allocation |
-| `is_batch_worker=True` | sourced directly | one, on the batch node |
+| `is_batch_worker=True` | sourced directly | one, on the batch host |
 
 With the default, `--nodes=4 --ntasks-per-node=2`
-gives 8 worker processes from a single `scale_workers(..., 1)` call.
-`is_batch_worker=True` gives a single process
-that owns the whole worker allocation,
+gives 8 workers from a single `scale_jobs(..., 1)` call.
+`is_batch_worker=True` gives a single worker
+that owns the pilot job's whole allocation,
 which is what a multi-node (MPI or UPC++) task needs.
-
-## Watching a wait
-
-Both calls require `desc`, and `unit` names what the call counts.
-Neither call prints a progress bar of its own.
-They publish what they work through to the queue server,
-where [`swtop`](swtop.md) draws it.
-
-Each call writes the key `progress_display`, a JSON object with these fields:
-
-| Field | Value |
-| --- | --- |
-| `progress_id` | A fresh UUID4, one per call |
-| `desc` | The `desc` given to the call |
-| `unit` | The `unit` given to the call |
-| `total` | How many tasks were handed in |
-
-Each call also appends the number of tasks that came back so far
-to the time series `progress:<progress_id>`.
-The series opens at 0 and closes at the number that returned.
-The call appends the count at most once a second while tasks arrive.
-
-The next call overwrites the key.
-The server therefore holds the display for the most recent wait,
-and the series holds the history of each.
-
-## `mapreduce`
-
-```python
-result = executor.mapreduce(
-    description="counting words",
-    queue="cpu",
-    map_fn=count_words,
-    reduce_fn=operator.add,
-    iterable=chunks,
-    init=0,
-    num_tasks=40,
-)
-```
-
-`mapreduce` runs one function over a whole iterable
-and folds what it produces into a single value.
-It puts each item on a queue of its own.
-Tasks on `queue` drain that queue,
-and the call blocks until all of them are back.
-
-Each task claims items one at a time and computes
-
-```python
-result = reduce_fn(
-    result,
-    map_fn(item, *map_extra_args, **map_extra_kwargs),
-    *reduce_extra_args,
-    **reduce_extra_kwargs,
-)
-```
-
-starting from `init`,
-until the queue holds nothing it can claim.
-It returns that partial result.
-The call then folds the partial results the same way,
-and returns the value.
-
-Nothing divides the items up in advance.
-A task takes the next item whenever it is free,
-so a slow item slows one task rather than a fixed share of the work.
-
-| Argument | Meaning |
-| --- | --- |
-| `description` | Labels the progress `swtop` draws for this call |
-| `queue` | A worker group name, or a list of them, as in `submit` |
-| `map_fn` | Runs once per item, on a worker. A callable, or the name of a method on the group's actor |
-| `reduce_fn` | Folds one mapped value into the running result |
-| `iterable` | The items. Read out in full before any task starts |
-| `init` | Where every fold starts. Must be the identity of `reduce_fn` |
-| `num_tasks` | How many tasks drain the queue, as an upper bound |
-| `map_extra_args`, `map_extra_kwargs` | Passed to `map_fn` after the item |
-| `reduce_extra_args`, `reduce_extra_kwargs` | Passed to `reduce_fn` after the two values |
-
-Everything here travels by cloudpickle,
-so `map_fn`, `reduce_fn`, `init`, every item
-and every extra argument must be picklable.
-
-### What `reduce_fn` and `init` must satisfy
-
-**`reduce_fn` must be associative.**
-It must also take a partial result as its second argument
-as readily as a mapped one.
-The final fold hands it two partial results.
-Which items a task claimed depends on how busy the pool was,
-so the grouping differs from one run to the next.
-
-**`init` must be the identity of `reduce_fn`.**
-Every task starts its fold at `init`, and so does the call.
-`init` therefore enters the fold once per task, and once more at the end.
-
-```python
-# Right: sum, with 0.
-map_fn=length, reduce_fn=operator.add, init=0
-
-# Right: gather, where map_fn returns a list and reduce_fn concatenates.
-map_fn=lambda x: [work(x)], reduce_fn=operator.add, init=[]
-
-# Wrong: `init` is not an identity, so each task adds 1 of its own.
-map_fn=length, reduce_fn=operator.add, init=1
-
-# Wrong: appending a partial result nests it inside a list.
-map_fn=work, reduce_fn=lambda acc, x: acc + [x], init=[]
-```
-
-The call folds into a copy of `init`,
-so a `reduce_fn` that folds in place cannot write into the caller's value.
-
-### Mapping with an actor's method
-
-`map_fn` can be the name of a method
-on the actor of the worker group it runs on,
-in place of a callable:
-
-```python
-executor.define_worker(
-    name="gpu",
-    sbatch_args=[...],
-    actor_class_name="my_pkg.model.Model",
-)
-executor.scale_workers("gpu", 2)
-
-score = executor.mapreduce(
-    description="scoring",
-    queue="gpu",
-    map_fn="predict",
-    reduce_fn=operator.add,
-    iterable=batches,
-    init=0,
-    num_tasks=16,
-)
-```
-
-Each task looks the name up once,
-on the actor its worker built at startup.
-An expensive load therefore happens once per worker,
-and not once per item.
-`map_extra_args` and `map_extra_kwargs` reach the method after the item,
-as they reach a callable.
-
-`reduce_fn` is a callable, and takes no method name.
-The final fold runs on the coordinator, where there is no actor.
-
-A method name needs an actor to resolve against,
-so a `queue` whose worker group has none raises `ValueError`.
-A callable `map_fn` runs on any worker group,
-with an actor or without one.
-For the rest of what an actor does, see
-[How to keep per-worker state with actors](../how-to-guides/keep-per-worker-state-with-actors.md).
-
-### The queue it creates
-
-A call creates a queue named `<executor-name>.mapreduce.<n>.<token>`,
-where `<n>` counts the calls on this executor
-and `<token>` is 8 hex characters of a UUID4.
-No worker group serves that queue.
-Only that call's own tasks claim from it.
-Each of them opens a `ds-service` client of its own,
-from the `DS_SERVER_ADDRESS` the worker puts in the environment.
-Each claims its items under `PILOT_WORKER_ID`,
-so `task_get_worker_id` on an item names the worker that folded it.
-
-Each item becomes a task on it, `<queue>.item.<i>`.
-That task holds the pickled item and no function.
-A task marks its item complete once it folds the value in,
-and the output it records is empty.
-The value travels home inside the task that computed it.
-`ds-service` has no way to delete a task,
-so those item tasks stay on the server for the life of the run.
-They are what `swtop` counts,
-and the `.mapreduce.` in the id is how a reader tells them apart.
-
-The tasks that do the folding are ordinary tasks on `queue`,
-named `<mr-queue>.task.<i>`.
-
-### What it costs
-
-Enqueueing is one RPC per item, from the coordinator, before any work starts,
-and there is no batched form of it.
-The whole iterable is also held in memory twice,
-once on the coordinator and once on the server.
-Both say the same thing:
-an item must carry enough work to be worth a round trip.
-Group small units into chunks and map over the chunks
-when the work per item is smaller than the round trip that ships it.
-
-### What it refuses
-
-- A `num_tasks` below 1 raises `ValueError`.
-- A `map_fn` given as a method name raises `ValueError`
-    where a worker group named in `queue` has no actor to find it on.
-- A `queue` where no worker group has a worker started
-    raises `RuntimeError`, before it enqueues anything.
-    Unlike `submit`, this call blocks,
-    so it cannot wait for workers that do not exist yet.
-- A task that fails raises `RuntimeError`, the way `wait` does.
-    The other tasks keep draining the queue, and their results are discarded.
-
-### Progress
-
-The progress `swtop` draws counts the tasks, not the items,
-so the bar moves `num_tasks` times over the whole call.
-`unit` is `task`.
-`swtop`'s task table is the finer view,
-where the item tasks complete one by one.
-
-Two more things follow from `num_tasks` being an upper bound.
-A call with fewer items than tasks submits one task per item.
-An empty `iterable` returns a copy of `init`,
-creates no queue, submits nothing, and needs no worker.
 
 ## Errors that end a wait
 
 A task whose queues have no worker can never finish.
 `as_completed` and `wait` therefore do not block on such a task.
-They raise `RuntimeError` and name those queues.
+They raise `RuntimeError` and name those queues,
+unless `raise_on_error` is `RAISE_NEVER`.
 They check this twice.
 
 **Before the first wait**, and without a call to Slurm,
-they require a `scale_workers` call
+they require a `scale_jobs` call
 for at least one of each pending task's queues.
 `submit` does not check queue names,
 so this check is where a mistyped queue name appears.
@@ -387,7 +178,7 @@ They refuse an executor that submits to a queue
 where another process launched the pilot jobs.
 
 Two more states end a wait,
-and the executor reads both straight off the queue server:
+and the executor reads both straight off the server:
 
 - **the server does not know the task id**:
   `RuntimeError: Task ... is unknown to the task queue server`.
@@ -416,9 +207,9 @@ and imports from the package root like everything else.
 
 `task_name` is a read-only property, and it is `None`
 until `executor.set_task_name(task, name)` sets it.
-That call stores the name on the queue server, under `task_name:<task_id>`,
+That call stores the name on the server, under `task_name:<task_id>`,
 as UTF-8 rather than a pickle.
-Anything that reads the store can therefore read it too.
+Anything that reads the map can therefore read it too.
 The call also updates the `Task` to match.
 
 Nothing in this library dispatches on the name.
@@ -442,7 +233,7 @@ What `as_completed` and `wait` do about a task that fails.
 A failure is any of these:
 
 - A task whose worker raised. Its `output` is a `RemoteExecutionError`.
-- A task canceled on the queue server.
+- A task canceled on the server.
 - A task the server does not know.
 - A pending task whose queues have no pilot job left to run them.
 
@@ -479,116 +270,3 @@ never_ran = [t for t in tasks if t.output is NoOutput]
 is unknown to the server,
 or was still pending when the last pilot job went away.
 
-## What a run publishes
-
-Inside a task, these environment variables exist:
-
-- `PILOT_WORKER_NAME`, for example `demo.worker.cpu.0`
-- `PILOT_WORKER_GROUP`, the group name
-- `PILOT_WORKER_ID`, the id the worker claims tasks under
-- `DS_SERVER_ADDRESS`, the queue server address
-- plus the usual Slurm variables (`SLURM_JOB_ID`, ...)
-
-The worker process sets the first four when it starts,
-before it builds its actor and before it takes a task.
-
-**The executor publishes each pilot job as it submits it**,
-under `worker_job_info:<worker-name>`, as a JSON object:
-
-| Field | Value |
-| --- | --- |
-| `name` | The worker name, which is also the Slurm job name |
-| `group` | The group whose queue it will serve |
-| `slurm_job_id` | The job `sbatch` returned |
-| `submit_time` | When it was submitted, an ISO 8601 timestamp with an offset |
-
-**A `mapreduce` call publishes one task per item**,
-on a queue of its own, under `<executor-name>.mapreduce.`.
-Those tasks outlive the call.
-The [`mapreduce`](#mapreduce) section covers the ids and what they hold.
-
-**Each worker process publishes where it runs when it starts**,
-under `worker_process_info:<worker-id>`,
-where the worker id is `<worker-name>.<slurm-job-id>.<hostname>.<pid>`.
-The value is a JSON object, not a pickle,
-so anything can read it:
-
-| Field | Value |
-| --- | --- |
-| `group` | The group whose queue it serves |
-| `name` | The worker's name, which is its Slurm job name |
-| `slurm_job_id` | The job it is running in |
-| `hostname` | The compute node it landed on |
-| `pid` | Its process id on that node |
-
-The worker id is the handle the queue server hands out
-(`task_get_worker_id` says which worker took a task).
-It is the path from a task to the process and the node that ran it.
-Nothing removes the key when a worker exits.
-
-Workers also sample the node they run on and the Slurm job they belong to.
-Every 5 seconds they append to these `ds-service` time series:
-
-- `host_free_memory:<hostname>`
-- `host_load_average:<hostname>`
-- `host_dev_shm_used:<hostname>`
-- `host_tmp_used:<hostname>`
-- `slurm_job_memory:<job-id>`
-- `slurm_job_cpu:<job-id>`
-
-One worker per node and one per job does this.
-The workers elect them with the `host_monitor:<hostname>`
-and `slurm_job_monitor:<job-id>` counters.
-[`swtop`](swtop.md) displays the result.
-
-Why a run publishes in these two halves rather than one is in
-[About what a run publishes](../explanation/about-what-a-run-publishes.md).
-That page also says why nothing updates a key after the first write.
-
-## Logs
-
-Everything for a run lives under the executor's `work_dir`
-(printed as `executor.work_dir`):
-
-| File | Contents |
-| --- | --- |
-| `executor.log` | Worker submission and cancellation from the executor's side |
-| `<worker-name>.sh`, `<worker-name>.sbatch` | The generated scripts |
-| `<worker-name>-<jobid>-<task>.out` | One per worker process: setup-script trace, task-by-task progress, full tracebacks |
-| `<worker-name>-<jobid>.out` | The batch job's own output, and the worker's log too when the job is a single task |
-
-`<worker-name>` is `<executor-name>.worker.<group>.<index>`,
-which is also the Slurm job name, so `squeue` shows which run a job belongs to.
-The work dir itself defaults to `<cache dir>/slurm-workflows/<executor-name>/<timestamp>`.
-
-Slurm writes those files.
-The worker process does not redirect its own output.
-Which of the two holds a worker's log depends on the group's definition:
-
-- **`is_batch_worker=False`** (the default) runs the worker under `srun`,
-    which fans out over every task in the allocation.
-    Each task gets `--output <work-dir>/<worker-name>-%j-%t.out`,
-    so `<task>` is the task's rank.
-    That file is the worker's log.
-    `<worker-name>-<jobid>.out` then holds
-    only what the batch script itself emitted,
-    which in practice means `srun`'s own errors.
-
-    The exception is a job of exactly one task:
-    `--ntasks=1`, or `--nodes=1` and nothing else about tasks.
-    It keeps `srun` but drops the `--output`
-    and writes to `<worker-name>-<jobid>.out` like a batch worker.
-    The count is per *job*, not per node:
-    `--nodes=4 --ntasks-per-node=1` is four tasks
-    and still gets four per-task files.
-
-    The batch file records which way a job went.
-    It opens with the task count the job decided on
-    (`Num tasks: 4`), says so when it redirects,
-    and traces the `srun` command it ran.
-- **`is_batch_worker=True`** runs one worker directly on the batch node,
-    with no `srun` and so no per-task file.
-    Everything lands in `<worker-name>-<jobid>.out`.
-
-The `error_id` inside a `RemoteExecutionError`
-appears verbatim next to the traceback in the worker's log.

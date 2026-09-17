@@ -1,4 +1,4 @@
-"""Helpers for driving a real PilotWorkerProcess in-process."""
+"""Helpers for driving a real PilotWorker in-process."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import cast
 
 from ds_service_client import DsServiceClient
-from slurm_workflows.slurm_pilot_worker import PilotWorkerProcess
+from slurm_workflows.slurm_pilot_worker import PilotWorker
 
 
 class StopWorker(BaseException):
@@ -70,7 +70,7 @@ def make_worker(
     slurm_job_id: int = 42,
     hostname: str = "testhost",
     monitor_interval: float = 60.0,
-) -> PilotWorkerProcess:
+) -> PilotWorker:
     """A real worker against a real server.
 
     The monitor interval is long by default.
@@ -78,7 +78,7 @@ def make_worker(
     which is what the tests look at.
     Nothing here wants a second sample mid-test.
     """
-    return PilotWorkerProcess(
+    return PilotWorker(
         group=group,
         name=name,
         actor_class_name=actor_class_name,
@@ -91,7 +91,7 @@ def make_worker(
     )
 
 
-def run_worker(worker: PilotWorkerProcess, expect_tasks: int) -> None:
+def run_worker(worker: PilotWorker, expect_tasks: int) -> None:
     """Run the worker's real main loop until it completes `expect_tasks` tasks.
 
     The caller must queue the tasks first:
@@ -109,7 +109,7 @@ def run_worker(worker: PilotWorkerProcess, expect_tasks: int) -> None:
         pass
 
 
-def poll_worker(worker: PilotWorkerProcess, polls: int) -> int:
+def poll_worker(worker: PilotWorker, polls: int) -> int:
     """Run the worker's real main loop for `polls` fetches, and count them.
 
     Use this for the empty-queue case.

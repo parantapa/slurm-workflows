@@ -23,7 +23,7 @@ def get_clean_environ() -> dict[str, str]:
     """The environment, less every Slurm-set variable.
 
     Drops `SLURM_`, `SLURMD_`, `PMI_` and `SRUN_`.
-    A coordinator that runs inside an allocation
+    A driver that runs inside an allocation
     then submits jobs of its own.
     """
     sanitized_env: dict[str, str] = {}

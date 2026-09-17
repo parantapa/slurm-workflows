@@ -285,23 +285,21 @@ class TestCollectWorkerJobs:
     def test_a_job_appears_when_it_is_submitted(self, collector, executor):
         assert collector.snapshot().worker_jobs == []
 
-        executor.define_worker("cpu", [])
-        executor.scale_workers("cpu", 1)
+        executor.define_job_group("cpu", [])
+        executor.scale_jobs("cpu", 1)
 
         (listed,) = collector.snapshot().worker_jobs
-        (worker_name,) = executor.groups["cpu"].workers
-        assert listed.name == worker_name
+        (job_name,) = executor.groups["cpu"].jobs
+        assert listed.name == job_name
         assert listed.group == "cpu"
-        assert listed.slurm_job_id == str(
-            executor.groups["cpu"].workers[worker_name].job_id
-        )
+        assert listed.slurm_job_id == str(executor.groups["cpu"].jobs[job_name].job_id)
         assert listed.submit_time
 
     def test_jobs_are_sorted_by_group_then_name(self, collector, executor):
-        executor.define_worker("gpu", [])
-        executor.define_worker("cpu", [])
-        executor.scale_workers("gpu", 1)
-        executor.scale_workers("cpu", 2)
+        executor.define_job_group("gpu", [])
+        executor.define_job_group("cpu", [])
+        executor.scale_jobs("gpu", 1)
+        executor.scale_jobs("cpu", 2)
 
         listed = collector.snapshot().worker_jobs
 
@@ -310,8 +308,8 @@ class TestCollectWorkerJobs:
 
     def test_a_job_with_no_process_is_still_listed(self, collector, executor):
         """A queued job looks like this: submitted, not yet running."""
-        executor.define_worker("cpu", [])
-        executor.scale_workers("cpu", 1)
+        executor.define_job_group("cpu", [])
+        executor.scale_jobs("cpu", 1)
 
         snapshot = collector.snapshot()
 
@@ -321,7 +319,7 @@ class TestCollectWorkerJobs:
     def test_a_description_that_cannot_be_read_is_shown_as_unknown(
         self, collector, ds_client
     ):
-        ds_client.map_set("worker_job_info:half-written", b"not json")
+        ds_client.map_set("pilot_job_info:half-written", b"not json")
 
         (listed,) = collector.snapshot().worker_jobs
 
@@ -330,17 +328,17 @@ class TestCollectWorkerJobs:
 
     def test_a_job_is_read_once(self, ds_service_address, executor):
         """Written once when the executor submits the job, so never read twice."""
-        executor.define_worker("cpu", [])
-        executor.scale_workers("cpu", 1)
+        executor.define_job_group("cpu", [])
+        executor.scale_jobs("cpu", 1)
         bound = LoopBound(ds_service_address, wrap=CountingClient)
         counting = cast(CountingClient, bound.collector.client)
 
         bound.snapshot()
-        after_first = counting.reads("worker_job_info:")
+        after_first = counting.reads("pilot_job_info:")
         bound.snapshot()
 
         assert after_first == 1, "the whole description is one key"
-        assert counting.reads("worker_job_info:") == after_first
+        assert counting.reads("pilot_job_info:") == after_first
         bound.close()
 
 
@@ -369,22 +367,22 @@ class TestCollectWorkers:
         # Two workers of one job and pid differ only in their names.
         workers = [
             make_worker(
-                ds_service_address, tmp_path, group="gpu", name="run.worker.gpu.0"
+                ds_service_address, tmp_path, group="gpu", name="run.job.gpu.0"
             ),
             make_worker(
-                ds_service_address, tmp_path, group="cpu", name="run.worker.cpu.1"
+                ds_service_address, tmp_path, group="cpu", name="run.job.cpu.1"
             ),
             make_worker(
-                ds_service_address, tmp_path, group="cpu", name="run.worker.cpu.0"
+                ds_service_address, tmp_path, group="cpu", name="run.job.cpu.0"
             ),
         ]
 
         listed = [(w.group, w.name) for w in collector.snapshot().workers]
 
         assert listed == [
-            ("cpu", "run.worker.cpu.0"),
-            ("cpu", "run.worker.cpu.1"),
-            ("gpu", "run.worker.gpu.0"),
+            ("cpu", "run.job.cpu.0"),
+            ("cpu", "run.job.cpu.1"),
+            ("gpu", "run.job.gpu.0"),
         ]
         for worker in workers:
             worker.close()
@@ -401,18 +399,18 @@ class TestCollectWorkers:
         counting = cast(CountingClient, bound.collector.client)
 
         bound.snapshot()
-        after_first = counting.reads("worker_process_info:")
+        after_first = counting.reads("worker_info:")
         bound.snapshot()
 
         assert after_first == 1, "the whole description is one key"
-        assert counting.reads("worker_process_info:") == after_first
+        assert counting.reads("worker_info:") == after_first
         worker.close()
         bound.close()
 
     def test_a_description_that_cannot_be_read_is_shown_as_unknown(
         self, collector, ds_client
     ):
-        ds_client.map_set("worker_process_info:something-else", b"not json")
+        ds_client.map_set("worker_info:something-else", b"not json")
 
         (listed,) = collector.snapshot().workers
 
@@ -421,11 +419,11 @@ class TestCollectWorkers:
 
     def test_an_unreadable_description_is_not_cached(self, collector, ds_client):
         """It can be a writer this reader arrived in the middle of."""
-        ds_client.map_set("worker_process_info:w", b"not json")
+        ds_client.map_set("worker_info:w", b"not json")
         collector.snapshot()
 
         ds_client.map_set(
-            "worker_process_info:w",
+            "worker_info:w",
             json.dumps(
                 {
                     "group": "cpu",
@@ -541,15 +539,15 @@ class TestRender:
         out = render(collector.snapshot())
 
         assert "total 0" in out
-        assert "worker jobs (1)" in out
-        assert "no worker processes have registered" in out
+        assert "pilot jobs (1)" in out
+        assert "no workers have registered" in out
         assert "no tasks have been submitted" in out
 
     def test_a_server_with_nothing_submitted_says_so(self):
         out = render(Snapshot(address="a", when=datetime.now()))
 
         assert "no pilot jobs have been submitted" in out
-        assert "no worker processes have registered" in out
+        assert "no workers have registered" in out
 
     def test_the_tables_carry_the_data(
         self, collector, executor, ds_service_address, tmp_path
@@ -560,7 +558,7 @@ class TestRender:
 
         out = render(collector.snapshot())
 
-        assert "worker processes (1)" in out
+        assert "workers (1)" in out
         assert "tasks (1)" in out
         for expected in ["w-1", "testhost", "4242", "the-named-one", task.task_id]:
             assert expected in out

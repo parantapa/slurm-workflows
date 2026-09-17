@@ -1,10 +1,11 @@
-# How to run the task-queue server
+# How to run the `ds-service` server
 
 [<- back to the main README](../../README.md)
 
-The executor and the workers communicate only through a `ds-service` server,
-and each executor needs one of its own.
-The simplest way is to start the server from the driver.
+Nothing in a run works
+until the executor and the workers have a server to meet on.
+Each executor needs one of its own.
+Start it from the driver, in the `with` block that owns the run.
 The server then lives exactly as long as the run.
 
 ## Start it from the driver
@@ -20,10 +21,11 @@ with DsServiceServer(interface="ib0", port=5051) as ds:
     ...
 ```
 
+Call `wait_until_ready()` before you hand `ds.address` to anything.
+The constructor returns as soon as it spawns the process,
+which is well before that process accepts a connection.
+
 `DsServiceServer` comes from the `ds-service-client` package.
-The constructor spawns the process,
-so the server starts before the constructor returns.
-Call `wait_until_ready()` before you hand the address to anything.
 Omit `port` to get an arbitrary free one.
 
 ## Choose an interface the compute nodes can reach
@@ -37,6 +39,8 @@ That node is a login node, or the compute node of the driver's own Slurm job.
 If you name an interface that the node does not have,
 the constructor raises `ValueError`.
 An interface with no IPv4 address raises the same error.
+Run `ip -br addr` on that node,
+and name an interface the compute nodes can route to.
 
 ## If the binary is not on your `PATH`
 

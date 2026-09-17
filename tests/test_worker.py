@@ -1,4 +1,4 @@
-"""Tests for the pilot worker.
+"""Tests for the worker.
 
 The worker runs for real against a real ds-service.
 The tests mock Slurm alone.
@@ -209,7 +209,7 @@ class TestActors:
     def test_constructor_arguments_come_from_the_key_value_store(
         self, executor, ds_service_address, tmp_path
     ):
-        executor.define_worker(
+        executor.define_job_group(
             name="configured",
             sbatch_args=[],
             actor_class_name="support_actor.ConfiguredActor",
@@ -233,7 +233,7 @@ class TestActors:
     def test_arguments_are_read_for_this_workers_group_only(
         self, executor, ds_service_address, tmp_path
     ):
-        executor.define_worker(
+        executor.define_job_group(
             name="configured",
             sbatch_args=[],
             actor_class_name="support_actor.ConfiguredActor",
@@ -258,7 +258,7 @@ class TestActors:
     def test_a_configured_actor_runs_tasks(
         self, executor, ds_service_address, tmp_path
     ):
-        executor.define_worker(
+        executor.define_job_group(
             name="configured",
             sbatch_args=[],
             actor_class_name="support_actor.ConfiguredActor",
@@ -267,7 +267,7 @@ class TestActors:
         )
         # `as_completed` refuses to wait on a queue with no pilot job,
         # and the autouse fixture only declared one for "cpu".
-        executor.scale_workers("configured", 1)
+        executor.scale_jobs("configured", 1)
 
         task = executor.submit("configured", "config")
 
@@ -424,8 +424,8 @@ class TestWorkerIdentity:
         """What a task reads to reach the server and to name itself on it."""
         worker = make_worker(ds_service_address, tmp_path, group="cpu", name="w-1")
 
-        assert os.environ["PILOT_WORKER_NAME"] == "w-1"
-        assert os.environ["PILOT_WORKER_GROUP"] == "cpu"
+        assert os.environ["PILOT_JOB_NAME"] == "w-1"
+        assert os.environ["PILOT_JOB_GROUP"] == "cpu"
         assert os.environ["PILOT_WORKER_ID"] == worker.worker_id
         assert os.environ["DS_SERVER_ADDRESS"] == ds_service_address
         worker.close()
@@ -453,9 +453,7 @@ class TestWorkerIdentity:
     ):
         worker = make_worker(ds_service_address, tmp_path, group="cpu", name="w-1")
 
-        published = json.loads(
-            ds_client.map_get(f"worker_process_info:{worker.worker_id}")
-        )
+        published = json.loads(ds_client.map_get(f"worker_info:{worker.worker_id}"))
 
         assert published == {
             "group": "cpu",
@@ -473,7 +471,7 @@ class TestWorkerIdentity:
         worker = make_worker(ds_service_address, tmp_path, group="cpu", name="w-1")
 
         assert ds_client.map_search_key(f"^worker_.*:{worker.worker_id}$") == [
-            f"worker_process_info:{worker.worker_id}"
+            f"worker_info:{worker.worker_id}"
         ]
         worker.close()
 
@@ -484,9 +482,7 @@ class TestWorkerIdentity:
         second = make_worker(ds_service_address, tmp_path, group="gpu", name="w-2")
 
         for worker, group in [(first, "cpu"), (second, "gpu")]:
-            published = json.loads(
-                ds_client.map_get(f"worker_process_info:{worker.worker_id}")
-            )
+            published = json.loads(ds_client.map_get(f"worker_info:{worker.worker_id}"))
             assert published["group"] == group
         first.close()
         second.close()
@@ -505,7 +501,7 @@ class TestWorkerIdentity:
             )
 
         wid = "w-1.42.testhost.4242"
-        published = json.loads(ds_client.map_get(f"worker_process_info:{wid}"))
+        published = json.loads(ds_client.map_get(f"worker_info:{wid}"))
         assert published["hostname"] == "testhost"
 
 
@@ -618,7 +614,7 @@ class TestCli:
 
     @pytest.fixture
     def captured(self, monkeypatch):
-        """Replace the worker process so main() returns instead of looping."""
+        """Replace the worker so main() returns instead of looping."""
         seen = {}
 
         class FakeWorker:
@@ -632,7 +628,7 @@ class TestCli:
             def close(self):
                 seen["closed"] = True
 
-        monkeypatch.setattr(worker_mod, "PilotWorkerProcess", FakeWorker)
+        monkeypatch.setattr(worker_mod, "PilotWorker", FakeWorker)
         return seen
 
     def invoke(self, tmp_path: Path, **overrides) -> int:

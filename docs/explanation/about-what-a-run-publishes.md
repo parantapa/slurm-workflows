@@ -4,7 +4,7 @@
 
 A run leaves a trail on the `ds-service` server.
 The trail holds which pilot jobs the executor submitted
-and which worker processes started.
+and which workers started.
 It also holds what the nodes and the jobs do,
 and how far a wait got.
 No task needs any of it.
@@ -12,13 +12,13 @@ The trail exists so that somebody can watch a run from outside itself,
 which is what [`swtop`](../reference/swtop.md) does.
 
 For the field names and the exact keys, see
-[What a run publishes](../reference/executor.md#what-a-run-publishes).
+[What a run publishes](../reference/what-a-run-publishes.md).
 
 ## Two halves, because they are known at different times
 
-The executor writes `worker_job_info:<worker-name>`
+The executor writes `pilot_job_info:<job-name>`
 as soon as `sbatch` returns.
-Each worker process writes `worker_process_info:<worker-id>`
+Each worker writes `worker_info:<worker-id>`
 when it starts.
 
 Nothing merges the two, and that is the point.
@@ -27,10 +27,10 @@ But nobody knows the host it will land on or the pids it will run
 until Slurm starts it.
 Two keys mean that a queued job is visible before it runs.
 The *difference* between the two blocks is a fact worth reading.
-A job with no process against it is still queued,
+A pilot job with no worker against it is still queued,
 or still inside its setup script.
 
-One job usually holds many processes, one per task slot,
+One pilot job usually holds many workers, one per Slurm task,
 so the two counts differ even when everything is healthy.
 
 ## One key per subject, never one per field
@@ -52,14 +52,14 @@ That is what makes them cacheable.
 A monitor reads each worker's fields once and never again.
 On a large pool that is the difference between one read per poll
 and four hundred reads per poll.
-The store is in memory and dies with the server,
+The map is in memory and dies with the server,
 which is the only cleanup there is.
 
 ## Why a wait publishes its progress instead of drawing it
 
 `wait` and `as_completed` write the `progress_display` key
 and append the completed count to a time series as tasks return.
-They print nothing themselves.
+They draw no progress bar themselves.
 
 A driver that draws its own progress bar is useless
 in the two places these runs usually live.
@@ -70,18 +70,18 @@ The same run therefore shows a bar to somebody
 who watches from another shell,
 and leaves a clean log when nobody does.
 
-`wait` appends the count at most once a second, not once per task.
-A batch of thousands of tasks therefore writes a handful of points,
-not thousands.
-The next call overwrites the key,
-so the server holds the display for the most recent wait.
-The series holds the history of each wait.
+The cadence and the overwrite rule follow from the same choice.
+A display that a reader polls costs a write per second,
+not a write per task.
+Only the newest wait is worth a key of its own.
+[Watching a wait](../reference/what-a-run-publishes.md#watching-a-wait)
+has the fields.
 
 ## Why sampling is elected, and never re-elected
 
 The workers sample the host and job readings themselves,
 so the cluster runs no extra process.
-But a node runs one worker per task slot, and a job spans many nodes.
+But a node runs one worker per Slurm task, and a pilot job spans many nodes.
 Most workers must therefore not sample,
 or every reading arrives forty times over.
 
@@ -103,13 +103,13 @@ loses the readings for what it gave up.
 
 Sampling threads are daemons that swallow their own errors,
 for the same reason a worker swallows a bad task's exception.
-A monitor must not hold a worker open at the end of its walltime.
+A monitor must not hold a worker open at the end of its time limit.
 A node that is briefly unreachable
 must leave a gap in the series rather than end it.
 
-## Why a monitor draws a failed poll instead of raising
+## Why `swtop` draws a failed poll instead of raising
 
-A monitor that exits when the server blinks
+A program that exits when the server blinks
 takes the screen down with it,
 usually at the least convenient moment.
 So `swtop` reports an unreachable server above the tables
@@ -120,10 +120,10 @@ and one that is briefly away.
 
 ## The limits of what can be shown
 
-A monitor can only show what an RPC can answer.
+`swtop` can only show what an RPC can answer.
 The server can count tasks by state and enumerate task ids,
 but nothing enumerates workers, hosts or jobs.
-`swtop` therefore builds those tables by searching the key space
+`swtop` therefore builds those tables by searching the map
 for the keys the workers and monitors publish.
 `swtop` cannot list a worker that never published its identity.
 That is a property of the server, not a gap to work around.

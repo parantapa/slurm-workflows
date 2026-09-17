@@ -36,7 +36,7 @@ class TestIntRange:
             assert r.unstandardize(r.standardize(x)) == x
 
     def test_returns_an_int_not_a_float(self):
-        # The sweep passes the value to the objective as a keyword argument.
+        # The exploration passes the value to the objective as a keyword argument.
         # A 3.0 where the objective expects 3 is a bug the caller has to debug.
         value = IntRange(0, 10).unstandardize(0.5)
         assert isinstance(value, int)

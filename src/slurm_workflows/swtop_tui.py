@@ -20,19 +20,19 @@ from .swtop import (
     JOB_COLUMNS,
     TASK_COLUMNS,
     WORKER_COLUMNS,
-    WORKER_JOB_COLUMNS,
+    PILOT_JOB_COLUMNS,
     EMPTY_HOSTS,
     EMPTY_JOBS,
     EMPTY_TASKS,
     EMPTY_WORKERS,
-    EMPTY_WORKER_JOBS,
+    EMPTY_PILOT_JOBS,
     Collector,
     Snapshot,
     counts_line,
     host_rows,
     job_rows,
     task_rows,
-    worker_job_rows,
+    pilot_job_rows,
     worker_rows,
 )
 
@@ -135,7 +135,7 @@ class SwtopApp(App):
     .progress-label { color: $text-muted; }
 
     Block { height: auto; padding: 0 1; }
-    /* Worker processes and tasks are the blocks that can hold thousands of
+    /* Workers and tasks are the blocks that can hold thousands of
        rows, so they share the space left over and scroll inside themselves;
        the rest are bounded by what a cluster has. */
     #workers { height: 1fr; min-height: 6; }
@@ -161,10 +161,8 @@ class SwtopApp(App):
         yield Static(id="summary")
         yield Static(id="error")
         yield ProgressBlock(id="progress")
-        yield Block(
-            "worker jobs", WORKER_JOB_COLUMNS, EMPTY_WORKER_JOBS, id="worker-jobs"
-        )
-        yield Block("worker processes", WORKER_COLUMNS, EMPTY_WORKERS, id="workers")
+        yield Block("pilot jobs", PILOT_JOB_COLUMNS, EMPTY_PILOT_JOBS, id="pilot-jobs")
+        yield Block("workers", WORKER_COLUMNS, EMPTY_WORKERS, id="workers")
         yield Block("hosts", HOST_COLUMNS, EMPTY_HOSTS, id="hosts")
         yield Block("slurm jobs", JOB_COLUMNS, EMPTY_JOBS, id="jobs")
         yield Block("tasks", TASK_COLUMNS, EMPTY_TASKS, id="tasks")
@@ -227,7 +225,7 @@ class SwtopApp(App):
         self.query_one("#summary", Static).update(f"{counts_line(snapshot)}   {when}")
 
         self.query_one("#progress", ProgressBlock).show(snapshot.progress)
-        self.query_one("#worker-jobs", Block).show(worker_job_rows(snapshot))
+        self.query_one("#pilot-jobs", Block).show(pilot_job_rows(snapshot))
         self.query_one("#workers", Block).show(worker_rows(snapshot))
         self.query_one("#hosts", Block).show(host_rows(snapshot))
         self.query_one("#jobs", Block).show(job_rows(snapshot))

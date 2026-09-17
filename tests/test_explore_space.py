@@ -1,4 +1,4 @@
-"""Tests for the Sobol' QMC sweep.
+"""Tests for the Sobol' QMC exploration.
 
 Needs neither botorch nor torch, which is the point of the module:
 scipy draws the designs, and a stand-in executor runs the objectives inline.
@@ -16,7 +16,7 @@ from typing import cast
 
 import pytest
 
-from slurm_workflows.explore_space import ExplorationTask, ExploreSpaceSobolQMC
+from slurm_workflows.explore_space import ExplorationStudy, ExploreSpaceSobolQMC
 from slurm_workflows.search_space import CategoricalRange, FloatRange, IntRange
 from slurm_workflows.slurm_pilot_executor import SlurmPilotExecutor, Task
 from slurm_workflows.utils import RemoteExecutionError, gen_error_id
@@ -77,7 +77,7 @@ class LocalExecutor:
         )
 
     def set_task_name(self, task: Task, name: str) -> None:
-        """Record a name, as the real executor does on the queue server."""
+        """Record a name, as the real executor does on the server."""
         self.names.append(name)
         task._task_name = name
 
@@ -94,8 +94,8 @@ def as_executor(executor: LocalExecutor) -> SlurmPilotExecutor:
     return cast(SlurmPilotExecutor, executor)
 
 
-def task(
-    name: str = "sweep",
+def study(
+    name: str = "demo",
     space=BOX_2D,
     objective=sphere,
     queue: str | list[str] = "cpu",
@@ -103,9 +103,9 @@ def task(
     seed: int | None = SEED,
     objective_key: str = "objective",
     **extra,
-) -> ExplorationTask:
-    """One exploration task, with the test defaults filled in."""
-    return ExplorationTask(
+) -> ExplorationStudy:
+    """One exploration study, with the test defaults filled in."""
+    return ExplorationStudy(
         name=name,
         space=space,
         objective=objective,
@@ -117,212 +117,214 @@ def task(
     )
 
 
-def explorer(*tasks: ExplorationTask, points: int | None = None):
-    """A sweep of `tasks`, or of one default task, on a stand-in executor."""
+def explorer(*studies: ExplorationStudy, points: int | None = None):
+    """An exploration of `studies`, or of one default study, on a stand-in executor."""
     return ExploreSpaceSobolQMC(
-        list(tasks) or [task()], as_executor(LocalExecutor()), points
+        list(studies) or [study()], as_executor(LocalExecutor()), points
     )
 
 
 class TestConstruction:
     def test_the_point_count_is_floored_to_a_power_of_two(self):
-        sweep = explorer(task(points=100))
+        exploration = explorer(study(points=100))
 
-        assert sweep.tasks[0].num_exploration_points == 64
+        assert exploration.studies[0].num_exploration_points == 64
 
-    def test_the_sweeps_count_fills_in_for_a_task_without_one(self):
-        sweep = explorer(task(points=None), points=16)
+    def test_the_explorations_count_fills_in_for_a_study_without_one(self):
+        exploration = explorer(study(points=None), points=16)
 
-        assert sweep.tasks[0].num_exploration_points == 16
+        assert exploration.studies[0].num_exploration_points == 16
 
-    def test_a_tasks_own_count_wins(self):
-        sweep = explorer(task(points=4), points=64)
+    def test_a_studys_own_count_wins(self):
+        exploration = explorer(study(points=4), points=64)
 
-        assert sweep.tasks[0].num_exploration_points == 4
+        assert exploration.studies[0].num_exploration_points == 4
 
     def test_a_count_from_neither_is_rejected(self):
         with pytest.raises(ValueError, match="num_exploration_points"):
-            explorer(task(points=None))
+            explorer(study(points=None))
 
     def test_a_point_count_below_one_is_rejected(self):
         with pytest.raises(ValueError):
-            explorer(task(points=0))
+            explorer(study(points=0))
 
-    def test_no_tasks_is_rejected(self):
-        with pytest.raises(ValueError, match="no exploration tasks"):
+    def test_no_studies_is_rejected(self):
+        with pytest.raises(ValueError, match="no exploration studies"):
             ExploreSpaceSobolQMC([], as_executor(LocalExecutor()))
 
     def test_duplicate_task_names_are_rejected(self):
-        """The name keys the results, so two tasks of one name lose a result."""
+        """The name keys the results, so two studies of one name lose a result."""
         with pytest.raises(ValueError, match="unique"):
-            explorer(task(name="a"), task(name="b"), task(name="a"))
+            explorer(study(name="a"), study(name="b"), study(name="a"))
 
     def test_an_empty_space_is_rejected(self):
         with pytest.raises(ValueError, match="empty"):
-            explorer(task(space={}))
+            explorer(study(space={}))
 
     def test_extra_kwargs_may_not_shadow_a_parameter(self):
         with pytest.raises(ValueError, match="shadow"):
-            explorer(task(x=1.0))
+            explorer(study(x=1.0))
 
     def test_the_failing_task_is_named(self):
         with pytest.raises(ValueError, match="second"):
-            explorer(task(name="first"), task(name="second", space={}))
+            explorer(study(name="first"), study(name="second", space={}))
 
     def test_a_missing_seed_is_drawn_and_printed(self, capsys):
-        sweep = explorer(task(seed=None))
+        exploration = explorer(study(seed=None))
 
-        assert isinstance(sweep.tasks[0].seed, int)
-        assert str(sweep.tasks[0].seed) in capsys.readouterr().out
+        assert isinstance(exploration.studies[0].seed, int)
+        assert str(exploration.studies[0].seed) in capsys.readouterr().out
 
     def test_the_callers_task_is_left_alone(self):
         """`tasks` says what will run.
 
-        The sweep does not touch the caller's own object.
+        The exploration does not touch the caller's own object.
         """
-        original = task(points=100, seed=None)
+        original = study(points=100, seed=None)
 
-        sweep = explorer(original)
+        exploration = explorer(original)
 
         assert original.num_exploration_points == 100
         assert original.seed is None
-        assert sweep.tasks[0].num_exploration_points == 64
-        assert sweep.tasks[0].seed is not None
+        assert exploration.studies[0].num_exploration_points == 64
+        assert exploration.studies[0].seed is not None
 
     def test_nothing_is_submitted_until_it_runs(self):
-        sweep = explorer()
+        exploration = explorer()
 
-        assert sweep.results["sweep"].points == []
+        assert exploration.results["demo"].points == []
         with pytest.raises(RuntimeError, match="nothing has been evaluated"):
-            sweep.best_point("sweep")
+            exploration.best_point("demo")
 
     def test_an_unknown_task_name_says_what_there_is(self):
-        sweep = explorer(task(name="a"))
+        exploration = explorer(study(name="a"))
 
         with pytest.raises(KeyError, match="'a'"):
-            sweep.design("b")
+            exploration.design("b")
 
 
 class TestDesign:
     def test_it_draws_the_asked_for_number_of_points(self):
-        assert len(explorer(task(points=8)).design("sweep")) == 8
+        assert len(explorer(study(points=8)).design("demo")) == 8
 
     def test_the_same_seed_draws_the_same_design(self):
-        one = explorer(task(seed=7)).design("sweep")
-        two = explorer(task(seed=7)).design("sweep")
+        one = explorer(study(seed=7)).design("demo")
+        two = explorer(study(seed=7)).design("demo")
 
         assert one == two
 
     def test_a_different_seed_draws_a_different_design(self):
-        assert explorer(task(seed=7)).design("sweep") != explorer(task(seed=8)).design(
-            "sweep"
+        assert explorer(study(seed=7)).design("demo") != explorer(study(seed=8)).design(
+            "demo"
         )
 
     def test_each_task_draws_in_its_own_space(self):
-        sweep = explorer(
-            task(name="box"),
-            task(name="mixed", space=MIXED, objective=mixed_objective),
+        exploration = explorer(
+            study(name="box"),
+            study(name="mixed", space=MIXED, objective=mixed_objective),
         )
 
-        assert set(sweep.design("box")[0]) == {"x", "y"}
-        assert set(sweep.design("mixed")[0]) == {"x", "n", "kind"}
+        assert set(exploration.design("box")[0]) == {"x", "y"}
+        assert set(exploration.design("mixed")[0]) == {"x", "n", "kind"}
 
     def test_every_point_is_inside_its_range(self):
-        sweep = explorer(task(space=MIXED, objective=mixed_objective))
+        exploration = explorer(study(space=MIXED, objective=mixed_objective))
 
-        for params in sweep.design("sweep"):
+        for params in exploration.design("demo"):
             assert -1.0 <= params["x"] <= 1.0
             assert 2 <= params["n"] <= 10
             assert params["kind"] in (0, 1, 2)
 
     def test_discrete_parameters_come_back_as_integers(self):
-        sweep = explorer(task(space=MIXED, objective=mixed_objective))
+        exploration = explorer(study(space=MIXED, objective=mixed_objective))
 
-        params = sweep.design("sweep")[0]
+        params = exploration.design("demo")[0]
 
         assert isinstance(params["n"], int)
         assert isinstance(params["kind"], int)
 
     def test_the_design_covers_the_space_more_evenly_than_it_clumps(self):
         """What Sobol' buys over a uniform draw: no half stays empty."""
-        design = explorer(task(points=64)).design("sweep")
+        design = explorer(study(points=64)).design("demo")
 
         assert sum(1 for p in design if p["x"] < 0.0) == 32
         assert sum(1 for p in design if p["y"] < 0.0) == 32
 
     def test_drawing_does_not_evaluate(self):
-        sweep = explorer()
+        exploration = explorer()
 
-        sweep.design("sweep")
+        exploration.design("demo")
 
-        assert sweep.results["sweep"].values == []
+        assert exploration.results["demo"].values == []
 
     def test_the_dimension_is_the_tasks_own(self):
-        sweep = explorer(
-            task(name="box"),
-            task(name="mixed", space=MIXED, objective=mixed_objective),
+        exploration = explorer(
+            study(name="box"),
+            study(name="mixed", space=MIXED, objective=mixed_objective),
         )
 
-        assert sweep.dim("box") == 2
-        assert sweep.dim("mixed") == 3
+        assert exploration.dim("box") == 2
+        assert exploration.dim("mixed") == 3
 
 
 class TestRun:
     def test_it_evaluates_every_point_of_the_design(self):
-        sweep = explorer(task(points=8))
+        exploration = explorer(study(points=8))
 
-        sweep.run()
+        exploration.run()
 
-        result = sweep.results["sweep"]
+        result = exploration.results["demo"]
         assert len(result.points) == 8
         assert len(result.values) == 8
         assert len(result.outputs) == 8
         assert len(result.unit_points) == 8
 
     def test_the_values_are_the_objectives_own(self):
-        sweep = explorer(task(points=8))
+        exploration = explorer(study(points=8))
 
-        sweep.run()
+        exploration.run()
 
-        result = sweep.results["sweep"]
+        result = exploration.results["demo"]
         for params, value in zip(result.points, result.values):
             assert math.isclose(value, sphere(**params)["objective"])
 
     def test_the_whole_output_is_kept_not_just_the_ranked_value(self):
-        sweep = explorer(task(space=MIXED, objective=mixed_objective, points=4))
+        exploration = explorer(study(space=MIXED, objective=mixed_objective, points=4))
 
-        sweep.run()
+        exploration.run()
 
-        outputs = sweep.results["sweep"].outputs
+        outputs = exploration.results["demo"].outputs
         assert all(set(o) == {"objective", "n", "kind"} for o in outputs)
 
     def test_the_best_point_is_the_lowest_value(self):
-        sweep = explorer(task(points=8))
+        exploration = explorer(study(points=8))
 
-        sweep.run()
-        params, value = sweep.best_point("sweep")
+        exploration.run()
+        params, value = exploration.best_point("demo")
 
-        result = sweep.results["sweep"]
+        result = exploration.results["demo"]
         assert value == min(result.values)
         assert params == result.points[result.values.index(value)]
-        assert sweep.best_output("sweep")["objective"] == value
+        assert exploration.best_output("demo")["objective"] == value
 
     def test_the_best_of_each_task_is_reported(self, capsys):
-        sweep = explorer(task(name="first", points=4), task(name="second", points=4))
+        exploration = explorer(
+            study(name="first", points=4), study(name="second", points=4)
+        )
 
-        sweep.run()
+        exploration.run()
 
         out = capsys.readouterr().out
         assert "first: best of 4 points" in out
         assert "second: best of 4 points" in out
 
     def test_the_recorded_unit_point_is_the_one_evaluated(self):
-        """The sweep rounds discrete parameters, and records the rounded point."""
-        sweep = explorer(task(space=MIXED, objective=mixed_objective, points=4))
+        """The exploration rounds discrete parameters, and records the rounded point."""
+        exploration = explorer(study(space=MIXED, objective=mixed_objective, points=4))
 
-        sweep.run()
+        exploration.run()
 
-        result = sweep.results["sweep"]
+        result = exploration.results["demo"]
         for params, unit in zip(result.points, result.unit_points):
             assert math.isclose(unit[1], (params["n"] - 2) / (10 - 2))
 
@@ -330,121 +332,121 @@ class TestRun:
         def objective(x, y, scale):
             return {"objective": scale * (x * x + y * y)}
 
-        sweep = explorer(task(objective=objective, points=4, scale=2.0))
+        exploration = explorer(study(objective=objective, points=4, scale=2.0))
 
-        sweep.run()
+        exploration.run()
 
-        assert all("scale" in kw for kw in sweep.executor.kwargs)  # type: ignore[attr-defined]
+        assert all("scale" in kw for kw in exploration.executor.kwargs)  # type: ignore[attr-defined]
 
     def test_a_second_run_repeats_the_design(self):
         """The seed decides the design, so this is a re-evaluation."""
-        sweep = explorer(task(points=4))
+        exploration = explorer(study(points=4))
 
-        sweep.run()
-        sweep.run()
+        exploration.run()
+        exploration.run()
 
-        points = sweep.results["sweep"].points
+        points = exploration.results["demo"].points
         assert points[:4] == points[4:]
 
 
 class TestTaskNames:
-    """What the sweep calls its evaluations on the queue server."""
+    """What the exploration calls its evaluations on the server."""
 
     def test_every_point_is_named_after_its_task(self):
-        sweep = explorer(task(points=4))
+        exploration = explorer(study(points=4))
 
-        sweep.run()
+        exploration.run()
 
-        assert sweep.executor.names == [  # type: ignore[attr-defined]
-            "sweep-explore-0",
-            "sweep-explore-1",
-            "sweep-explore-2",
-            "sweep-explore-3",
+        assert exploration.executor.names == [  # type: ignore[attr-defined]
+            "demo-explore-0",
+            "demo-explore-1",
+            "demo-explore-2",
+            "demo-explore-3",
         ]
 
     def test_the_index_is_padded_so_the_names_sort(self):
-        sweep = explorer(task(points=16))
+        exploration = explorer(study(points=16))
 
-        sweep.run()
+        exploration.run()
 
-        names = sweep.executor.names  # type: ignore[attr-defined]
-        assert names[0] == "sweep-explore-00"
-        assert names[-1] == "sweep-explore-15"
+        names = exploration.executor.names  # type: ignore[attr-defined]
+        assert names[0] == "demo-explore-00"
+        assert names[-1] == "demo-explore-15"
         assert names == sorted(names)
 
     def test_each_task_names_its_own_points(self):
-        sweep = explorer(
-            task(name="small", points=4),
-            task(name="large", objective=plane, points=16),
+        exploration = explorer(
+            study(name="small", points=4),
+            study(name="large", objective=plane, points=16),
         )
 
-        sweep.run()
+        exploration.run()
 
-        names = sweep.executor.names  # type: ignore[attr-defined]
+        names = exploration.executor.names  # type: ignore[attr-defined]
         assert sum(n.startswith("small-explore-") for n in names) == 4
         assert sum(n.startswith("large-explore-") for n in names) == 16
 
     def test_nothing_is_submitted_unnamed(self):
-        sweep = explorer(task(points=8))
+        exploration = explorer(study(points=8))
 
-        sweep.run()
+        exploration.run()
 
-        executor = sweep.executor
+        executor = exploration.executor
         assert len(executor.names) == len(executor.queues)  # type: ignore[attr-defined]
 
 
 class TestSeveralSpacesAtOnce:
     def test_every_task_is_evaluated(self):
-        sweep = explorer(
-            task(name="small", points=4),
-            task(name="large", objective=plane, points=16),
+        exploration = explorer(
+            study(name="small", points=4),
+            study(name="large", objective=plane, points=16),
         )
 
-        sweep.run()
+        exploration.run()
 
-        assert len(sweep.results["small"].values) == 4
-        assert len(sweep.results["large"].values) == 16
+        assert len(exploration.results["small"].values) == 4
+        assert len(exploration.results["large"].values) == 16
 
-    def test_the_whole_sweep_is_submitted_before_any_of_it_is_waited_for(self):
+    def test_the_whole_exploration_is_submitted_before_any_of_it_is_waited_for(self):
         """The point of running them together: one batch, not one each."""
-        sweep = explorer(
-            task(name="small", points=4),
-            task(name="large", objective=plane, points=16),
+        exploration = explorer(
+            study(name="small", points=4),
+            study(name="large", objective=plane, points=16),
         )
 
-        sweep.run()
+        exploration.run()
 
-        assert sweep.executor.batch_sizes == [20]  # type: ignore[attr-defined]
-        assert len(sweep.executor.waits) == 1  # type: ignore[attr-defined]
+        assert exploration.executor.batch_sizes == [20]  # type: ignore[attr-defined]
+        assert len(exploration.executor.waits) == 1  # type: ignore[attr-defined]
 
     def test_each_task_goes_to_its_own_queue(self):
-        sweep = explorer(
-            task(name="on_cpu", queue="cpu", points=4),
-            task(name="on_gpu", queue="gpu", objective=plane, points=4),
+        exploration = explorer(
+            study(name="on_cpu", queue="cpu", points=4),
+            study(name="on_gpu", queue="gpu", objective=plane, points=4),
         )
 
-        sweep.run()
+        exploration.run()
 
-        assert sweep.executor.queues == ["cpu"] * 4 + ["gpu"] * 4  # type: ignore[attr-defined]
+        assert exploration.executor.queues == ["cpu"] * 4 + ["gpu"] * 4  # type: ignore[attr-defined]
 
     def test_results_are_kept_apart(self):
-        sweep = explorer(
-            task(name="sphere", points=4),
-            task(name="plane", objective=plane, points=4),
+        exploration = explorer(
+            study(name="sphere", points=4),
+            study(name="plane", objective=plane, points=4),
         )
 
-        sweep.run()
+        exploration.run()
 
         for params, value in zip(
-            sweep.results["plane"].points, sweep.results["plane"].values
+            exploration.results["plane"].points, exploration.results["plane"].values
         ):
             assert math.isclose(value, plane(**params)["objective"])
-        assert all(v >= 0 for v in sweep.results["sphere"].values)
+        assert all(v >= 0 for v in exploration.results["sphere"].values)
 
     def test_each_task_ranks_by_its_own_objective_key(self):
-        sweep = explorer(
-            task(name="a", points=4),
-            task(
+        exploration = explorer(
+            study(name="a", points=4),
+            study(
                 name="b",
                 objective=lambda x, y: {"loss": x * x + y * y},
                 objective_key="loss",
@@ -452,25 +454,25 @@ class TestSeveralSpacesAtOnce:
             ),
         )
 
-        sweep.run()
+        exploration.run()
 
-        assert len(sweep.results["b"].values) == 4
+        assert len(exploration.results["b"].values) == 4
 
     def test_one_broken_task_names_itself(self):
         def boom(x, y):
             raise ValueError("objective blew up")
 
-        sweep = explorer(
-            task(name="fine", points=4),
-            task(name="broken", objective=boom, points=4),
+        exploration = explorer(
+            study(name="fine", points=4),
+            study(name="broken", objective=boom, points=4),
         )
 
         with pytest.raises(RuntimeError, match=r"exploration of \['broken'\]"):
-            sweep.run()
+            exploration.run()
 
 
 class TestPartialFailure:
-    """One bad point must not cost a whole sweep."""
+    """One bad point must not cost a whole exploration."""
 
     @staticmethod
     def fails_at(threshold: float):
@@ -484,51 +486,51 @@ class TestPartialFailure:
         return objective
 
     def test_the_points_that_came_back_are_kept(self):
-        sweep = explorer(task(objective=self.fails_at(0.0), points=8))
+        exploration = explorer(study(objective=self.fails_at(0.0), points=8))
 
         with pytest.raises(RuntimeError, match="objective evaluations failed"):
-            sweep.run()
+            exploration.run()
 
-        result = sweep.results["sweep"]
+        result = exploration.results["demo"]
         assert result.values, "the successful points were thrown away"
         assert len(result.values) < 8
         assert all(x <= 0.0 for x in (p["x"] for p in result.points))
 
     def test_what_is_kept_is_index_aligned(self):
-        sweep = explorer(task(objective=self.fails_at(0.0), points=8))
+        exploration = explorer(study(objective=self.fails_at(0.0), points=8))
 
         with pytest.raises(RuntimeError):
-            sweep.run()
+            exploration.run()
 
-        result = sweep.results["sweep"]
+        result = exploration.results["demo"]
         assert len(result.points) == len(result.values) == len(result.outputs)
         assert len(result.unit_points) == len(result.values)
 
-    def test_a_saved_sweep_is_resumable_after_a_failure(self, tmp_path):
+    def test_a_saved_exploration_is_resumable_after_a_failure(self, tmp_path):
         """`save()` is what the next run reads, so it must not be empty."""
-        sweep = explorer(task(objective=self.fails_at(0.0), points=8))
+        exploration = explorer(study(objective=self.fails_at(0.0), points=8))
 
         with pytest.raises(RuntimeError):
-            sweep.run()
-        path: Path = tmp_path / "sweep.pkl.gz"
-        sweep.save(path)
+            exploration.run()
+        path: Path = tmp_path / "explore.pkl.gz"
+        exploration.save(path)
 
         with gzip.open(path, "rb") as fobj:
             saved = pickle.load(fobj)
-        assert saved["sweep"]["values"] == sweep.results["sweep"].values
+        assert saved["demo"]["values"] == exploration.results["demo"].values
 
     def test_a_task_whose_points_all_worked_keeps_all_of_them(self):
-        """A failure in one task must not empty another's record."""
-        sweep = explorer(
-            task(name="fine", points=4),
-            task(name="broken", objective=self.fails_at(-10.0), points=4),
+        """A failure in one study must not empty another's record."""
+        exploration = explorer(
+            study(name="fine", points=4),
+            study(name="broken", objective=self.fails_at(-10.0), points=4),
         )
 
         with pytest.raises(RuntimeError, match=r"exploration of \['broken'\]"):
-            sweep.run()
+            exploration.run()
 
-        assert len(sweep.results["fine"].values) == 4
-        assert sweep.results["broken"].values == []
+        assert len(exploration.results["fine"].values) == 4
+        assert exploration.results["broken"].values == []
 
 
 class TestSave:
@@ -538,27 +540,27 @@ class TestSave:
             return pickle.load(fobj)
 
     def test_it_writes_what_each_task_measured(self, tmp_path):
-        sweep = explorer(
-            task(name="a", points=8), task(name="b", objective=plane, points=4)
+        exploration = explorer(
+            study(name="a", points=8), study(name="b", objective=plane, points=4)
         )
-        sweep.run()
+        exploration.run()
 
-        sweep.save(tmp_path / "sweep.pkl.gz")
+        exploration.save(tmp_path / "explore.pkl.gz")
 
-        results = self.load(tmp_path / "sweep.pkl.gz")
+        results = self.load(tmp_path / "explore.pkl.gz")
         assert sorted(results) == ["a", "b"]
         for name in ("a", "b"):
-            assert results[name]["points"] == sweep.results[name].points
-            assert results[name]["values"] == sweep.results[name].values
-            assert results[name]["outputs"] == sweep.results[name].outputs
+            assert results[name]["points"] == exploration.results[name].points
+            assert results[name]["values"] == exploration.results[name].values
+            assert results[name]["outputs"] == exploration.results[name].outputs
 
     def test_the_three_lists_stay_index_aligned(self, tmp_path):
-        sweep = explorer(task(space=MIXED, objective=mixed_objective, points=4))
-        sweep.run()
+        exploration = explorer(study(space=MIXED, objective=mixed_objective, points=4))
+        exploration.run()
 
-        sweep.save(tmp_path / "sweep.pkl.gz")
+        exploration.save(tmp_path / "explore.pkl.gz")
 
-        saved = self.load(tmp_path / "sweep.pkl.gz")["sweep"]
+        saved = self.load(tmp_path / "explore.pkl.gz")["demo"]
         for params, value, output in zip(
             saved["points"], saved["values"], saved["outputs"]
         ):
@@ -566,38 +568,38 @@ class TestSave:
             assert output["n"] == params["n"]
 
     def test_the_file_is_gzipped(self, tmp_path):
-        sweep = explorer(task(points=4))
-        sweep.run()
+        exploration = explorer(study(points=4))
+        exploration.run()
 
-        sweep.save(tmp_path / "sweep.pkl.gz")
+        exploration.save(tmp_path / "explore.pkl.gz")
 
-        assert (tmp_path / "sweep.pkl.gz").read_bytes()[:2] == b"\x1f\x8b"
+        assert (tmp_path / "explore.pkl.gz").read_bytes()[:2] == b"\x1f\x8b"
 
     def test_a_path_may_be_a_string(self, tmp_path):
-        sweep = explorer(task(points=4))
-        sweep.run()
+        exploration = explorer(study(points=4))
+        exploration.run()
 
-        sweep.save(str(tmp_path / "sweep.pkl.gz"))
+        exploration.save(str(tmp_path / "explore.pkl.gz"))
 
-        saved = self.load(tmp_path / "sweep.pkl.gz")["sweep"]
-        assert saved["values"] == sweep.results["sweep"].values
+        saved = self.load(tmp_path / "explore.pkl.gz")["demo"]
+        assert saved["values"] == exploration.results["demo"].values
 
     def test_saving_again_replaces_the_file(self, tmp_path):
-        sweep = explorer(task(points=4))
-        sweep.run()
-        sweep.save(tmp_path / "sweep.pkl.gz")
+        exploration = explorer(study(points=4))
+        exploration.run()
+        exploration.save(tmp_path / "explore.pkl.gz")
 
-        sweep.run()
-        sweep.save(tmp_path / "sweep.pkl.gz")
+        exploration.run()
+        exploration.save(tmp_path / "explore.pkl.gz")
 
-        assert len(self.load(tmp_path / "sweep.pkl.gz")["sweep"]["values"]) == 8
+        assert len(self.load(tmp_path / "explore.pkl.gz")["demo"]["values"]) == 8
 
     def test_saving_before_running_writes_empty_lists(self, tmp_path):
-        """The file says what the sweep measured, and that is nothing yet."""
-        explorer(task(points=4)).save(tmp_path / "sweep.pkl.gz")
+        """The file says what the exploration measured, and that is nothing yet."""
+        explorer(study(points=4)).save(tmp_path / "explore.pkl.gz")
 
-        results = self.load(tmp_path / "sweep.pkl.gz")
-        assert results == {"sweep": {"points": [], "values": [], "outputs": []}}
+        results = self.load(tmp_path / "explore.pkl.gz")
+        assert results == {"demo": {"points": [], "values": [], "outputs": []}}
 
 
 class TestObjectiveResults:
@@ -605,72 +607,74 @@ class TestObjectiveResults:
         def objective(x, y):
             raise ValueError("objective blew up")
 
-        sweep = explorer(task(objective=objective, points=4))
+        exploration = explorer(study(objective=objective, points=4))
 
         with pytest.raises(RuntimeError, match="objective evaluations failed"):
-            sweep.run()
+            exploration.run()
 
     def test_a_result_that_is_not_a_mapping_is_rejected(self):
-        sweep = explorer(task(objective=lambda x, y: x + y, points=4))
+        exploration = explorer(study(objective=lambda x, y: x + y, points=4))
 
         with pytest.raises(RuntimeError, match="expected a mapping"):
-            sweep.run()
+            exploration.run()
 
     def test_a_missing_objective_key_is_rejected(self):
-        sweep = explorer(task(objective=lambda x, y: {"loss": x}, points=4))
+        exploration = explorer(study(objective=lambda x, y: {"loss": x}, points=4))
 
         with pytest.raises(RuntimeError, match="no 'objective' among them"):
-            sweep.run()
+            exploration.run()
 
     def test_another_objective_key_can_be_named(self):
-        sweep = explorer(
-            task(
+        exploration = explorer(
+            study(
                 objective=lambda x, y: {"loss": x * x + y * y},
                 objective_key="loss",
                 points=4,
             )
         )
 
-        sweep.run()
+        exploration.run()
 
-        assert len(sweep.results["sweep"].values) == 4
+        assert len(exploration.results["demo"].values) == 4
 
     def test_a_value_that_is_not_a_float_is_rejected(self):
-        sweep = explorer(task(objective=lambda x, y: {"objective": "cheap"}, points=4))
+        exploration = explorer(
+            study(objective=lambda x, y: {"objective": "cheap"}, points=4)
+        )
 
         with pytest.raises(RuntimeError, match="not a float"):
-            sweep.run()
+            exploration.run()
 
     def test_a_non_finite_value_is_rejected(self):
-        sweep = explorer(
-            task(objective=lambda x, y: {"objective": float("nan")}, points=4)
+        exploration = explorer(
+            study(objective=lambda x, y: {"objective": float("nan")}, points=4)
         )
 
         with pytest.raises(RuntimeError, match="non-finite"):
-            sweep.run()
+            exploration.run()
 
 
 class TestRealExecutor:
-    """One end-to-end sweep against the real queue, executor and worker."""
+    """One end-to-end exploration against the real server, executor and worker."""
 
     @pytest.fixture(autouse=True)
     def _pilot_jobs(self, pilot_jobs):
         pilot_jobs("cpu")
 
-    def test_it_sweeps_two_spaces_through_a_real_worker(
+    def test_it_explores_two_spaces_through_a_real_worker(
         self, executor, ds_service_address, tmp_path
     ):
         points = 4
-        sweep = ExploreSpaceSobolQMC(
+        exploration = ExploreSpaceSobolQMC(
             [
-                ExplorationTask("box", BOX_2D, sphere, "cpu", points, SEED),
-                ExplorationTask("flat", BOX_2D, plane, "cpu", points, SEED),
+                ExplorationStudy("box", BOX_2D, sphere, "cpu", points, SEED),
+                ExplorationStudy("flat", BOX_2D, plane, "cpu", points, SEED),
             ],
             executor,
         )
 
         # A real worker in a thread:
-        # the sweep blocks in wait() as soon as it submits.
+        # the exploration blocks in wait() as soon as it submits.
         # Nothing can then play the worker's part after the fact.
         worker = make_worker(ds_service_address, tmp_path / "worker", group="cpu")
         thread = threading.Thread(
@@ -678,26 +682,26 @@ class TestRealExecutor:
         )
         thread.start()
         try:
-            sweep.run()
+            exploration.run()
         finally:
             thread.join(timeout=30)
             worker.close()
 
         assert not thread.is_alive(), "worker thread did not finish"
         for name in ("box", "flat"):
-            result = sweep.results[name]
+            result = exploration.results[name]
             assert len(result.values) == points
-            assert sweep.best_point(name)[1] == min(result.values)
+            assert exploration.best_point(name)[1] == min(result.values)
 
     def test_the_names_it_gives_are_on_the_queue_server(
         self, executor, ds_service_address, ds_client, tmp_path
     ):
         """What `swtop` reads: the names, keyed by task id, in the store."""
         points = 4
-        sweep = ExploreSpaceSobolQMC(
+        exploration = ExploreSpaceSobolQMC(
             [
-                ExplorationTask("box", BOX_2D, sphere, "cpu", points, SEED),
-                ExplorationTask("flat", BOX_2D, plane, "cpu", points, SEED),
+                ExplorationStudy("box", BOX_2D, sphere, "cpu", points, SEED),
+                ExplorationStudy("flat", BOX_2D, plane, "cpu", points, SEED),
             ],
             executor,
         )
@@ -708,7 +712,7 @@ class TestRealExecutor:
         )
         thread.start()
         try:
-            sweep.run()
+            exploration.run()
         finally:
             thread.join(timeout=30)
             worker.close()

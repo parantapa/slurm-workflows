@@ -9,12 +9,12 @@ from slurm_workflows import SlurmPilotExecutor
 SETUP_SCRIPT = ""
 
 NUM_NODES = 2
-TASKS_PER_NODE = 40
+NTASKS_PER_NODE = 40
 
 SBATCH_ARGS = [
     "--account=bii_nssac",
     f"--partition=bii --nodes={NUM_NODES}",
-    f"--ntasks-per-node={TASKS_PER_NODE} --cpus-per-task=1 --mem=0",
+    f"--ntasks-per-node={NTASKS_PER_NODE} --cpus-per-task=1 --mem=0",
     "--time=1:00:00",
 ]
 
@@ -34,33 +34,33 @@ def main():
         address = ds_service.address
 
         with SlurmPilotExecutor("compute-pi", address) as executor:
-            executor.define_worker(
+            executor.define_job_group(
                 name="bii",
                 sbatch_args=SBATCH_ARGS,
                 setup_script=SETUP_SCRIPT,
             )
-            executor.scale_workers("bii", 1)
+            executor.scale_jobs("bii", 1)
 
             num_steps = 1_000_000_000
             stepsize = 1.0 / num_steps
 
             over_decomp_factor = 10
-            num_tasks = NUM_NODES * TASKS_PER_NODE * over_decomp_factor
+            num_pi_tasks = NUM_NODES * NTASKS_PER_NODE * over_decomp_factor
 
             tasks = []
-            for i in range(num_tasks):
+            for i in range(num_pi_tasks):
                 task = executor.submit(
                     "bii",
                     do_step_pi,
                     start=i,
                     stop=num_steps,
-                    step=num_tasks,
+                    step=num_pi_tasks,
                     stepsize=stepsize,
                 )
                 executor.set_task_name(task, f"task-{i:04d}")
                 tasks.append(task)
 
-            executor.wait(tasks, desc="compute-pi", unit="slice")
+            executor.wait(tasks, desc="compute-pi", unit="task")
 
     pi = sum(task.output for task in tasks) * stepsize
     print(f"pi = {pi}")

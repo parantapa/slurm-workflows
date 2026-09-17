@@ -2,7 +2,7 @@
 
 Polls the server and redraws a summary of its tasks.
 The summary also holds the pilot jobs the executor submitted,
-and the worker processes that run in them.
+and the workers that run in them.
 `swtop_tui.py` holds the terminal UI.
 This module decides what to show.
 
@@ -28,19 +28,19 @@ from .monitors import HOST_SERIES, JOB_SERIES
 from .slurm_pilot_executor import (
     PROGRESS_DISPLAY_KEY,
     PROGRESS_SERIES_PREFIX,
-    WORKER_JOB_INFO_PREFIX,
+    PILOT_JOB_INFO_PREFIX,
 )
-from .slurm_pilot_worker import WORKER_PROCESS_INFO_PREFIX
+from .slurm_pilot_worker import WORKER_INFO_PREFIX
 
 DEFAULT_INTERVAL_S: float = 2.0
 
-# The fields a worker process publishes about itself,
+# The fields a worker publishes about itself,
 # in the order it writes them.
 # The tables order their own columns.
 WORKER_INFO_FIELDS = ["group", "name", "slurm_job_id", "hostname", "pid"]
 
 # The fields the executor publishes about a pilot job, likewise.
-WORKER_JOB_FIELDS = ["name", "group", "slurm_job_id", "submit_time"]
+PILOT_JOB_FIELDS = ["name", "group", "slurm_job_id", "submit_time"]
 
 # The fields of the progress display a wait publishes.
 PROGRESS_FIELDS = ["progress_id", "desc", "unit", "total"]
@@ -71,8 +71,8 @@ STATE_ORDER = ["Running", "Ready", "Complete", "Canceled", "Undefined"]
 
 # What each block says when it has nothing to show.
 # Each says why it is empty, since an empty block is usually a question.
-EMPTY_WORKER_JOBS = "no pilot jobs have been submitted through this server"
-EMPTY_WORKERS = "no worker processes have registered with this server"
+EMPTY_PILOT_JOBS = "no pilot jobs have been submitted through this server"
+EMPTY_WORKERS = "no workers have registered with this server"
 EMPTY_HOSTS = "no host is being monitored"
 EMPTY_JOBS = "no slurm job is being monitored"
 EMPTY_TASKS = "no tasks have been submitted to this server"
@@ -80,7 +80,7 @@ EMPTY_TASKS = "no tasks have been submitted to this server"
 
 @dataclass
 class WorkerInfo:
-    """One registered worker process, as it describes itself in the store."""
+    """One registered worker, as it describes itself in the map."""
 
     worker_id: str
     group: str
@@ -91,7 +91,7 @@ class WorkerInfo:
 
 
 @dataclass
-class WorkerJobInfo:
+class PilotJobInfo:
     """One pilot job, as the executor described it when it submitted it."""
 
     name: str
@@ -160,7 +160,7 @@ class Snapshot:
     when: datetime
     counts: dict[str, int] = field(default_factory=dict)
     progress: ProgressInfo | None = None
-    worker_jobs: list[WorkerJobInfo] = field(default_factory=list)
+    worker_jobs: list[PilotJobInfo] = field(default_factory=list)
     workers: list[WorkerInfo] = field(default_factory=list)
     tasks: list[TaskInfo] = field(default_factory=list)
     hosts: list[SubjectInfo] = field(default_factory=list)
@@ -177,7 +177,7 @@ class Collector:
         # An identity never changes after its first write,
         # so `Collector` reads it once.
         # A steady state re-reads only what is new.
-        self._worker_jobs: dict[str, WorkerJobInfo] = {}
+        self._pilot_jobs: dict[str, PilotJobInfo] = {}
         self._workers: dict[str, WorkerInfo] = {}
         # The last count read for a progress id,
         # so a display that no longer moves still shows where it stopped.
@@ -196,7 +196,7 @@ class Collector:
         counts, progress, worker_jobs, workers, hosts, jobs = await asyncio.gather(
             self.client.task_get_count_by_state(),
             self._collect_progress(),
-            self._collect_worker_jobs(),
+            self._collect_pilot_jobs(),
             self._collect_workers(),
             self._collect_subjects(HOST_SERIES),
             self._collect_subjects(JOB_SERIES),
@@ -255,42 +255,40 @@ class Collector:
         info.completed = self._progress_seen.get(info.progress_id, 0)
         return info
 
-    async def _collect_worker_jobs(self) -> list[WorkerJobInfo]:
+    async def _collect_pilot_jobs(self) -> list[PilotJobInfo]:
         """Every pilot job the executor published, cached like the rest."""
         names = [
-            key[len(WORKER_JOB_INFO_PREFIX) :]
-            for key in await self.client.map_search_key(f"^{WORKER_JOB_INFO_PREFIX}")
+            key[len(PILOT_JOB_INFO_PREFIX) :]
+            for key in await self.client.map_search_key(f"^{PILOT_JOB_INFO_PREFIX}")
         ]
 
-        missing = [n for n in names if n not in self._worker_jobs]
-        read = await asyncio.gather(*(self._worker_job_info(n) for n in missing))
+        missing = [n for n in names if n not in self._pilot_jobs]
+        read = await asyncio.gather(*(self._pilot_job_info(n) for n in missing))
         for name, info in zip(missing, read):
             if info is not None:
-                self._worker_jobs[name] = info
+                self._pilot_jobs[name] = info
 
         listed = [
-            self._worker_jobs.get(name) or _unknown_worker_job(name) for name in names
+            self._pilot_jobs.get(name) or _unknown_pilot_job(name) for name in names
         ]
         return sorted(listed, key=lambda j: (j.group, j.name))
 
-    async def _worker_job_info(self, name: str) -> WorkerJobInfo | None:
+    async def _pilot_job_info(self, name: str) -> PilotJobInfo | None:
         """One job's published description, or None if it is not readable."""
-        text = await self._text(f"{WORKER_JOB_INFO_PREFIX}{name}")
+        text = await self._text(f"{PILOT_JOB_INFO_PREFIX}{name}")
         try:
             published = json.loads(text)
-            fields = {field: str(published[field]) for field in WORKER_JOB_FIELDS}
+            fields = {field: str(published[field]) for field in PILOT_JOB_FIELDS}
         except (ValueError, TypeError, KeyError):
             return None
 
-        return WorkerJobInfo(**fields)
+        return PilotJobInfo(**fields)
 
     async def _collect_workers(self) -> list[WorkerInfo]:
-        """Every worker process that registered, cached like the rest."""
+        """Every worker that registered, cached like the rest."""
         worker_ids = [
-            key[len(WORKER_PROCESS_INFO_PREFIX) :]
-            for key in await self.client.map_search_key(
-                f"^{WORKER_PROCESS_INFO_PREFIX}"
-            )
+            key[len(WORKER_INFO_PREFIX) :]
+            for key in await self.client.map_search_key(f"^{WORKER_INFO_PREFIX}")
         ]
 
         # Every description the cache is short of, read in one go.
@@ -310,7 +308,7 @@ class Collector:
 
     async def _worker_info(self, worker_id: str) -> WorkerInfo | None:
         """One worker's published description, or None if it is not readable."""
-        text = await self._text(f"{WORKER_PROCESS_INFO_PREFIX}{worker_id}")
+        text = await self._text(f"{WORKER_INFO_PREFIX}{worker_id}")
         try:
             published = json.loads(text)
             fields = {name: str(published[name]) for name in WORKER_INFO_FIELDS}
@@ -430,16 +428,16 @@ async def open_collector(address: str) -> AsyncIterator[Collector]:
 
 
 def _unknown_worker(worker_id: str) -> WorkerInfo:
-    """A row for a worker process whose description the collector cannot read."""
+    """A row for a worker whose description the collector cannot read."""
     return WorkerInfo(
         worker_id=worker_id, **{name: UNKNOWN for name in WORKER_INFO_FIELDS}
     )
 
 
-def _unknown_worker_job(name: str) -> WorkerJobInfo:
+def _unknown_pilot_job(name: str) -> PilotJobInfo:
     """A row for a pilot job whose description the collector cannot read."""
-    return WorkerJobInfo(
-        **{field: UNKNOWN for field in WORKER_JOB_FIELDS} | {"name": name}
+    return PilotJobInfo(
+        **{field: UNKNOWN for field in PILOT_JOB_FIELDS} | {"name": name}
     )
 
 
@@ -473,7 +471,7 @@ def _cell(values: dict[str, float], name: str, fmt: Callable[[float], str]) -> s
 
 
 # The columns of each block, which the text frames and the UI share.
-WORKER_JOB_COLUMNS = ["NAME", "GROUP", "JOB", "SUBMITTED"]
+PILOT_JOB_COLUMNS = ["NAME", "GROUP", "JOB", "SUBMITTED"]
 WORKER_COLUMNS = ["NAME", "GROUP", "HOST", "JOB", "PID"]
 HOST_COLUMNS = ["HOST", "FREE MEM", "LOAD", "/dev/shm", "/tmp"]
 JOB_COLUMNS = ["JOB", "MEMORY", "CPU"]
@@ -507,7 +505,7 @@ def counts_line(snapshot: Snapshot) -> str:
     )
 
 
-def worker_job_rows(snapshot: Snapshot) -> list[tuple[str, list[str]]]:
+def pilot_job_rows(snapshot: Snapshot) -> list[tuple[str, list[str]]]:
     """One row per submitted pilot job, keyed by its worker name."""
     return [
         (job.name, [job.name, job.group, job.slurm_job_id, job.submit_time])
@@ -516,7 +514,7 @@ def worker_job_rows(snapshot: Snapshot) -> list[tuple[str, list[str]]]:
 
 
 def worker_rows(snapshot: Snapshot) -> list[tuple[str, list[str]]]:
-    """One row per registered worker process, keyed by its worker id."""
+    """One row per registered worker, keyed by its worker id."""
     return [
         (w.worker_id, [w.name, w.group, w.hostname, w.slurm_job_id, w.pid])
         for w in snapshot.workers
@@ -595,12 +593,12 @@ def render(snapshot: Snapshot) -> str:
 
     blocks = [
         (
-            "worker jobs",
-            WORKER_JOB_COLUMNS,
-            worker_job_rows(snapshot),
-            EMPTY_WORKER_JOBS,
+            "pilot jobs",
+            PILOT_JOB_COLUMNS,
+            pilot_job_rows(snapshot),
+            EMPTY_PILOT_JOBS,
         ),
-        ("worker processes", WORKER_COLUMNS, worker_rows(snapshot), EMPTY_WORKERS),
+        ("workers", WORKER_COLUMNS, worker_rows(snapshot), EMPTY_WORKERS),
         ("hosts", HOST_COLUMNS, host_rows(snapshot), EMPTY_HOSTS),
         ("slurm jobs", JOB_COLUMNS, job_rows(snapshot), EMPTY_JOBS),
         ("tasks", TASK_COLUMNS, task_rows(snapshot), EMPTY_TASKS),

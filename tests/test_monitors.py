@@ -87,7 +87,7 @@ class TestCgroupSampler:
         self.write_cgroup(tmp_path, memory=4096, cpu_usec=0)
         sampler.sample()
 
-        # Two cores' worth of CPU seconds over the elapsed wall time.
+        # Two cores' worth of CPU seconds over the elapsed wall clock.
         time.sleep(0.05)
         elapsed = 0.05
         self.write_cgroup(tmp_path, memory=4096, cpu_usec=int(2 * elapsed * 1e6))

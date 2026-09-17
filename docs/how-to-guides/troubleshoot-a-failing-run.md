@@ -3,12 +3,15 @@
 [<- back to the main README](../../README.md)
 
 A run fails in one of three places:
-in a task on a worker, in a wait on the driver,
-or in a pilot job that never got as far as a task.
+
+- In a task on a worker.
+- In a wait on the driver.
+- In a pilot job that never got as far as a task.
+
 Each one leaves its evidence in a different file,
 and none of them puts a traceback in front of you.
 This guide says which file to open,
-and what each error the executor raises means.
+and what to do about the errors you are most likely to see.
 
 ## Start from the `error_id`
 
@@ -26,12 +29,12 @@ and `executor.work_dir` holds it:
 
 ```console
 $ grep -rn ERROR_k3n8q1zv7c4b0m2s6h9d5p1f8r3t7w2x /path/to/work_dir
-/path/to/work_dir/demo.worker.cpu.0-4211337-2.out:812:2026-09-11 10:14:03,441:worker_process:ERROR:Error executing demo.task.17: ERROR_k3n8q1zv7c4b0m2s6h9d5p1f8r3t7w2x: division by zero
+/path/to/work_dir/demo.job.cpu.0-4211337-2.out:812:2026-09-11 10:14:03,441:worker_process:ERROR:Error executing demo.task.17: ERROR_k3n8q1zv7c4b0m2s6h9d5p1f8r3t7w2x: division by zero
 ```
 
 One line of output tells you where to look.
-The file name identifies the worker process that ran the task.
-It carries the worker name, its Slurm job id, and its task rank.
+The file name identifies the worker that ran the task.
+It carries the pilot job's name, its Slurm job id, and its task rank.
 The line number is where the worker logged the failure.
 The traceback starts on the next line.
 
@@ -62,43 +65,48 @@ If `grep` finds nothing, search the work dir of another run.
 Each run gets its own timestamped work dir,
 and the id belongs to the run that printed it.
 
-## Which log holds what
+## Find the log for the failure
 
 Everything for a run lives under the executor's `work_dir`.
-[Logs](../reference/executor.md#logs) lists which file holds what.
+[Logs](../reference/what-a-run-publishes.md#logs) lists which file holds what.
 
 With the default `is_batch_worker=False`,
-a worker's own log goes to the per-task file.
-That file is `<worker-name>-<jobid>-<task>.out`, not the batch file.
+a worker's own log goes to the file of its Slurm task.
+That file is `<job-name>-<jobid>-<rank>.out`, not the batch file.
 A failed setup script lands in that same file.
-A job of exactly one task is the exception:
-it keeps no per-task file, and writes to `<worker-name>-<jobid>.out`.
+A job of exactly one Slurm task is the exception:
+it keeps no such file, and writes to `<job-name>-<jobid>.out`.
 
-If a job died immediately, read the generated scripts,
-`<worker-name>.sh` and `<worker-name>.sbatch`.
+If a pilot job died immediately, read the generated scripts,
+`<job-name>.sh` and `<job-name>.sbatch`.
 
-## Tasks never complete, but the jobs run
+## Tasks never complete, but the pilot jobs run
 
-The queue name does not match a worker group name,
-or the workers cannot reach `ds-service` from the compute nodes.
-Check the worker's `-<jobid>-<task>.out` file.
+Open the worker's `-<jobid>-<rank>.out` file.
+If it shows a connection failure,
+the workers cannot reach the server from the compute nodes.
+Restart the server on an interface the compute nodes can reach,
+following [How to run the `ds-service` server](run-the-ds-service-server.md).
+If it shows nothing at all,
+the queue you submitted to matches no job group name.
+Compare it against your `define_job_group` names.
 
 ## `RuntimeError: ... tasks are on queues with no worker started`
 
 The executor raises this error as soon as you wait,
-because you never called `scale_workers` for those queues.
-Either you never scaled the group, or the queue name is a typo.
+because you never called `scale_jobs` for those queues.
+Either you never scaled the job group, or the queue name is a typo.
 The executor does not check the queue name at `submit` time,
-so compare it against your `define_worker` names.
+so compare it against your `define_job_group` names.
 
 ## `RuntimeError: ... tasks are on queues with no live pilot job`
 
 The executor raises this error while you wait.
-You scaled the group, but its jobs then left the cluster.
+You scaled the job group, but its pilot jobs then left the cluster.
 The cause is the time limit, a cancellation,
 or an exit before the queue drained.
 The worker's `.out` file says which.
-Scale the group back up.
+Scale the job group back up.
 Then submit the tasks again.
 
 ## `RuntimeError: Task ... was canceled on the task queue server`
@@ -116,11 +124,18 @@ Two cases produce this error.
 The first is a `Task` you built by hand.
 The second is a `Task` from a server that restarted since then.
 
-## Jobs start and exit within seconds
+Either way the output is gone, because the map died with the server.
+Submit the work again through the executor that owns the current run.
+A `Task` from an earlier run does not work.
+
+## Pilot jobs start and exit within seconds
 
 The setup script failed.
 The worker script runs it,
-so the traceback goes to the worker's `.out` file, not to the batch file.
+so the traceback lands in the worker's `<job-name>-<jobid>-<rank>.out` file.
+Open that file rather than the batch file,
+fix the script,
+then scale the job group back up.
 
 ## `ModuleNotFoundError` on a worker
 
@@ -134,9 +149,9 @@ so the `error_id` leads to the import that failed.
 
 Run [`swtop`](watch-a-run-with-swtop.md) against the same server address
 from another shell.
-Two causes leave the worker processes block empty
-while the worker jobs block holds entries.
-The jobs wait in the queue, or their setup scripts did not finish.
+Two causes leave the workers block empty
+while the pilot jobs block holds entries.
+The pilot jobs are still pending, or their setup scripts did not finish.
 
 ## Related
 
