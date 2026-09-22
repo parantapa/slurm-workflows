@@ -20,7 +20,7 @@ EXPLORE_RESULTS = Path("explore.pkl.gz")
 SEARCH_RESULTS = Path(f"search-{run_number}.pkl.gz")
 ```
 
-## Save every phase
+## Save the exploration and the search
 
 ```python
 with SlurmPilotExecutor("search", address) as executor:
@@ -32,9 +32,6 @@ with SlurmPilotExecutor("search", address) as executor:
     opt.run()
     opt.save(SEARCH_RESULTS)
 ```
-
-`opt.save` holds only the points this run evaluated,
-not the ones it read from the files it started with.
 
 ## Start the next run from every file so far
 

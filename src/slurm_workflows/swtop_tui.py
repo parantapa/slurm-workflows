@@ -1,9 +1,4 @@
-"""The terminal UI `swtop` runs in, built with Textual.
-
-`swtop.py` decides what to show.
-This module puts it on a screen and keeps it there.
-It polls in a Textual worker and updates the tables in place.
-"""
+"""The terminal UI `swtop` runs in, built with Textual."""
 
 from __future__ import annotations
 
@@ -135,9 +130,9 @@ class SwtopApp(App):
     .progress-label { color: $text-muted; }
 
     Block { height: auto; padding: 0 1; }
-    /* Workers and tasks are the blocks that can hold thousands of
-       rows, so they share the space left over and scroll inside themselves;
-       the rest are bounded by what a cluster has. */
+    /* Workers and tasks are the blocks that can hold thousands of rows,
+       so they share the space left over and scroll inside themselves.
+       A cluster bounds the rest. */
     #workers { height: 1fr; min-height: 6; }
     #tasks { height: 1fr; min-height: 6; }
 
@@ -186,7 +181,8 @@ class SwtopApp(App):
         self.run_worker(
             self._poll,
             # One poll at a time.
-            # Textual cancels the poll in flight.
+            # Textual cancels the poll in flight, RPCs and all,
+            # so a slow server cannot pile up one poll per interval.
             exclusive=True,
             group="poll",
         )
@@ -197,8 +193,7 @@ class SwtopApp(App):
             snapshot = await self.collector.snapshot()
         except Exception as e:
             # A server that is down, or not up yet, is worth waiting out.
-            # This is a monitor.
-            # If it quits, the screen goes with it.
+            # See "Monitoring" in the developer notes.
             snapshot = Snapshot(
                 address=self.collector.address,
                 when=datetime.now(),

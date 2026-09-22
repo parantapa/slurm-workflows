@@ -1,4 +1,4 @@
-# About what a run publishes
+# The trail a run leaves
 
 [<- back to the main README](../../README.md)
 
@@ -23,12 +23,13 @@ when it starts.
 
 Nothing merges the two, and that is the point.
 A pilot job exists from the moment the executor submits it.
-But nobody knows the host it will land on or the pids it will run
+But nobody knows the node it will land on or the pids it will run
 until Slurm starts it.
 Two keys mean that a queued job is visible before it runs.
 The *difference* between the two blocks is a fact worth reading.
 A pilot job with no worker against it is still queued,
-or still inside its setup script.
+still inside its setup script,
+or runs workers that cannot reach the server.
 
 One pilot job usually holds many workers, one per Slurm task,
 so the two counts differ even when everything is healthy.
@@ -38,7 +39,7 @@ so the two counts differ even when everything is healthy.
 Each half is a single JSON object rather than a key per field,
 because a reader can poll at any moment.
 Five separate writes can let a reader land between two of them
-and see a worker whose host it never learned.
+and see a worker whose node it never learned.
 Worse, a reader that caches what it read
 remembers that half-described worker for the rest of the run.
 One key makes a worker either absent or complete.
@@ -49,7 +50,7 @@ therefore still records which job and node it died on.
 
 Nothing ever updates or deletes these keys.
 That is what makes them cacheable.
-A monitor reads each worker's fields once and never again.
+`swtop` reads each worker's fields once and never again.
 On a large pool that is the difference between one read per poll
 and four hundred reads per poll.
 The map is in memory and dies with the server,
@@ -79,7 +80,7 @@ has the fields.
 
 ## Why sampling is elected, and never re-elected
 
-The workers sample the host and job readings themselves,
+The workers sample the node and job readings themselves,
 so the cluster runs no extra process.
 But a node runs one worker per Slurm task, and a pilot job spans many nodes.
 Most workers must therefore not sample,
@@ -112,8 +113,9 @@ must leave a gap in the series rather than end it.
 A program that exits when the server blinks
 takes the screen down with it,
 usually at the least convenient moment.
-So `swtop` reports an unreachable server above the tables
-and keeps polling, with the last good reading left on screen.
+So `swtop` reports an unreachable server and keeps polling.
+The terminal UI reports it above the blocks,
+with the last good reading left on screen.
 The same behavior lets you start `swtop` before the server exists.
 There is no meaningful difference between a server that is not up yet
 and one that is briefly away.
@@ -123,7 +125,7 @@ and one that is briefly away.
 `swtop` can only show what an RPC can answer.
 The server can count tasks by state and enumerate task ids,
 but nothing enumerates workers, hosts or jobs.
-`swtop` therefore builds those tables by searching the map
+`swtop` therefore builds those blocks by searching the map
 for the keys the workers and monitors publish.
 `swtop` cannot list a worker that never published its identity.
 That is a property of the server, not a gap to work around.

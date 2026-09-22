@@ -3,13 +3,12 @@
 Polls the server and redraws a summary of its tasks.
 The summary also holds the pilot jobs the executor submitted,
 and the workers that run in them.
-`swtop_tui.py` holds the terminal UI.
-This module decides what to show.
-
 See `docs/reference/swtop.md` for the blocks and what fills them.
-The monitoring section of `docs/developer-notes.md` says
-why `swtop` collects them the way it does.
 """
+
+# This module decides what to show, and `swtop_tui.py` draws it.
+# "Monitoring" in `docs/developer-notes.md` says
+# why `swtop` collects the way it does.
 
 from __future__ import annotations
 
@@ -48,6 +47,8 @@ PROGRESS_FIELDS = ["progress_id", "desc", "unit", "total"]
 # How far back a progress reading still counts as live.
 PROGRESS_TAIL_S = 60.0
 
+# Must match the key `SlurmPilotExecutor.set_task_name` writes,
+# which spells it out rather than importing a constant.
 TASK_NAME_PREFIX = "task_name:"
 
 # `task_search_id` matches task ids against a regular expression,
@@ -61,8 +62,9 @@ UNNAMED = "-"
 # A monitor samples every 5 seconds, so nothing this recent is stale.
 STALE_AFTER_S = 60.0
 
-# The tables show this when a worker published its id
-# but not the field the collector reads.
+# The tables show this in place of a value the collector cannot read:
+# a field of a worker or a pilot job whose key is in the map,
+# or the name of a task.
 # A worker caught mid-startup looks like this.
 UNKNOWN = "?"
 
@@ -177,7 +179,11 @@ class Snapshot:
 
 
 class Collector:
-    """Turns the server's RPCs into a `Snapshot`."""
+    """Turns the server's RPCs into a `Snapshot`.
+
+    Keep one instance for every poll of a server.
+    It reads each worker, pilot job and task name once, and caches them.
+    """
 
     def __init__(self, client: DsServiceClientAsync, address: str) -> None:
         self.client = client
@@ -195,7 +201,10 @@ class Collector:
     async def snapshot(self) -> Snapshot:
         """One poll of the server, as a `Snapshot`.
 
-        A key the server does not hold reads as `UNKNOWN` rather than raising.
+        A key the server does not hold does not raise.
+        A missing worker or pilot job description reads as `UNKNOWN`,
+        a missing progress display as no progress,
+        and a running task with no known worker as an empty worker.
         But a server that the client cannot reach raises.
         The caller decides whether to keep polling.
         """
@@ -243,6 +252,7 @@ class Collector:
     async def _collect_progress(self) -> ProgressInfo | None:
         """The progress display a wait published, and how far it got."""
         text = await self._text(PROGRESS_DISPLAY_KEY)
+        # A server with no display reads as `UNKNOWN`, which is not JSON.
         try:
             published = json.loads(text)
             info = ProgressInfo(
@@ -379,10 +389,8 @@ class Collector:
         )
 
     async def _collect_subjects(self, prefixes: dict[str, str]) -> list[SubjectInfo]:
-        """The latest reading of every subject one monitor writes about.
-
-        The collector finds the subjects in the keys of one series.
-        """
+        """The latest reading of every subject one monitor writes about."""
+        # The keys of one series name every subject.
         first = next(iter(prefixes.values()))
         subjects = sorted(
             key[len(first) :]
@@ -391,7 +399,8 @@ class Collector:
         if not subjects:
             return []
 
-        # The tail only: a whole series grows without bound over a run.
+        # The tail only: with no bounds, `time_series_get` returns every point,
+        # which over a day-long run is most of the memory the server holds.
         since = (
             datetime.now(timezone.utc) - timedelta(seconds=STALE_AFTER_S)
         ).isoformat()
@@ -416,10 +425,7 @@ class Collector:
         return [readings[subject] for subject in subjects]
 
     async def _holder(self, task_id: str, worker_names: dict[str, str]) -> str:
-        """The name of the worker that runs `task_id`.
-
-        The name is "" where the server cannot say.
-        """
+        """The worker that runs `task_id`, by name, or "" if the server cannot say."""
         try:
             worker_id = await self.client.task_get_worker_id(task_id)
         except (KeyError, TaskStateError):
@@ -516,7 +522,7 @@ def counts_line(snapshot: Snapshot) -> str:
 
 
 def pilot_job_rows(snapshot: Snapshot) -> list[tuple[str, list[str]]]:
-    """One row per submitted pilot job, keyed by its worker name."""
+    """One row per submitted pilot job, keyed by its job name."""
     return [
         (job.name, [job.name, job.group, job.slurm_job_id, job.submit_time])
         for job in snapshot.worker_jobs

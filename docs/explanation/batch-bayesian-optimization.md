@@ -1,4 +1,4 @@
-# About batch Bayesian optimization
+# Batch Bayesian optimization
 
 [<- back to the main README](../../README.md)
 
@@ -57,7 +57,8 @@ A fitted GP costs more to ship back to the driver than it cost to fit.
 The driver is also usually a login node,
 where a multi-core torch job is not welcome.
 
-That is why there are two queue arguments and not one.
+That is why there are two queue arguments and not one,
+`objective_queue` and `optimizer_queue`.
 An evaluation is a cheap single call, `search_parallelism` at a time.
 The fit is a single task that threads across cores
 and grows superlinearly with the number of observations.
@@ -83,6 +84,8 @@ so it means the same thing
 whether the objective is in seconds or in dollars.
 `patience` stalled rounds in a row end the search.
 
+The floor is `min_search_rounds`, the rounds that always run.
+The ceiling is `max_search_rounds`.
 The floor and the patience interact.
 [When it stops](../reference/optimize-space.md#when-it-stops)
 gives the arithmetic.

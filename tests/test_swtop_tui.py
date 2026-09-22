@@ -20,8 +20,9 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
+from collections.abc import Callable, Coroutine
 from datetime import datetime
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from textual.app import App, ComposeResult
@@ -41,7 +42,7 @@ from slurm_workflows.swtop_tui import SwtopApp, sync_table
 from worker_harness import make_worker
 
 
-def square(x):
+def square(x: int) -> int:
     return x * x
 
 
@@ -83,7 +84,7 @@ def snapshot(**kwargs) -> Snapshot:
     return replace(filled, **kwargs)
 
 
-def drive(scenario):
+def drive(scenario: Callable[[], Coroutine[Any, Any, None]]) -> None:
     """Run one async scenario against a fresh app."""
     asyncio.run(scenario())
 
@@ -91,7 +92,9 @@ def drive(scenario):
 class StubCollector:
     """Hands back one snapshot, or fails, without a server behind it."""
 
-    def __init__(self, snapshot: Snapshot | None = None, address: str = "host:1"):
+    def __init__(
+        self, snapshot: Snapshot | None = None, address: str = "host:1"
+    ) -> None:
         self.address = address
         self._snapshot = snapshot
 
@@ -181,6 +184,10 @@ class TestSyncTable:
 # --------------------------------------------------------------------------
 # What the app draws
 # --------------------------------------------------------------------------
+
+# The tests here start the app on a `StubCollector` with no snapshot,
+# so the startup poll fails, and each test then applies its own snapshot.
+# The 3600 s interval keeps a second poll from firing during a test.
 
 
 class TestDisplay:
@@ -392,7 +399,7 @@ class TestFailedPoll:
 
 
 class TestRealServer:
-    """The polling half: a thread, a real client, and the widgets it fills."""
+    """The polling half: a Textual worker, a real client, and the widgets it fills."""
 
     @pytest.fixture(autouse=True)
     def _pilot_jobs(self, pilot_jobs):

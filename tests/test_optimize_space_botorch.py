@@ -1,7 +1,8 @@
 """Tests for the botorch-based parallel optimizer.
 
-The optimizer's contract with the executor is two calls wide:
-`submit()` returns a `Task`, and `wait()` fills in that task's `output`.
+The optimizer's contract with the executor is three calls wide:
+`submit()` returns a `Task`, `set_task_name()` names it,
+and `wait()` fills in that task's `output`.
 Most tests here drive that contract through `LocalExecutor`,
 which runs inline whatever the optimizer hands it.
 That covers both the objective and, since the fit became a task of its own,
@@ -24,7 +25,7 @@ so the file the optimizer reads is the file the explorer writes.
 `TestRealExecutor` keeps the stand-in honest.
 It runs a whole exploration and optimization through the real executor,
 the real ds-service queue and a real worker, the fit included.
-That pins the two-call contract against the real implementation.
+That pins the three-call contract against the real implementation.
 
 The four tests in `TestSearchBehaviour` assert behavior of the search
 rather than its bookkeeping.
@@ -46,6 +47,7 @@ import pickle
 import re
 import statistics
 import threading
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, cast
 
@@ -58,6 +60,7 @@ from botorch.acquisition import qLogNoisyExpectedImprovement  # noqa: E402
 
 from slurm_workflows import optimize_space_botorch as osb  # noqa: E402
 from slurm_workflows.optimize_space_botorch import (  # noqa: E402
+    ObjectiveFunction,
     OptimizationStudy,
     OptimizeSpaceBotorch,
 )
@@ -70,6 +73,7 @@ from slurm_workflows.search_space import (  # noqa: E402
     CategoricalRange,
     FloatRange,
     IntRange,
+    SearchSpace,
 )
 from slurm_workflows.slurm_pilot_executor import (  # noqa: E402
     RaiseOnError,
@@ -104,7 +108,13 @@ class LocalExecutor:
         self.priorities: list[float] = []
 
     def submit(
-        self, queue, fn, *args, task_parents=None, task_priority=0.0, **kwargs
+        self,
+        queue: str | list[str],
+        fn: Callable[..., Any],
+        *args,
+        task_parents: list[Task] | None = None,
+        task_priority: float = 0.0,
+        **kwargs,
     ) -> Task:
         self.queues.append(queue)
         self.kwargs.append(dict(kwargs))
@@ -129,10 +139,10 @@ class LocalExecutor:
 
     def wait(
         self,
-        tasks,
-        desc=None,
-        unit="task",
-        raise_on_error=RaiseOnError.RAISE_ON_FIRST_ERROR,
+        tasks: Sequence[Task],
+        desc: str | None = None,
+        unit: str = "task",
+        raise_on_error: RaiseOnError = RaiseOnError.RAISE_ON_FIRST_ERROR,
     ) -> None:
         """The real `wait`'s contract, minus the waiting.
 
@@ -160,11 +170,12 @@ def as_executor(executor: LocalExecutor) -> SlurmPilotExecutor:
     """Type the stand-in as the executor it stands in for.
 
     `LocalExecutor` satisfies the whole contract the optimizer uses.
-    That contract is two calls:
-    `submit()` returns a `Task`, and `wait()` fills in its `output`.
+    That contract is three calls:
+    `submit()` returns a `Task`, `set_task_name()` names it,
+    and `wait()` fills in its `output`.
     `LocalExecutor` does not inherit from `SlurmPilotExecutor`,
     whose `__init__` opens a real queue connection.
-    The cast asserts that the two-call contract is enough,
+    The cast asserts that the three-call contract is enough,
     and `TestRealExecutor` proves it.
     """
     return cast(SlurmPilotExecutor, executor)
@@ -182,17 +193,17 @@ def sphere(x, y):
     return {"objective": x * x + y * y, "note": "sphere"}
 
 
-def identity(x):
+def identity(x: float) -> dict[str, float]:
     """Monotone: the minimum is at the low edge of the box."""
     return {"objective": x}
 
 
-def constant(x, y):
+def constant(x: float, y: float) -> dict[str, float]:
     """Never improves, so every round stalls."""
     return {"objective": 1.0}
 
 
-def benign(**params):
+def benign(**params: float) -> dict[str, float]:
     """An objective for the *prior* file, whatever the space.
 
     Tests of a broken objective still need observations to start from.
@@ -211,8 +222,8 @@ SEED = 20260730
 def explored(
     tmp_path: Path,
     name: str = "test",
-    space=None,
-    objective=sphere,
+    space: SearchSpace | None = None,
+    objective: ObjectiveFunction = sphere,
     points: int = 4,
     seed: int = SEED,
     filename: str | None = None,
@@ -236,13 +247,13 @@ def explored(
 
 def make_study(
     name: str = "test",
-    space=None,
-    objective=sphere,
+    space: SearchSpace | None = None,
+    objective: ObjectiveFunction = sphere,
     parallel: int | None = 4,
     rounds: int = 2,
     objective_queue: str | list[str] = "cpu",
     optimizer_queue: str | list[str] = "opt",
-    **extra,
+    **extra: Any,
 ) -> OptimizationStudy:
     """One optimization study, with the test defaults filled in.
 
@@ -291,13 +302,13 @@ def make_study(
 
 def make_opt(
     tmp_path: Path,
-    objective=sphere,
-    space=None,
+    objective: ObjectiveFunction = sphere,
+    space: SearchSpace | None = None,
     explore: int = 4,
     files: list[Path] | None = None,
-    prior_objective=None,
+    prior_objective: ObjectiveFunction | None = None,
     **study_kwargs,
-):
+) -> tuple[OptimizeSpaceBotorch, LocalExecutor]:
     """An optimizer over one study, wired to a fresh LocalExecutor.
 
     The study's observations come from a file an exploration wrote,
@@ -958,7 +969,7 @@ class TestOptimizerQueue:
         ]
 
     @staticmethod
-    def _record_kwargs(monkeypatch) -> list[dict]:
+    def _record_kwargs(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
         """Record what each fit was asked for, without paying for one."""
         seen: list[dict] = []
 
@@ -1061,7 +1072,7 @@ class TestOptimizerQueue:
 class TestSeveralSpacesAtOnce:
     @pytest.fixture
     def two(self, tmp_path):
-        """Two tasks over one results file, and the executor they share."""
+        """Two studies over one results file, and the executor they share."""
         exploration = ExploreSpaceSobolQMC(
             [
                 ExplorationStudy("a", BOX_2D, sphere, "cpu", 4, SEED),
@@ -1187,7 +1198,7 @@ class TestPartialFailure:
     """One bad point must not cost a whole round, across every study."""
 
     @staticmethod
-    def fails_at(threshold: float):
+    def fails_at(threshold: float) -> Callable[..., dict[str, float]]:
         """An objective that raises on the points past `threshold`."""
 
         def objective(x, y):
@@ -1198,7 +1209,7 @@ class TestPartialFailure:
         return objective
 
     @staticmethod
-    def fails_every_other():
+    def fails_every_other() -> Callable[..., dict[str, float]]:
         """An objective that raises on every second point it receives.
 
         A threshold on `x` cannot produce a *partial* failure here.
@@ -1540,7 +1551,8 @@ class TestSearchBehaviour:
         assert abs(params["x"]) < 1.0 and abs(params["y"]) < 1.0
 
     def test_search_beats_random_search(self, tmp_path):
-        # Sobol' alone over the same total budget is the thing BO has to beat.
+        # Sobol' alone is the thing BO has to beat.
+        # Its 24 points floor to 16, against the 24 the search sees in all.
         opt, _ = make_opt(tmp_path, objective=sphere, explore=8, rounds=4, parallel=4)
         opt.run()
         guided = opt.best_point("test")[1]

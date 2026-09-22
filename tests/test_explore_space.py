@@ -11,14 +11,20 @@ import gzip
 import math
 import pickle
 import threading
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
 from slurm_workflows.explore_space import ExplorationStudy, ExploreSpaceSobolQMC
-from slurm_workflows.search_space import CategoricalRange, FloatRange, IntRange
-from slurm_workflows.slurm_pilot_executor import SlurmPilotExecutor, Task
+from slurm_workflows.search_space import (
+    CategoricalRange,
+    FloatRange,
+    IntRange,
+    SearchSpace,
+)
+from slurm_workflows.slurm_pilot_executor import RaiseOnError, SlurmPilotExecutor, Task
 from slurm_workflows.utils import RemoteExecutionError, gen_error_id
 from worker_harness import make_worker, run_worker
 
@@ -33,15 +39,15 @@ MIXED = {
 }
 
 
-def sphere(x, y):
+def sphere(x: float, y: float) -> dict[str, float]:
     return {"objective": x * x + y * y}
 
 
-def plane(x, y):
+def plane(x: float, y: float) -> dict[str, float]:
     return {"objective": x + y}
 
 
-def mixed_objective(x, n, kind):
+def mixed_objective(x: float, n: int, kind: int) -> dict[str, float]:
     return {"objective": abs(x) + n + kind, "n": n, "kind": kind}
 
 
@@ -62,7 +68,13 @@ class LocalExecutor:
         self.priorities: list[float] = []
 
     def submit(
-        self, queue, fn, *args, task_parents=None, task_priority=0.0, **kwargs
+        self,
+        queue: str | list[str],
+        fn: Callable[..., Any],
+        *args,
+        task_parents: list[Task] | None = None,
+        task_priority: float = 0.0,
+        **kwargs,
     ) -> Task:
         self.queues.append(queue)
         self.kwargs.append(dict(kwargs))
@@ -85,7 +97,13 @@ class LocalExecutor:
         self.names.append(name)
         task._task_name = name
 
-    def wait(self, tasks, desc=None, unit="task", raise_on_error=None) -> None:
+    def wait(
+        self,
+        tasks: Sequence[Task],
+        desc: str | None = None,
+        unit: str = "task",
+        raise_on_error: RaiseOnError | None = None,
+    ) -> None:
         self.waits.append(desc)
         self.batch_sizes.append(len(tasks))
         failed = [t for t in tasks if isinstance(t.output, RemoteExecutionError)]
@@ -93,6 +111,9 @@ class LocalExecutor:
             raise RuntimeError(f"{len(failed)} of {len(tasks)} tasks did not succeed")
 
 
+# `exploration.executor` keeps this type.
+# A test that reads the stand-in's records back through it
+# therefore carries `# type: ignore[attr-defined]`.
 def as_executor(executor: LocalExecutor) -> SlurmPilotExecutor:
     """Type the stand-in as the executor it stands in for."""
     return cast(SlurmPilotExecutor, executor)
@@ -100,14 +121,14 @@ def as_executor(executor: LocalExecutor) -> SlurmPilotExecutor:
 
 def study(
     name: str = "demo",
-    space=BOX_2D,
+    space: SearchSpace = BOX_2D,
     objective=sphere,
     queue: str | list[str] = "cpu",
     points: int | None = 8,
     seed: int | None = SEED,
     objective_key: str = "objective",
     priority: float = 0.0,
-    **extra,
+    **extra: Any,
 ) -> ExplorationStudy:
     """One exploration study, with the test defaults filled in."""
     return ExplorationStudy(
@@ -123,7 +144,9 @@ def study(
     )
 
 
-def explorer(*studies: ExplorationStudy, points: int | None = None):
+def explorer(
+    *studies: ExplorationStudy, points: int | None = None
+) -> ExploreSpaceSobolQMC:
     """An exploration of `studies`, or of one default study, on a stand-in executor."""
     return ExploreSpaceSobolQMC(
         list(studies) or [study()], as_executor(LocalExecutor()), points
@@ -182,7 +205,7 @@ class TestConstruction:
         assert str(exploration.studies[0].seed) in capsys.readouterr().out
 
     def test_the_callers_task_is_left_alone(self):
-        """`tasks` says what will run.
+        """`studies` says what will run.
 
         The exploration does not touch the caller's own object.
         """
@@ -500,7 +523,7 @@ class TestPartialFailure:
     """One bad point must not cost a whole exploration."""
 
     @staticmethod
-    def fails_at(threshold: float):
+    def fails_at(threshold: float) -> Callable[..., dict[str, float]]:
         """An objective that raises on the points past `threshold`."""
 
         def objective(x, y):

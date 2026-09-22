@@ -22,7 +22,7 @@ A run needs:
 
 - Python >= 3.12
 - Access to a Slurm cluster (`sbatch`, `squeue`, `scancel` on `PATH`)
-- A running [`ds-service`](https://github.com/parantapa/ds-service) server
+- The [`ds-service`](https://github.com/parantapa/ds-service) binary on `PATH`
 
 ```sh
 pip install -U slurm-workflows
@@ -32,6 +32,12 @@ To set up on UVA's Rivanna cluster, read
 [How to install slurm-workflows on Rivanna](docs/how-to-guides/install-on-rivanna.md).
 
 ## Usage
+
+Replace the Slurm account (`-A`), the partition (`-p`)
+and the setup script with the ones for your cluster.
+The driver must run on a node with the `ib0` interface.
+For another interface, read
+[How to run the `ds-service` server](docs/how-to-guides/run-the-ds-service-server.md).
 
 ```python
 from ds_service_client import DsServiceServer
@@ -71,7 +77,8 @@ with DsServiceServer(interface="ib0") as ds_service:
 print(sum(task.output for task in tasks))
 ```
 
-```
+```text
+work directory: '/home/<user>/.cache/slurm-workflows/my-run/<timestamp>'
 328350
 ```
 
@@ -99,9 +106,9 @@ They wait on the queue until a worker starts and claims them.
 | [`OptimizeSpaceBotorch`](docs/reference/optimize-space.md) | The batch Bayesian search, its study fields, and its stopping rule. |
 | [Search spaces](docs/reference/search-space.md) | `IntRange`, `FloatRange` and `CategoricalRange`, the objective contract, and what a failed evaluation does to a run. |
 | [`swtop`](docs/reference/swtop.md) | The CLI, the blocks on screen, and what the host and job readings measure. |
-| [About the pilot-job model](docs/explanation/about-the-pilot-job-model.md) | Why pilot jobs, the three processes, where the driver runs, and which class to reach for. |
-| [About batch Bayesian optimization](docs/explanation/about-batch-bayesian-optimization.md) | Why a search has rounds, where the fit runs, and when it is worth the overhead. |
-| [About what a run publishes](docs/explanation/about-what-a-run-publishes.md) | Why a run is observable from outside itself, and the limits of that. |
+| [The pilot-job model](docs/explanation/pilot-job-model.md) | Why pilot jobs, the three processes, where the driver runs, and which class to reach for. |
+| [Batch Bayesian optimization](docs/explanation/batch-bayesian-optimization.md) | Why a search has rounds, where the fit runs, and when it is worth the overhead. |
+| [The trail a run leaves](docs/explanation/the-trail-a-run-leaves.md) | Why a run is observable from outside itself, and the limits of that. |
 
 ## For contributors
 

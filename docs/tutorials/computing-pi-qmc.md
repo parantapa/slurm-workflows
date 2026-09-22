@@ -146,7 +146,7 @@ as the workers claim the points and post what the objective returned.
 What to watch for while it runs, in order:
 
 * The `ds-service` server starts on the login node.
-* The executor submits one Slurm job across `NUM_NODES` nodes.
+* The executor submits one pilot job across `NUM_NODES` nodes.
 * `srun` starts a worker on every Slurm task in that job.
     Each worker connects back to the server over InfiniBand.
 * The exploration draws 4096 Sobol' points over `SAMPLE_SPACE`.
@@ -175,7 +175,8 @@ with the whole mapping the objective returned for it.
 [Optimizing Himmelblau's function](optimizing-himmelblau.md)
 searches on from a file of that kind.
 
-The same number came back from a third as much code.
+An estimate of the same number came back,
+and we wrote no `submit` or `wait` call to get it.
 We described a space and an objective,
 and the exploration did the submitting, the waiting and the bookkeeping.
 

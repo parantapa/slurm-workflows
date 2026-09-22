@@ -37,7 +37,7 @@ Those tasks outlive the call.
 
 **Each worker publishes where it runs when it starts**,
 under `worker_info:<worker-id>`,
-where the worker id is `<job-name>.<slurm-job-id>.<hostname>.<pid>`.
+where the worker id is `<job-name>.<job-id>.<hostname>.<pid>`.
 The value is a JSON object, not a pickle,
 so anything can read it:
 
@@ -49,8 +49,8 @@ so anything can read it:
 | `hostname` | The compute node it landed on |
 | `pid` | Its process id on that node |
 
-The worker id is the handle the server hands out
-(`task_get_worker_id` says which worker claimed a task).
+The worker id is what the worker claims tasks under
+(`task_get_worker_id` says which worker holds a running task).
 It is the path from a task to the worker and the node that ran it.
 Nothing removes the key when a worker exits.
 
@@ -70,13 +70,13 @@ and `slurm_job_monitor:<job-id>` counters.
 [`swtop`](swtop.md) displays the result.
 
 Why a run publishes in these two halves rather than one is in
-[About what a run publishes](../explanation/about-what-a-run-publishes.md).
+[The trail a run leaves](../explanation/the-trail-a-run-leaves.md).
 That page also says why nothing updates a key after the first write.
-
 
 ## Watching a wait
 
-Both calls require `desc`, and `unit` names what the call counts.
+`as_completed` and `wait` both require `desc`,
+and `unit` names what the call counts.
 Neither call prints a progress bar of its own.
 They publish what they work through to the server,
 where [`swtop`](swtop.md) draws it.
@@ -98,7 +98,6 @@ The call appends the count at most once a second while tasks arrive.
 The next call overwrites the key.
 The server therefore holds the display for the most recent wait,
 and the series holds the history of each.
-
 
 ## The `slurm-pilot-worker` entry point
 
@@ -122,8 +121,8 @@ and the attribute `executor.work_dir` holds it:
 | --- | --- |
 | `executor.log` | Pilot job submission and cancellation from the executor's side |
 | `<job-name>.sh`, `<job-name>.sbatch` | The generated scripts |
-| `<job-name>-<jobid>-<rank>.out` | One per worker: setup-script output, task-by-task progress, full tracebacks |
-| `<job-name>-<jobid>.out` | The pilot job's own output, and the worker's log too when the job holds a single Slurm task |
+| `<job-name>-<job-id>-<rank>.out` | One per worker: setup-script output, task-by-task progress, full tracebacks |
+| `<job-name>-<job-id>.out` | The pilot job's own output, and the worker's log too when the job holds a single Slurm task |
 
 `<job-name>` is `<executor-name>.job.<group>.<index>`,
 which is the Slurm job name, so `squeue` shows which run a job belongs to.
@@ -138,14 +137,14 @@ Which of the two holds a worker's log depends on the job group's definition:
     Each Slurm task gets `--output <work-dir>/<job-name>-%j-%t.out`,
     so `<rank>` is the task rank.
     That file is the worker's log.
-    `<job-name>-<jobid>.out` then holds
+    `<job-name>-<job-id>.out` then holds
     only what the batch script itself emitted,
     which in practice means `srun`'s own errors.
 
     The exception is a job of exactly one Slurm task:
     `--ntasks=1`, or `--nodes=1` and nothing else about Slurm tasks.
     It keeps `srun` but drops the `--output`
-    and writes to `<job-name>-<jobid>.out` like a batch worker.
+    and writes to `<job-name>-<job-id>.out` like a batch worker.
     The count is per *job*, not per node:
     `--nodes=4 --ntasks-per-node=1` is four Slurm tasks
     and still gets four per-Slurm-task files.
@@ -156,7 +155,7 @@ Which of the two holds a worker's log depends on the job group's definition:
     and traces the `srun` command it ran.
 - **`is_batch_worker=True`** runs one worker directly on the batch host,
     with no `srun` and so no per-Slurm-task file.
-    Everything lands in `<job-name>-<jobid>.out`.
+    Everything lands in `<job-name>-<job-id>.out`.
 
 The `error_id` inside a `RemoteExecutionError`
 appears verbatim next to the traceback in the worker's log.
@@ -165,4 +164,4 @@ appears verbatim next to the traceback in the worker's log.
 
 - [`SlurmPilotExecutor`](executor.md)
 - [`swtop`](swtop.md)
-- [About what a run publishes](../explanation/about-what-a-run-publishes.md)
+- [The trail a run leaves](../explanation/the-trail-a-run-leaves.md)

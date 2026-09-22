@@ -24,9 +24,12 @@ def gen_error_id() -> str:
 class RemoteExecutionError:
     """What a task's `output` holds when its worker raised.
 
-    `error` is the formatted exception.
+    It is a value, not an exception: nothing raises it.
+    `error` is the exception's message, as `str()` gives it.
     `error_id` appears verbatim beside the full traceback in that worker's log,
     under the executor's work dir.
+    For a task that never ran because a task it waits on failed,
+    `error_id` is empty.
     """
 
     error: str

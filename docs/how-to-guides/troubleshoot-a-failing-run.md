@@ -49,7 +49,7 @@ So `grep` finds one line, even when a batch failed a hundred times.
 Only the worker's own log carries the traceback.
 `executor.log` does not, because the executor never saw the exception.
 
-The task itself holds only `str(e)`, the formatted exception.
+The task itself holds only `str(e)`, the message of the exception.
 The traceback and the rest of the log are in the file `grep` named.
 
 The executor warns on stderr for every failure,
@@ -87,19 +87,20 @@ If it shows a connection failure,
 the workers cannot reach the server from the compute nodes.
 Restart the server on an interface the compute nodes can reach,
 following [How to run the `ds-service` server](run-the-ds-service-server.md).
-If it shows nothing at all,
-the queue you submitted to matches no job group name.
-Compare it against your `define_job_group` names.
+A queue that matches no job group name does not end up here.
+The wait raises the error in the next section instead.
 
-## `RuntimeError: ... tasks are on queues with no worker started`
+## `RuntimeError: ... tasks are on, or wait on tasks on, queues with no worker started`
 
 The executor raises this error as soon as you wait,
 because you never called `scale_jobs` for those queues.
+The queues can belong to the task itself,
+or to a parent task that is not finished yet.
 Either you never scaled the job group, or the queue name is a typo.
 The executor does not check the queue name at `submit` time,
 so compare it against your `define_job_group` names.
 
-## `RuntimeError: ... tasks are on queues with no live pilot job`
+## `RuntimeError: ... tasks are on, or wait on tasks on, queues with no live pilot job`
 
 The executor raises this error while you wait.
 You scaled the job group, but its pilot jobs then left the cluster.
@@ -111,7 +112,8 @@ Then submit the tasks again.
 
 ## `RuntimeError: Task ... was canceled on the task queue server`
 
-Somebody canceled the task through the `ds-service` client directly.
+Somebody canceled the task, or a task it waits on,
+through the `ds-service` client directly.
 Nothing in this library cancels a task.
 
 If you still want the output, submit the task again.
@@ -145,13 +147,19 @@ or install it into the environment the setup script activates.
 This failure comes back like any other task failure,
 so the `error_id` leads to the import that failed.
 
+An actor class is the exception.
+A worker imports it at startup, before it claims a task,
+so that failure has no `error_id`.
+The worker exits, and its `.out` file holds the traceback.
+
 ## Nothing is obviously wrong and you want to watch
 
 Run [`swtop`](watch-a-run-with-swtop.md) against the same server address
 from another shell.
-Two causes leave the workers block empty
+Three causes leave the workers block empty
 while the pilot jobs block holds entries.
-The pilot jobs are still pending, or their setup scripts did not finish.
+The pilot jobs are still pending, their setup scripts did not finish,
+or their workers cannot reach the server.
 
 ## Related
 

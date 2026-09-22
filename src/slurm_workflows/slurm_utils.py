@@ -25,6 +25,10 @@ def get_clean_environ() -> dict[str, str]:
     Drops `SLURM_`, `SLURMD_`, `PMI_` and `SRUN_`.
     A driver that runs inside an allocation
     then submits jobs of its own.
+
+    The result is built once per process and shared between callers.
+    A later change to `os.environ` does not show in it,
+    and a caller must not modify it.
     """
     sanitized_env: dict[str, str] = {}
     for k, v in os.environ.items():
@@ -71,6 +75,8 @@ def cancel_jobs(
 
     `term`, `batch` and `full` add `scancel`'s `--signal=TERM`,
     `--batch` and `--full` respectively.
+    Raises `subprocess.CalledProcessError` if `scancel` fails,
+    and `subprocess.TimeoutExpired` if it does not answer in time.
     """
     if not job_ids:
         return
@@ -110,7 +116,10 @@ def submit_sbatch_job(
     """Submit one job, and return it with its id and output file resolved.
 
     Writes `<name>.sbatch` into `work_dir` and makes it executable.
-    Raises `RuntimeError` if `sbatch` succeeds but its output holds no job id.
+    Raises `RuntimeError` if `sbatch` succeeds but its output holds no job id,
+    `ValueError` if the job id it prints is not a number,
+    `subprocess.CalledProcessError` if `sbatch` fails,
+    and `subprocess.TimeoutExpired` if it does not answer in time.
     """
     output_file = str(work_dir / f"{name}-%j.out")
 

@@ -9,6 +9,14 @@ pip install -ve .[test,dev]
 pytest
 ```
 
+To run one file, one class or one test, give pytest its node id:
+
+```sh
+pytest tests/test_templates.py
+pytest tests/test_templates.py::TestParseFile
+pytest tests/test_templates.py::TestParseFile::test_a_body_is_stripped
+```
+
 The suite needs no Slurm cluster.
 The suite takes about 55s end to end.
 Everything but the botorch tests takes about 26s,
@@ -60,6 +68,7 @@ Paths are relative to [`tests/`](../tests).
 | `test_templates.py` | The multi-template-per-file loader and every template |
 | `test_slurm_utils.py` | `sbatch`/`squeue`/`scancel` wrappers, `get_clean_environ` |
 | `test_executor.py` | `SlurmPilotExecutor`: job groups, scaling, submit/poll, lifecycle |
+| `test_mapreduce.py` | `SlurmPilotExecutor.mapreduce`: item and map tasks, the fold, and the item queue |
 | `test_worker.py` | `PilotWorker` and the `slurm-pilot-worker` CLI |
 | `test_monitors.py` | The host and cgroup samplers and the monitor threads |
 | `test_swtop.py` | The `swtop` collector: what it collects, how it renders as text, and the CLI |
@@ -110,7 +119,7 @@ Paths are relative to [`tests/`](../tests).
   `TestRealExecutor` keeps the stand-in honest,
   and runs a whole optimization
   through the real executor, the real queue and a real worker.
-  The test runs in a thread,
+  The worker runs in a thread,
   because the optimizer blocks in `wait` the moment it submits.
 - **Four botorch tests assert search behavior, not bookkeeping.**
   They catch a flipped sign on the objective:
@@ -129,6 +138,9 @@ Paths are relative to [`tests/`](../tests).
   because `qLogNoisyExpectedImprovement` probes away from the incumbent
   by design.
   Single points reach 1.0 on a correct run.
+  `best_point()` does not work either.
+  The exploration alone lands near the minimum,
+  so `best_point()` passes even with the sign flipped.
   All four use unimodal objectives on purpose:
   an earlier Himmelblau version of the random-search comparison
   lost 1 run in 10.

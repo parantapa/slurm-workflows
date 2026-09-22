@@ -2,11 +2,6 @@
 
 Each `.jinja` file holds several named templates.
 A `{#- name: "..." -#}` JSON5 header starts each one.
-Address a template as `"<file prefix>:<name>"`,
-for example `"slurm_pilot:worker_script"`.
-The environment is strict:
-a variable the template uses and the caller did not pass
-is an error, not an empty string.
 """
 
 from pathlib import Path

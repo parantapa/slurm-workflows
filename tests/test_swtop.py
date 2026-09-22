@@ -17,12 +17,13 @@ from __future__ import annotations
 
 import json
 import asyncio
+from collections.abc import Iterator
 from typing import Any, Callable, Coroutine, TypeVar, cast
 from datetime import datetime, timedelta, timezone
 
 import pytest
 from click.testing import CliRunner
-from ds_service_client import DsServiceClientAsync
+from ds_service_client import DsServiceClient, DsServiceClientAsync
 
 from slurm_workflows import swtop as swtop_mod
 from slurm_workflows.swtop import UNNAMED, Collector, Snapshot, render, swtop
@@ -36,7 +37,7 @@ def _now_utc() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def square(x):
+def square(x: int) -> int:
     return x * x
 
 
@@ -76,7 +77,7 @@ async def _make_client(address: str) -> DsServiceClientAsync:
 
 
 @pytest.fixture
-def collector(ds_service_address):
+def collector(ds_service_address: str) -> Iterator[LoopBound]:
     bound = LoopBound(ds_service_address)
     yield bound
     bound.close()
@@ -89,18 +90,18 @@ class CountingClient:
     on top of the identities it caches.
     """
 
-    def __init__(self, inner):
+    def __init__(self, inner: DsServiceClientAsync) -> None:
         self._inner = inner
         self.keys_read: list[str] = []
 
     def reads(self, prefix: str) -> int:
         return sum(1 for key in self.keys_read if key.startswith(prefix))
 
-    async def map_get(self, key):
+    async def map_get(self, key: str) -> bytes:
         self.keys_read.append(key)
         return await self._inner.map_get(key)
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
 
 
@@ -210,8 +211,13 @@ class TestCollectProgress:
     """The progress display a wait publishes, as the collector reads it."""
 
     def publish(
-        self, ds_client, progress_id="p-1", desc="explore", unit="point", total=10
-    ):
+        self,
+        ds_client: DsServiceClient,
+        progress_id: str = "p-1",
+        desc: str = "explore",
+        unit: str = "point",
+        total: int = 10,
+    ) -> None:
         ds_client.map_set(
             "progress_display",
             json.dumps(
@@ -353,6 +359,7 @@ class TestCollectWorkers:
         worker = make_worker(ds_service_address, tmp_path, group="cpu", name="w-1")
 
         (listed,) = collector.snapshot().workers
+        # The host, job id and pid are the ones `make_worker` publishes.
         assert listed.worker_id == worker.worker_id
         assert listed.name == "w-1"
         assert listed.group == "cpu"
@@ -494,7 +501,7 @@ class TestCollectMonitored:
     def test_a_series_that_never_started_leaves_its_column_out(
         self, collector, ds_client
     ):
-        """Only one of a host's four series has to exist for swtop to list the host."""
+        """Of a host's four series, only `host_free_memory` has to exist to list it."""
         ds_client.time_series_append("host_free_memory:node-1", 5.0, _now_utc())
 
         (host,) = collector.snapshot().hosts

@@ -1,7 +1,7 @@
 """The executor: job groups, pilot jobs, and the tasks they run.
 
 One executor per `ds-service` server.
-`docs/explanation/about-the-pilot-job-model.md` explains the model.
+`docs/explanation/pilot-job-model.md` explains the model.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from types import TracebackType
 from pathlib import Path
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
-from typing import Callable, Iterable, Any, cast
+from typing import Callable, Iterable, Iterator, Any, cast
 
 import platformdirs
 import cloudpickle
@@ -45,12 +45,13 @@ from .templates import render_template
 from .slurm_pilot_worker import current_actor
 
 # What a `Task`'s `output` holds until the task finishes.
-# A task that never ran keeps it.
+# A task that was canceled, is unknown to the server,
+# or has no pilot job left to run it keeps it.
 NoOutput = object()
 
-# One JSON key per submitted pilot job, keyed on the worker name.
+# One JSON key per submitted pilot job, keyed on the job name.
 # `swtop` reads it.
-# `docs/reference/executor.md` lists the fields.
+# `docs/reference/what-a-run-publishes.md` lists the fields.
 PILOT_JOB_INFO_PREFIX = "pilot_job_info:"
 
 # What `wait` and `as_completed` work through, for `swtop` to draw.
@@ -95,21 +96,26 @@ class RaiseOnError(Enum):
     one whose parent task failed or was canceled,
     or one the server does not know.
     A pending task is also a failure
-    when its queues have no pilot job left to run it.
+    when its queues, or those of an unfinished ancestor,
+    have no pilot job left to run it.
     The executor reports every failure as it meets one, whatever the value.
     The value decides only whether an exception follows.
     """
 
-    # Stop at the first failure.
     RAISE_ON_FIRST_ERROR = auto()
+    """Stop at the first failure."""
 
-    # Wait for every task that can still finish, then raise for all at once.
-    # `as_completed` treats this as RAISE_ON_FIRST_ERROR.
     RAISE_AFTER_COMPLETED = auto()
+    """Wait for every task that can still finish, then raise for all at once.
 
-    # Report the failures and return.
-    # The caller reads `task.output`.
+    `as_completed` treats this as `RAISE_ON_FIRST_ERROR`.
+    """
+
     RAISE_NEVER = auto()
+    """Report the failures and return.
+
+    The caller reads `task.output`.
+    """
 
 
 # How many failures a deferred exception names before it stops listing them.
@@ -121,6 +127,8 @@ MAX_REPORTED_ERRORS = 5
 EXECUTOR_NAME_REGEX = re.compile(r"[A-Za-z][A-Za-z0-9_-]*")
 MIN_EXECUTOR_NAME_LEN: int = 3
 
+# How long `_as_completed` sleeps between two status polls
+# that brought back nothing.
 POLL_INTERVAL_S: float = 0.1
 
 # How often `_as_completed` re-checks that pending tasks still have a pilot job.
@@ -148,6 +156,8 @@ class Task:
     output: Any
     parent_task_ids: list[str] = field(default_factory=list)
     _task_name: str | None = None
+    # The parents themselves, so a wait can check their queues too.
+    _parents: list["Task"] = field(default_factory=list, repr=False, compare=False)
 
     @property
     def task_name(self) -> str | None:
@@ -160,7 +170,8 @@ class JobGroup:
     """A named recipe for pilot jobs, and the queue their workers serve.
 
     `scale_jobs` sets how many pilot jobs the group has.
-    How many workers those jobs start is decided by the sbatch arguments.
+    How many workers those jobs start is decided by the sbatch arguments
+    and `is_batch_worker`.
     The name is also the queue name:
     only workers of this job group serve a task on the queue `name`.
     """
@@ -242,6 +253,10 @@ def _mapreduce_task(
     # the worker put in the environment.
     with DsServiceClient() as client:
         while True:
+            # No retry on `TimeoutError`: `task_get` is not idempotent.
+            # The deadline can fire after the server recorded the claim,
+            # and a retry then skips that item, which stays `Running` for good.
+            # The error propagates instead, and the wait raises.
             try:
                 item_task = client.task_get(worker_id, mr_queue)
             except NoTaskAvailable:
@@ -275,7 +290,7 @@ class SlurmPilotExecutor:
     ) -> None:
         """Connect to a `ds-service` server and open a work directory for this run.
 
-        `name` prefixes task ids, pilot job names and the log,
+        `name` prefixes task ids and pilot job names, and names the logger,
         so two executors on one cluster need two names.
         `name` must match `[A-Za-z][A-Za-z0-9_-]*`
         and hold at least `MIN_EXECUTOR_NAME_LEN` characters.
@@ -310,7 +325,8 @@ class SlurmPilotExecutor:
         self.work_dir.mkdir(parents=True, exist_ok=True)
         print(f"work directory: '{self.work_dir}'")
 
-        # A logger of this executor's own, keyed on its name.
+        # Keyed on the name.
+        # See Logging in the developer notes.
         self.logger = logging.getLogger(f"slurm_workflows.executor.{self.name}")
         self.logger.setLevel(LOG_LEVEL)
         # These records belong in the work dir, not on the root logger.
@@ -339,13 +355,20 @@ class SlurmPilotExecutor:
         python_paths: list[str | Path] | None = None,
         add_cwd_to_python_path: bool = True,
     ) -> None:
-        """Register a job group. `scale_jobs` submits the jobs.
+        """Register a job group, without submitting any pilot job.
 
+        `scale_jobs` submits the jobs.
         `name` is also the queue name.
         `setup_script` is shell text, not a path.
         The executor inlines it into each generated worker script.
+        `actor_class_name` is a dotted `module.Class` path
+        that each worker imports and constructs at startup.
         The actor arguments need an `actor_class_name` to construct,
         and raise `ValueError` without one.
+        Actor arguments a later call passes replace the earlier ones,
+        even for an otherwise identical definition.
+        `is_batch_worker` runs one worker in the batch script itself,
+        rather than one per Slurm task under `srun`.
         A second, identical definition of a group does nothing.
         A definition that differs from the first one raises `AssertionError`.
         """
@@ -393,7 +416,7 @@ class SlurmPilotExecutor:
             )
 
     def _add_job(self, group: JobGroup) -> None:
-        """Render one worker's scripts and submit the pilot job that runs them."""
+        """Render one pilot job's scripts and submit the pilot job that runs them."""
         job_index = group.next_job_index
         group.next_job_index += 1
         job_name = f"{self.name}.job.{group.name}.{job_index}"
@@ -459,6 +482,9 @@ class SlurmPilotExecutor:
         """Submit or cancel pilot jobs so the group holds `count` of them.
 
         Returns as soon as `sbatch` accepts the jobs, not when they start.
+        Raises `AssertionError` for a group `define_job_group` did not register.
+        A failed `squeue` or `scancel` raises `RuntimeError`.
+        A failed `sbatch` raises what `submit_sbatch_job` raises.
         """
         assert name in self.groups, "Unknown job group"
 
@@ -510,13 +536,14 @@ class SlurmPilotExecutor:
     def _submit(
         self,
         queue: list[str],
-        parent_task_ids: list[str],
+        parents: list[Task],
         priority: float,
         fn: Callable | str,
         *args: Any,
         **kwargs: Any,
     ) -> Task:
         """Enqueue one task on the given queues and return its handle."""
+        parent_task_ids = [parent.task_id for parent in parents]
         function_bytes = cloudpickle.dumps(fn, protocol=pickle.HIGHEST_PROTOCOL)
         input_bytes = cloudpickle.dumps(
             (args, kwargs), protocol=pickle.HIGHEST_PROTOCOL
@@ -533,6 +560,7 @@ class SlurmPilotExecutor:
             input=(args, kwargs),
             output=NoOutput,
             parent_task_ids=parent_task_ids,
+            _parents=list(parents),
         )
 
         self.client.task_add(
@@ -586,9 +614,10 @@ class SlurmPilotExecutor:
         """
         if isinstance(queue, str):
             queue = [queue]
-        parent_task_ids = [parent.task_id for parent in task_parents or []]
 
-        return self._submit(queue, parent_task_ids, task_priority, fn, *args, **kwargs)
+        return self._submit(
+            queue, task_parents or [], task_priority, fn, *args, **kwargs
+        )
 
     def _require_actor_queues(self, queue: list[str], what: str) -> None:
         """Refuse a method name where a job group has no actor to find it on."""
@@ -605,7 +634,7 @@ class SlurmPilotExecutor:
             )
 
     def _require_started_queues(self, queue: list[str], what: str) -> None:
-        """Refuse a blocking call whose queues have no worker started."""
+        """Refuse a blocking call whose queues have no pilot job submitted."""
         started = {name for name, group in self.groups.items() if group.jobs}
         if not set(queue) & started:
             raise RuntimeError(
@@ -650,8 +679,9 @@ class SlurmPilotExecutor:
 
         Each task starts its fold at `init`, and so does this call,
         so `init` must be the identity of `reduce_fn`.
-        Which items a task claims depends on how busy the pool is.
-        `reduce_fn` must therefore be associative.
+        Which items a task claims depends on how busy the pool is,
+        and so does the order the partial results come back in.
+        `reduce_fn` must therefore be associative and commutative.
         It must also take a partial result as its second argument
         as readily as a mapped one.
         This call folds into a copy of `init`,
@@ -669,7 +699,7 @@ class SlurmPilotExecutor:
         Raises it as well for a `map_fn` given as a method name
         where a job group named in `queue` has no actor to find it on.
         Raises `RuntimeError` when no job group named in `queue`
-        has a worker started,
+        has a pilot job submitted,
         and when any of the tasks fails, as `wait` does.
         """
         if num_tasks < 1:
@@ -753,7 +783,7 @@ class SlurmPilotExecutor:
 
     def _as_completed(
         self, tasks: list[Task], raise_on_error: RaiseOnError
-    ) -> Iterable[Task]:
+    ) -> Iterator[Task]:
         """Yield tasks as they finish, and apply `raise_on_error` to failures."""
         pending: list[Task] = []
         finished: list[Task] = []
@@ -842,6 +872,10 @@ class SlurmPilotExecutor:
                 elif state == TaskState.Undefined:
                     failed(f"Task {task.task_id} is unknown to the task queue server")
                 else:
+                    # Keep waiting.
+                    # A state that falls through here waits forever,
+                    # so every state a task cannot leave needs a branch above.
+                    # A new state in a `ds-service` release is how this breaks.
                     next_pending.append(task)
 
             pending = next_pending
@@ -873,10 +907,15 @@ class SlurmPilotExecutor:
         desc: str,
         unit: str = "task",
         raise_on_error: RaiseOnError = RaiseOnError.RAISE_ON_FIRST_ERROR,
-    ) -> Iterable[Task]:
+    ) -> Iterator[Task]:
         """Yield tasks as their results arrive.
 
         `desc` and `unit` label the progress `swtop` draws for this call.
+        `RAISE_AFTER_COMPLETED` acts as `RAISE_ON_FIRST_ERROR` here.
+        A failure raises `RuntimeError` as `raise_on_error` directs.
+        A task that was canceled, is unknown to the server,
+        or has no pilot job left to run it is never yielded,
+        and its `output` stays `NoOutput`.
         """
         tasks = list(tasks)
         if raise_on_error is RaiseOnError.RAISE_AFTER_COMPLETED:
@@ -896,6 +935,7 @@ class SlurmPilotExecutor:
         """Block until every task is done.
 
         `desc` and `unit` label the progress `swtop` draws for this call.
+        A failure raises `RuntimeError` as `raise_on_error` directs.
         """
         tasks = list(tasks)
         progress = self._publish_progress(desc, unit, len(tasks))
@@ -925,7 +965,7 @@ class SlurmPilotExecutor:
         return progress
 
     @staticmethod
-    def _counted(tasks: Iterable[Task], progress: _Progress) -> Iterable[Task]:
+    def _counted(tasks: Iterable[Task], progress: _Progress) -> Iterator[Task]:
         """Pass tasks through, and count how many come back."""
         done = 0
         try:
@@ -937,10 +977,8 @@ class SlurmPilotExecutor:
             progress.append(done)
 
     def _live_queues(self, queues: Iterable[str] | None = None) -> set[str]:
-        """Queues `squeue` still lists a job for, pending or running.
-
-        Whatever `get_running_jobids` raises propagates.
-        """
+        """Queues `squeue` still lists a job for, pending or running."""
+        # Whatever this raises propagates, and `_stranded_tasks` catches it.
         job_ids = get_running_jobids()
 
         groups = self.groups.values()
@@ -956,28 +994,83 @@ class SlurmPilotExecutor:
             if any(job.job_id in job_ids for job in group.jobs.values())
         }
 
+    def _needed_queues(self, pending: list[Task]) -> dict[str, list[list[str]]]:
+        """The queues each pending task and its unfinished ancestors are on."""
+        # Every ancestor of every pending task, found through the handles.
+        ancestors: dict[str, Task] = {}
+        stack = [parent for task in pending for parent in task._parents]
+        while stack:
+            task = stack.pop()
+            if task.task_id not in ancestors:
+                ancestors[task.task_id] = task
+                stack.extend(task._parents)
+
+        # One request, and only when some task has a parent.
+        # An ancestor that failed or was canceled
+        # fails or cancels the task on the server,
+        # and the poll loop reports that, so only these still block.
+        unfinished: set[str] = set()
+        if ancestors:
+            ids = list(ancestors)
+            states = cast(list[TaskState], self.client.task_get_status(ids))
+            blocking = (TaskState.Waiting, TaskState.Ready, TaskState.Running)
+            unfinished = {i for i, state in zip(ids, states) if state in blocking}
+
+        needed: dict[str, list[list[str]]] = {}
+        for task in pending:
+            queues = [task.queue]
+            seen: set[str] = set()
+            stack = list(task._parents)
+            while stack:
+                parent = stack.pop()
+                if parent.task_id in seen:
+                    continue
+                seen.add(parent.task_id)
+                if parent.task_id in unfinished:
+                    queues.append(parent.queue)
+                    stack.extend(parent._parents)
+            needed[task.task_id] = queues
+        return needed
+
     def _starved_tasks(self, pending: list[Task]) -> tuple[list[Task], str]:
-        """Pending tasks with no worker ever started for them, and a message."""
+        """Pending tasks with no pilot job ever submitted for them, and a message.
+
+        A task also counts when an unfinished ancestor has none.
+        """
         # This executor's own bookkeeping, not a question to the cluster:
         # the check must work before any job can start.
         started = {name for name, group in self.groups.items() if group.jobs}
 
-        starved = [task for task in pending if not set(task.queue) & started]
+        needed = self._needed_queues(pending)
+        dead = {
+            task.task_id: [
+                q for qs in needed[task.task_id] if not set(qs) & started for q in qs
+            ]
+            for task in pending
+        }
+        starved = [task for task in pending if dead[task.task_id]]
         if not starved:
             return [], ""
 
-        queues = sorted({q for task in starved for q in task.queue})
+        queues = sorted({q for task in starved for q in dead[task.task_id]})
         return starved, (
-            f"{len(starved)} of {len(pending)} pending tasks are on queues with "
+            f"{len(starved)} of {len(pending)} pending tasks are on, "
+            f"or wait on tasks on, queues with "
             f"no worker started: {queues}. "
             f"Call scale_jobs() for a job group of that name "
             f"before waiting on them."
         )
 
     def _stranded_tasks(self, pending: list[Task]) -> tuple[list[Task], str]:
-        """Pending tasks whose queues have no pilot job left, and a message."""
+        """Pending tasks whose queues have no pilot job left, and a message.
+
+        A task also counts when an unfinished ancestor's queues have none.
+        """
+        needed = self._needed_queues(pending)
         try:
-            live = self._live_queues({q for task in pending for q in task.queue})
+            live = self._live_queues(
+                {q for queues in needed.values() for qs in queues for q in qs}
+            )
         except (subprocess.SubprocessError, OSError):
             # Unreachable `squeue` leaves liveness unknown, not dead,
             # so this gives up no task, and the next interval retries.
@@ -988,13 +1081,20 @@ class SlurmPilotExecutor:
             )
             return [], ""
 
-        stranded = [task for task in pending if not set(task.queue) & live]
+        dead = {
+            task.task_id: [
+                q for qs in needed[task.task_id] if not set(qs) & live for q in qs
+            ]
+            for task in pending
+        }
+        stranded = [task for task in pending if dead[task.task_id]]
         if not stranded:
             return [], ""
 
-        queues = sorted({q for task in stranded for q in task.queue})
+        queues = sorted({q for task in stranded for q in dead[task.task_id]})
         return stranded, (
-            f"{len(stranded)} of {len(pending)} pending tasks are on queues with "
+            f"{len(stranded)} of {len(pending)} pending tasks are on, "
+            f"or wait on tasks on, queues with "
             f"no live pilot job, so they can never run: {queues}. "
             f"Scale up a job group named after one of those queues, "
             f"or cancel the wait."
@@ -1002,6 +1102,8 @@ class SlurmPilotExecutor:
 
     def _cleanup_all_workers(self) -> None:
         """Cancel every pilot job still on the cluster. Reports, never raises."""
+        # `close()` still has to close the client and the log after a failure here,
+        # so each failure is reported and dropped.
         try:
             job_ids = get_running_jobids()
         except subprocess.CalledProcessError as cp:

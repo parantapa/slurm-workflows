@@ -1,4 +1,4 @@
-# About the pilot-job model
+# The pilot-job model
 
 [<- back to the main README](../../README.md)
 
@@ -40,18 +40,18 @@ because a worker only ever asks its own queue for work.
 | --- | --- | --- |
 | Driver (which uses a `SlurmPilotExecutor`) | login node, or a Slurm job | defines job groups, scales pilot jobs, submits tasks |
 | The `ds-service` server | login node (or elsewhere) | holds tasks on named queues |
-| Workers | compute nodes | claim tasks, run them, return results |
+| Workers | compute nodes | claim tasks, run them, return the task outputs |
 
 `scale_jobs` renders a shell script and an sbatch wrapper
 from Jinja templates and submits them.
 Each job runs your setup script inline and launches `slurm-pilot-worker`.
 That worker loops forever: claim a task from its group's queue,
-cloudpickle-load the function, run it, post the cloudpickled result back.
+cloudpickle-load the function, run it, post the cloudpickled task output back.
 
 The driver and the workers never talk to each other.
 Everything passes through the server.
-For this reason, you can kill a driver and restart it,
-and the workers never notice.
+For this reason, a worker needs only the server's address,
+never the driver's.
 The workers also do not need to know how many of them there are.
 
 ## Where the driver runs
@@ -141,7 +141,7 @@ which is what `submit` and `wait` are for.
 - [`SlurmPilotExecutor`](../reference/executor.md)
 - [Terminology](../terminology.md),
     for the word this project uses for each thing
-- [About what a run publishes](about-what-a-run-publishes.md),
+- [The trail a run leaves](the-trail-a-run-leaves.md),
     for the trail the three processes leave behind them
 - [Computing pi on a Slurm cluster](../tutorials/computing-pi.md),
     which is this model as a program

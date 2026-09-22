@@ -38,6 +38,10 @@ It needs neither botorch nor torch, on the driver or on the workers.
 | `extra_objective_kwargs` | Extra arguments passed to the objective and not varied. |
 | `priority` | The priority of every task the study submits. The highest priority runs first. `0.0` by default. |
 
+`ExploreSpaceSobolQMC` floors the point count to a power of two.
+A Sobol' sequence is balanced at that prefix length.
+100 workers that ask for 100 points evaluate 64 and leave 36 workers idle.
+
 The objective contract is the same for both classes:
 see [The objective](search-space.md#the-objective).
 What a failed evaluation does to a run is the same too:
@@ -74,10 +78,6 @@ the whole `outputs`, and `unit_points`, the points in the unit cube.
 A second call to `run()` re-evaluates the same design:
 the seed decides the draw, so there is no "next 4096 points".
 A different seed draws a different design.
-
-`ExploreSpaceSobolQMC` floors the point count to a power of two.
-A Sobol' sequence is balanced at that prefix length.
-64 workers that ask for 100 points evaluate 64 and leave the rest idle.
 
 ## The results file
 

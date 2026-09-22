@@ -71,5 +71,5 @@ The default is every 2 seconds.
 ## Related
 
 - [How to troubleshoot a failing run](troubleshoot-a-failing-run.md)
-- [About what a run publishes](../explanation/about-what-a-run-publishes.md),
+- [The trail a run leaves](../explanation/the-trail-a-run-leaves.md),
     for why a block can be empty while the run is healthy

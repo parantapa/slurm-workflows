@@ -21,6 +21,7 @@ import json
 import operator
 import threading
 from pathlib import Path
+from typing import Any, Callable, Generator, NoReturn
 
 import pytest
 import cloudpickle
@@ -52,11 +53,11 @@ def add(acc, x):
     return acc + x
 
 
-def scale(x, factor, offset=0):
+def scale(x: int, factor: int, offset: int = 0) -> int:
     return x * factor + offset
 
 
-def add_mod(acc, x, modulus=1000):
+def add_mod(acc: int, x: int, modulus: int = 1000) -> int:
     """An associative `reduce_fn` that takes an extra keyword argument."""
     return (acc + x) % modulus
 
@@ -66,13 +67,13 @@ def wrap(x):
     return [x]
 
 
-def extend_in_place(acc, x):
+def extend_in_place(acc: list[int], x: list[int]) -> list[int]:
     """A `reduce_fn` that folds into its accumulator rather than replacing it."""
     acc.extend(x)
     return acc
 
 
-def explode(x):
+def explode(x: int) -> NoReturn:
     raise ValueError(f"no good: {x}")
 
 
@@ -88,14 +89,16 @@ def count_hits(path, threshold):
 
 
 @pytest.fixture
-def mapreduce_env(monkeypatch, ds_service_address):
+def mapreduce_env(monkeypatch: pytest.MonkeyPatch, ds_service_address: str) -> None:
     """What a worker puts in the environment, for a task driven without one."""
     monkeypatch.setenv("DS_SERVER_ADDRESS", ds_service_address)
     monkeypatch.setenv("PILOT_WORKER_ID", "test-worker.42.testhost.4242")
 
 
 @pytest.fixture
-def worker_thread(ds_service_address, tmp_path):
+def worker_thread(
+    ds_service_address: str, tmp_path: Path
+) -> Generator[Callable[..., None]]:
     """Run a real worker in a thread until it completes `expect_tasks`."""
     started: list[tuple] = []
 
@@ -104,7 +107,7 @@ def worker_thread(ds_service_address, tmp_path):
         group: str = "cpu",
         name: str = "worker-0",
         actor_class_name: str = "",
-    ):
+    ) -> None:
         worker = make_worker(
             ds_service_address,
             tmp_path / name,
@@ -128,19 +131,19 @@ def worker_thread(ds_service_address, tmp_path):
 class RecordingClient:
     """Records the order of the calls a test asserts on."""
 
-    def __init__(self, inner):
+    def __init__(self, inner: DsServiceClient) -> None:
         self._inner = inner
         self.added_ids: list[str] = []
 
-    def task_add(self, task_id, **kwargs):
+    def task_add(self, task_id: str, **kwargs) -> None:
         self.added_ids.append(task_id)
         return self._inner.task_add(task_id=task_id, **kwargs)
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
 
 
-def item_ids(ds_client) -> list[str]:
+def item_ids(ds_client: DsServiceClient) -> list[str]:
     """Every mapreduce item task on the server, in id order."""
     return sorted(i for i in ds_client.task_search_id(ALL_TASK_IDS) if ".item." in i)
 

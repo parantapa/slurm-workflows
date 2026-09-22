@@ -84,6 +84,8 @@ def load_results(paths: Iterable[Path | str]) -> dict[str, SavedResults]:
     That file is a gzipped pickle of one dict keyed by study name.
     Each entry holds `points`, `values` and `outputs`.
     The lists of one study join end to end, in the order of the paths.
+    Raises `ValueError` if a file does not hold that shape,
+    or if one study's lists differ in length.
     """
     merged: dict[str, SavedResults] = {}
 
@@ -151,8 +153,9 @@ class ExploreSpaceSobolQMC:
         The studies all run together,
         so a small exploration does not wait on a large one.
         `num_exploration_points` is the count for studies that do not carry their own.
-        A study with neither raises.
-        The exploration validates every study now, not when it runs.
+        A study with neither raises `ValueError`.
+        The exploration validates every study now, not when it runs,
+        and raises `ValueError` for one that fails.
         `self.studies` holds copies with the point count and seed filled in.
         The caller's own objects stay as they are.
         """
@@ -205,8 +208,8 @@ class ExploreSpaceSobolQMC:
                 flush=True,
             )
 
-        # Sobol' is only balanced on power-of-two prefixes of the sequence.
-        # So this method truncates the count to keep the design low-discrepancy.
+        # A power-of-two count:
+        # a Sobol' sequence is only balanced on a power-of-two prefix.
         return replace(
             study,
             space=dict(study.space),
@@ -248,6 +251,9 @@ class ExploreSpaceSobolQMC:
         Blocks until every point of every study is back.
         A second call re-evaluates the same designs.
         The exploration names each point `<study>-explore-<index>` on the server.
+        It prints each study's best point when done.
+        If any evaluation fails,
+        it records every result that came back, then raises `RuntimeError`.
         """
         submitted: list[tuple[ExplorationStudy, dict[str, Any], Task]] = []
         for study in self.studies:
@@ -313,6 +319,8 @@ class ExploreSpaceSobolQMC:
             try:
                 self._record(study, params, submission)
             except RuntimeError:
+                # A failed evaluation has nothing to record,
+                # and `run` re-raises the batch failure after this.
                 continue
 
     def _record(
@@ -351,13 +359,19 @@ class ExploreSpaceSobolQMC:
         return min(range(len(values)), key=values.__getitem__)
 
     def best_point(self, name: str) -> tuple[dict[str, Any], float]:
-        """A study's best point (params, objective value) so far."""
+        """A study's best point (params, objective value) so far.
+
+        Raises `RuntimeError` if `run` has recorded nothing for the study yet.
+        """
         best = self._best_index(name)
         result = self.results[name]
         return dict(result.points[best]), result.values[best]
 
     def best_output(self, name: str) -> dict[str, Any]:
-        """The objective's whole result at a study's best point so far."""
+        """The objective's whole result at a study's best point so far.
+
+        Raises `RuntimeError` if `run` has recorded nothing for the study yet.
+        """
         return dict(self.results[name].outputs[self._best_index(name)])
 
     def save(self, path: Path | str) -> None:

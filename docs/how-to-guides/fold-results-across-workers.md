@@ -2,16 +2,16 @@
 
 [<- back to the main README](../../README.md)
 
-Some work produces one number, not a result per task.
+Some work produces one number, not one task output per item.
 Counting the rows that match a filter, across ten thousand files, is one.
 Totaling the events a whole set of runs recorded is another.
 One task per item does the job, and it costs twice.
-The driver holds every intermediate result,
+The driver holds every task output,
 and each item pays a task's overhead.
 
 `mapreduce` does the summing on the workers instead.
 It hands out the items and folds them on the worker that mapped them.
-Each task brings back one partial result.
+Each map task brings back one partial result.
 
 ## Write a function that maps one item
 
@@ -50,17 +50,22 @@ print(hits)
 which is how `threshold` gets there.
 `reduce_extra_args` and `reduce_extra_kwargs` do the same for `reduce_fn`.
 
-The call blocks until every task is back,
+The call blocks until every map task is back,
 so scale the job group up before you call it.
-Unlike `submit`, it cannot wait for workers that do not exist yet,
-and raises `RuntimeError` instead.
+Unlike `submit`, it checks for pilot jobs first.
+If no job group named in `queue` has a pilot job from `scale_jobs`,
+it raises `RuntimeError`.
+A pilot job that is still pending is enough.
 
 ## Pick a `reduce_fn` and an `init` that go together
 
-Each task folds the items it claimed,
-and the call folds the partial results those tasks return.
+Each map task folds the items it claimed,
+and the call folds the partial results those map tasks return.
 Both folds use the same function,
 so **`reduce_fn` must be associative**, and **`init` must be its identity**.
+The partial results come back in the order the map tasks finish.
+So `reduce_fn` must also be commutative
+to give the same answer on every run.
 For a count or a total, that is `operator.add` and `0`.
 
 To gather values rather than total them,
@@ -69,6 +74,9 @@ map each item to a one-item list and concatenate:
 ```python
 map_fn=lambda path: [summarize(path)], reduce_fn=add, init=[]
 ```
+
+Concatenation is not commutative.
+The list holds every value, but in no fixed order.
 
 Appending instead of concatenating looks equivalent and is not.
 `acc + [partial]` puts a whole partial result inside the answer.
@@ -87,25 +95,25 @@ map_fn="predict", reduce_fn=add, init=0
 ```
 
 The model loads once per worker, whatever the number of items,
-because each task resolves the name against the actor
+because each map task resolves the name against the actor
 its worker built at startup.
 For the rules, and for what a job group without an actor raises, see
 [Mapping with an actor's method](../reference/mapreduce.md#mapping-with-an-actors-method).
 
 ## Choose the two numbers separately
 
-Set `num_tasks` to how many tasks you want draining the queue,
+Set `num_tasks` to how many map tasks you want draining the item queue,
 not to the number of items.
 Size it by the pool, as you size any batch of tasks.
 A few times the number of workers is a reasonable start.
-A task that draws slow items then does not hold up the end of the run.
+A map task that claims slow items then does not hold up the end of the run.
 
 Nothing divides the items up in advance,
-so each task takes the next item whenever it is free.
+so each map task claims the next item whenever it is free.
 
 ## Chunk the items when each one is small
 
-Every item becomes a task on the server,
+Every item becomes an item task on the server,
 which costs one round trip to put there.
 Work that takes less time than that round trip
 belongs in chunks:

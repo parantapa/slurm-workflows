@@ -62,10 +62,6 @@ Each kind of prose has one job:
 | This file | Why the code is the way it is: the invariants, the trade-offs, the alternatives that were tried | |
 
 A private helper's docstring is one line that says what it does.
-Its reasoning belongs under [Invariants](#invariants),
-where one reader looking for the design finds all of it.
-That reasoning does not belong in a comment
-that the next person to touch that function has to rediscover.
 
 Where a design decision sits in both places,
 the next editor changes only one of them.
@@ -101,19 +97,26 @@ See `.cpush.json5` for the `rivanna` remote.
 
 ## Where things live
 
+Paths are relative to `src/slurm_workflows/`.
+
 | Module | Holds |
 | --- | --- |
-| `slurm_pilot_executor.py` | `SlurmPilotExecutor`, which the driver uses from a login node or from inside a Slurm job, and `JobGroup` |
-| `slurm_pilot_worker.py` | `PilotWorker` (runs inside Slurm jobs) and the `slurm-pilot-worker` CLI |
-| `slurm_utils.py` | `sbatch` / `squeue` / `scancel` wrappers, `get_clean_environ()` |
-| `optimize_space_botorch.py` | `OptimizationStudy` and `OptimizeSpaceBotorch`, the botorch searches |
-| `search_space.py` | `SearchSpace`, the `ParameterRange` types, and the unit cube mapping |
-| `explore_space.py` | `ExplorationStudy` and `ExploreSpaceSobolQMC`, Sobol' explorations with no model behind them |
+| `__init__.py` | The public API, the one place users import from. Loads the botorch module lazily. |
+| `slurm_pilot_executor.py` | The driver side, entry point `SlurmPilotExecutor`: job groups, submitting tasks, waiting on them, and `mapreduce`. Depends on `slurm_utils` and `templates/`. |
+| `slurm_pilot_worker.py` | The worker side, entry point the `slurm-pilot-worker` command that generated scripts run on compute nodes. Starts the monitors. |
+| `slurm_utils.py` | Calls to the Slurm commands, and the environment `sbatch` runs in |
+| `search_space.py` | Search spaces and the mapping to and from the unit cube. Imports no torch. |
+| `explore_space.py` | Sobol' explorations with no model behind them, and the results file format the optimizer also reads |
+| `optimize_space_botorch.py` | The botorch searches. Optional, behind the `botorch` extra. |
 | `monitors.py` | Host and cgroup sampling, and the threads that publish it |
-| `swtop.py` | `swtop` itself: `Collector`, the row builders, the text frames and the CLI |
+| `swtop.py` | `swtop`, entry point the `swtop` command: reading a run from the server, and the text display |
 | `swtop_tui.py` | The Textual app `swtop` runs in |
-| `templates/` | Jinja templates and their loader |
-| `utils.py` | `RemoteExecutionError`, id and logging helpers, `floor_power_of_two` and `index_width`, the progress-line formatters |
+| `templates/` | Jinja templates for the generated scripts, and their loader |
+| `utils.py` | Helpers shared across modules: the remote error record, ids, the check on an objective's result, and formatting |
+
+`tests/` holds the suite.
+[`how-to-run-tests.md`](how-to-run-tests.md#layout) maps its files.
+`examples/` holds the scripts the tutorials walk through.
 
 The driver and the workers never talk to each other directly.
 They talk only through the `ds-service` server,
@@ -125,9 +128,10 @@ for the reason given under Monitoring.
 `SlurmPilotExecutor` always takes the address as its `server_address` argument.
 
 The server and the client carry the same version.
-`pyproject.toml` records the client floor,
-and the server binary has to match it.
-Install the latest `ds-service` release.
+`pyproject.toml` records the client floor, `>=6.0.0`,
+and not an exact version.
+Install the `ds-service` release
+with the same version as the installed client.
 
 ## Tools and libraries
 
@@ -136,7 +140,7 @@ This table says what each one is here for.
 
 | Dependency | Used by | For |
 | --- | --- | --- |
-| `ds-service-client` | executor, worker, `swtop` | The `ds-service` server's client and its `DsServiceServer` launcher. The one channel between the driver and the workers. It also provides `task_search_id`, which is how `swtop` lists the tasks on a server. |
+| `ds-service-client` | executor, worker, `monitors`, `swtop` | The `ds-service` server's client and its `DsServiceServer` launcher. The one channel between the driver and the workers. It also provides `task_search_id`, which is how `swtop` lists the tasks on a server. |
 | `cloudpickle` | `slurm_pilot_executor`, `slurm_pilot_worker` | Serializing functions, arguments and return values, so a locally defined function can cross to a compute node. |
 | `jinja2` | `templates/` | Rendering the worker shell script and its sbatch wrapper. |
 | `json5` | `templates/` | Parsing the `{#- name: ... -#}` headers of the multi-template files. |
@@ -146,7 +150,7 @@ This table says what each one is here for.
 | `psutil` | `monitors` | Host and process sampling. |
 | `platformdirs` | `slurm_pilot_executor` | Locating the per-user cache dir a run's `work_dir` defaults into. |
 | `typeguard` (>=3) | `slurm_pilot_executor` | `@typechecked` on the public surface. |
-| `numpy` | (transitive use) | Arrays behind the search spaces and results. |
+| `numpy` | none in `src/` | Declared in `pyproject.toml`, but no module imports it. The Sobol' design `scipy` returns is a numpy array, and `explore_space` turns each row into a list. |
 | `botorch` | `optimize_space_botorch` | The Gaussian process fit and the acquisition optimization, and `torch` underneath it. **Optional**, behind the `botorch` extra, and imported lazily so `import slurm_workflows` works without it. |
 
 Development tooling, behind the `dev` and `test` extras:
@@ -160,8 +164,7 @@ Development tooling, behind the `dev` and `test` extras:
 | `setuptools_scm` | build | Deriving the version from git tags, with a `1.0.0-dev` fallback. |
 | `cpush` | external | Deploying to clusters. See `.cpush.json5`. |
 
-There is no CI, and no linter beyond `pyright`.
-The three commands under [Commands](#commands) are the whole gate.
+There is no linter beyond `pyright`.
 
 ## Invariants
 
@@ -223,12 +226,6 @@ For this reason, `RAISE_AFTER_COMPLETED` collapses to `RAISE_ON_FIRST_ERROR` the
 and does not go through `as_completed`.
 A route through `as_completed` rewrites the policy.
 
-**The poll loop must name every `TaskState` explicitly.**
-Its `else` branch means "keep waiting".
-A state that falls through it therefore waits forever,
-and the loop never reports that the task cannot finish.
-ds-service later added `Canceled`, and that new state exposed this.
-
 **A worker marks a task that raised as `Failed`.**
 It calls `task_done` with `failed=True`,
 so the server fails every task that waits on it.
@@ -242,12 +239,6 @@ The worker passes its own `worker_id`,
 and the server refuses the call from any other worker.
 The id given to `task_done`
 has to be the one that claimed the task in `task_get`.
-
-**An empty queue is `NoTaskAvailable`, not `TimeoutError`.**
-`task_get` answers immediately when no queue has work,
-and the worker sleeps and retries on that alone.
-A `TimeoutError` there means an unreachable server
-and must stay distinguishable.
 
 **One executor per `ds-service` server.**
 A server's queues, its `pilot_job_info:`, `worker_info:`,
@@ -263,14 +254,13 @@ refuse a queue served by jobs this executor did not start.
 Task ids and worker ids are still executor-prefixed,
 because a *cluster* holds many runs even when a server holds one.
 
-**`submit` defaults `priority` to `0.0`.**
+**`submit` defaults `task_priority` to `0.0`.**
 ds-service dispatches the highest priority first,
 and tasks of equal priority on one queue oldest first.
 The default therefore keeps submission order.
 Item tasks and map tasks of `mapreduce` also use `0.0`.
 A priority taken from a rising clock serves the newest task first
 and leaves the oldest until last.
-But a stale `Task` from a restarted driver still produces that case.
 
 **The payload decides how the worker resolves a task's function.**
 `main` looks a `str` up on the actor, and calls a callable as it is.
@@ -343,12 +333,6 @@ Nothing deletes the key:
 the map is in memory and dies with the server,
 which is the only cleanup there is.
 
-**Anything `__init__` starts, a failed `__init__` has to stop.**
-The monitors and the client are live before the worker builds the actor.
-An actor constructor that raises means nothing ever calls `close()`.
-The worker therefore stops its own monitors and closes its own channel
-before it re-raises.
-
 **Task names are UTF-8 in the map, not pickles.**
 `set_task_name` writes `task_name:<task_id>` as encoded text,
 unlike the actor arguments beside it.
@@ -417,17 +401,6 @@ and one that calls the task function directly sets them itself.
 A `with` block closes the client.
 A worker runs many tasks over the life of its pilot job.
 A leaked gRPC channel per task therefore accumulates for all of it.
-
-**A `TimeoutError` in a map task is not retried.**
-`task_get` is not idempotent.
-A deadline can fire after the server recorded the claim.
-A retry then skips that item.
-The item task stays `Running`, and the server never dispatches it again.
-The map task then returns a partial result that is silently missing an item.
-
-The error propagates instead, which is loud:
-the worker turns it into a `RemoteExecutionError`,
-and the wait raises.
 
 **A map task marks its item task done after it folds the value in, not before,
 and it records an empty output.**
@@ -512,12 +485,6 @@ and `tests/test_explore_space.py` runs without them.
 `rng=` is the seed argument (`seed=` is the older spelling),
 which is what the `scipy>=1.15` floor in `pyproject.toml` is for.
 
-**`_resolve` floors the count to a power of two, and `design` draws with `random_base2`.**
-A Sobol' sequence is only balanced on a power-of-two prefix,
-and scipy warns whenever a caller asks for anything else.
-Since `_resolve` floors the count anyway,
-a request in scipy's own terms is the same draw without the warning.
-
 **`run` submits every task before it waits for any of them.**
 This order is what "simultaneously" means here:
 one `submit` loop over every study's design, then a single `wait`.
@@ -580,7 +547,7 @@ each against its own `patience`, floor and ceiling.
   Otherwise the fit tells the GP about a location the objective never ran at.
 - **The fit runs on a worker, not on the driver.**
   `_fit_and_propose` submits `fit_and_propose` to `optimizer_queue`
-  as one task per round, the fit and the acquisition together.
+  as one task per study per round, the fit and the acquisition together.
   A fitted GP shipped back to the driver costs more than the fit did.
   Keep it a module-level function that takes and returns plain Python.
   Then cloudpickle sends it by reference,
@@ -594,7 +561,7 @@ each against its own `patience`, floor and ceiling.
   A value read inside `fit_and_propose` is the *worker's*,
   and it ignores how the caller configured the search.
   Tests assert them by constructing with them
-  (`make_task(acqf_timeout_s=...)`) or against `opt.studies[i].<knob>`,
+  (`make_opt(..., acqf_timeout_s=...)`) or against `opt.studies[i].<knob>`,
   never against a literal.
 - **The stall counter runs from round 1.
   `min_search_rounds` gates the stop, not the counting.**
@@ -608,11 +575,6 @@ each against its own `patience`, floor and ceiling.
   every point measured so far, rather than a `best_f` scalar.
   That argument has to be the `train_x` from this round's fit,
   not a stale copy.
-- **Ask for the batch jointly, never `sequential=True`.**
-  The sequential path is the usual advice for large batches,
-  and it is wrong here.
-  The greedy path pays the restart cost
-  once per point instead of once per batch.
 - **Ranges clamp in `unstandardize`**,
   because `optimize_acqf` can return a point slightly outside the bounds.
 - **Never import this module eagerly from the package `__init__.py`.**
@@ -630,14 +592,6 @@ each against its own `patience`, floor and ceiling.
   That works because `LocalExecutor` runs the submitted task inline,
   in the test's own process.
   The patch reaches the fit only for as long as that stays true.
-- **`test_search_moves_toward_the_minimum` asserts the *median* search point**,
-  not the max and not `best_point()`.
-  Neither of those works.
-  qLogNEI explores away from the incumbent,
-  so the max hits 1.0 on correct runs.
-  Exploration alone lands near the minimum,
-  so `best_point()` passes even with the sign flipped.
-  [`how-to-run-tests.md`](how-to-run-tests.md) carries the measured margins.
 
 ### Monitoring (`monitors.py`, `swtop.py`)
 
@@ -673,12 +627,6 @@ for the keys the workers and the monitors publish.
 `swtop` cannot list a worker that did not publish its identity.
 That limit belongs to the server, and this library does not work around it.
 
-**`swtop` reads only the tail of a series.**
-`time_series_get` with no bounds returns every point ever appended,
-which over a day-long run is most of the memory the server holds.
-`swtop` asks for the last minute,
-and calls a subject with nothing there stale.
-
 **`Collector` reads an identity once.**
 `Collector` caches every worker's fields and every task's name,
 because nothing ever changes either after the first write.
@@ -704,15 +652,6 @@ and a few hundred workers do not fit in a two-second interval.
 `Collector` issues each set of reads with `asyncio.gather`,
 so a poll costs about one round trip however wide the pool is.
 The cache means `Collector` reads only what is new.
-
-**The UI polls in a Textual worker, never inline.**
-An awaited poll cannot block the interface the way a blocking one can.
-Such a poll still must not run inside a message handler or a timer tick.
-`run_worker(..., exclusive=True)` gives the poll a Textual worker of its own
-and cancels the poll already in flight, RPCs and all.
-A slow server therefore cannot pile up a poll per interval.
-The UI applies the result on the event loop like any other update,
-with no `call_from_thread` in the way.
 
 **`sync_table` updates a table in place, and never rebuilds it.**
 `sync_table` adds, updates and removes rows by key,
@@ -768,8 +707,10 @@ The driver runs inside a Slurm job as well as on a login node.
 `sbatch` reads several `SLURM_*` variables as defaults for the job it submits.
 If those variables reach `sbatch`,
 every pilot job takes the driver's own node count and Slurm task count.
-`get_clean_environ` runs on every submission,
+Every submission passes the `get_clean_environ` result to `sbatch`,
 because a login node carries none of those variables anyway.
+`get_clean_environ` builds that environment once per process (`@cache`),
+so a later change to `os.environ` does not reach `sbatch`.
 
 ## Conventions
 
@@ -835,5 +776,3 @@ because a login node carries none of those variables anyway.
   rather than coin a second word for something the tables already name.
 - Cleanup is per-class.
   There is no shared base class for it.
-- `setuptools_scm` derives the version from git tags,
-  with a fallback of `1.0.0-dev`.

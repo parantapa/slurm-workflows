@@ -7,6 +7,8 @@ conftest puts this directory on `sys.path`.
 
 from __future__ import annotations
 
+from typing import NoReturn
+
 # Instances created in this process, so tests can assert on per-worker state.
 INSTANCES: list["CounterActor"] = []
 
@@ -27,10 +29,10 @@ class CounterActor:
         self.calls += n
         return self.calls
 
-    def echo(self, value):
+    def echo(self, value: object) -> object:
         return value
 
-    def boom(self):
+    def boom(self) -> NoReturn:
         raise ValueError("actor failure")
 
     def close(self) -> None:
@@ -40,7 +42,7 @@ class CounterActor:
 class ConfiguredActor:
     """Keeps the constructor arguments the caller passes."""
 
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, *args: object, **kwargs: object) -> None:
         self.args = args
         self.kwargs = kwargs
 

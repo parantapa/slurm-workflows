@@ -1,6 +1,6 @@
 """HPC workflow helpers for Slurm clusters.
 
-Import every public name of this package from here.
+Every public name of this package except `NoOutput` is importable from here.
 `OptimizeSpaceBotorch` and `OptimizationStudy` resolve on first use,
 so `import slurm_workflows` works without botorch installed.
 """

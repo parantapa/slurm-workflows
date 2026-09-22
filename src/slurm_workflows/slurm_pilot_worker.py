@@ -27,11 +27,13 @@ from .monitors import (
     start_slurm_job_monitor,
 )
 
+# How long a worker sleeps before it asks again,
+# after an empty queue or a failed request.
 NEXT_TASK_RETRY_TIME_S: float = 0.1
 
 # One JSON key per worker, keyed on its worker id.
 # `swtop` reads it.
-# `docs/reference/executor.md` lists the fields.
+# `docs/reference/what-a-run-publishes.md` lists the fields.
 WORKER_INFO_PREFIX = "worker_info:"
 
 # The actor of the worker running in this process, or None.
@@ -80,8 +82,6 @@ class PilotWorker:
         Puts this worker's identity in the environment first,
         so the actor and every task it runs can read it.
         Publishes the worker's identity before it builds the actor.
-        As a result, a worker that dies in the constructor
-        already recorded where it ran.
         Whatever the actor's constructor raises propagates.
         Before that, this worker closes its own monitors and client.
         """
@@ -90,8 +90,8 @@ class PilotWorker:
         self.server_address = server_address
         self.work_dir = work_dir
 
-        # `<worker-name>.<job>.<host>.<pid>`.
-        # The name carries the group.
+        # `<job-name>.<job-id>.<hostname>.<pid>`.
+        # The job name carries the job group.
         self.worker_id = "%s.%s.%s.%s" % (name, slurm_job_id, hostname, pid)
         self.logger = logging.getLogger("worker_process")
 
@@ -112,7 +112,8 @@ class PilotWorker:
         try:
             self.actor_instance = self._build_actor(actor_class_name)
         except Exception:
-            # Nothing calls `close()` on a worker whose constructor raised.
+            # Nothing calls `close()` on a worker whose constructor raised,
+            # so it stops what it started before it re-raises.
             self._stop_monitors()
             self.client.close()
             raise
@@ -180,13 +181,12 @@ class PilotWorker:
             )
 
     def _get_actor_ctor_arg(self, key: str, default: Any) -> Any:
-        """Read one cloudpickled constructor argument from the map.
-
-        A missing key means the caller passed none.
-        """
+        """Read one cloudpickled constructor argument from the map."""
         try:
             value = self.client.map_get(key)
         except KeyError:
+            # A missing key means the caller passed none.
+            # See the developer notes.
             return default
         return cloudpickle.loads(value)
 
@@ -200,12 +200,10 @@ class PilotWorker:
         return getattr(self.actor_instance, name)
 
     def _stop_monitors(self) -> None:
-        """Stop whatever monitoring this worker started.
-
-        Idempotent, and safe on a half-built worker.
-        """
+        """Stop whatever monitoring this worker still runs."""
         for monitor in self.monitors:
             monitor.stop()
+        # Cleared, so a second call does nothing.
         self.monitors.clear()
 
     def close(self) -> None:
@@ -320,6 +318,7 @@ def slurm_pilot_worker(
     python_paths_json: str,
 ) -> None:
     """Start a worker."""
+    # Outside a Slurm job, the id is -1.
     slurm_job_id = int(os.environ.get("SLURM_JOB_ID", -1))
     hostname = socket.gethostname()
     pid = os.getpid()

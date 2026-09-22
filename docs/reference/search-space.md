@@ -38,7 +38,7 @@ Both classes record where the objective actually ran, after rounding,
 not the continuous candidate.
 
 What that rounding costs a search on a mostly-discrete space is in
-[About batch Bayesian optimization](../explanation/about-batch-bayesian-optimization.md).
+[Batch Bayesian optimization](../explanation/batch-bayesian-optimization.md).
 
 ## The objective
 
@@ -59,8 +59,8 @@ They record every other entry, which is where a runtime,
 a checkpoint path or an unoptimized metric goes.
 
 Both classes raise on a bare float, on a mapping without the key,
-or on a value that is not a finite float.
-They never coerce one.
+on a value that `float()` cannot convert,
+or on a value that is not finite.
 That covers `NaN` and `inf`,
 because either one silently poisons a GP fit.
 
@@ -75,7 +75,7 @@ Both classes block until every pending point comes back.
 A worker that raises does not raise on the driver,
 so both classes wait with
 [`RaiseOnError.RAISE_AFTER_COMPLETED`](executor.md#raiseonerror).
-They turn what came back into a `RuntimeError` that names the tasks that failed,
+They turn what came back into a `RuntimeError` that names the studies that failed,
 rather than feed a `RemoteExecutionError` into a model.
 
 One bad evaluation therefore does not hide the rest of its batch.

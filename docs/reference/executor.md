@@ -63,9 +63,9 @@ Generated scripts and all logs land there.
 | --- | --- |
 | `define_job_group(name, sbatch_args, ...)` | Register a job group. Submits nothing. The job group name is also the queue name. A second identical definition does nothing. A definition that differs raises `AssertionError`. |
 | `scale_jobs(name, count)` | Submit or cancel pilot jobs so the job group has `count` jobs. |
-| `submit(queue, fn, *args, task_parents=None, task_priority=0.0, **kwargs) -> Task` | Enqueue one task and return a `Task` straight away. `queue` is a job group name or a list of them. `fn` is a callable, or a method name (`str`) for actor workers. `task_parents` is a list of the `Task`s this one waits on. `task_priority` orders the queue. |
+| `submit(queue, fn, *args, task_parents=None, task_priority=0.0, **kwargs) -> Task` | Enqueue one task and return a `Task` straight away. `queue` is a job group name or a list of them. `fn` is a callable, or a method name (`str`) for actor workers. `task_parents` is a list of the `Task`s this one waits on. `task_priority` orders the queue. See [`submit` options](#submit-options). |
 | [`mapreduce(desc, queue, ...)`](mapreduce.md) | Map an iterable across the pool and fold the results into one value. Blocks. `init` must be the identity of `reduce_fn`. |
-| `as_completed(tasks, desc, unit="task", raise_on_error=...)` | Yield tasks as their results arrive. `desc` and `unit` label the progress `swtop` draws. Raises `RuntimeError` rather than blocking forever on a task that can never finish. |
+| `as_completed(tasks, desc, unit="task", raise_on_error=...)` | Yield tasks as their results arrive. `desc` and `unit` label the progress `swtop` draws. Raises `RuntimeError` rather than blocking forever on a task whose queues have no worker. |
 | `wait(tasks, desc, unit="task", raise_on_error=...)` | Same, but discards the iterator. Blocks until all are done. |
 | `set_task_name(task, name)` | Name a task, on the server as well as locally. |
 | `stop()` | Cancel all pilot jobs, keep the executor usable. |
@@ -98,8 +98,6 @@ with SlurmPilotExecutor("my-run", address) as executor:
 results = [task.output for task in tasks]
 ```
 
-The executor passes `sbatch_args` straight through to `sbatch`,
-so any Slurm option works.
 The executor accepts tasks before any worker exists:
 they wait on the queue until a worker claims them.
 
@@ -115,6 +113,9 @@ they wait on the queue until a worker claims them.
 | `actor_class_kwargs` | `None` | Keyword arguments for that class's constructor. Only valid with `actor_class_name`. |
 | `python_paths` | `None` | Extra paths prepended to the workers' `sys.path`. |
 | `add_cwd_to_python_path` | `True` | Also add the driver's cwd. |
+
+The executor passes `sbatch_args` straight through to `sbatch`,
+so any Slurm option works.
 
 The executor cloudpickles the actor arguments
 and puts them in the `ds-service` map.
@@ -149,6 +150,30 @@ gives 8 workers from a single `scale_jobs(..., 1)` call.
 that owns the pilot job's whole allocation,
 which is what a multi-node (MPI or UPC++) task needs.
 
+## `submit` options
+
+| Argument | Default | Meaning |
+| --- | --- | --- |
+| `task_parents` | `None` | The `Task`s this one waits on. |
+| `task_priority` | `0.0` | Orders the queue. The highest value runs first. |
+
+`task_priority` sets the task's `priority`, and `priority` orders the queue.
+`ds-service` dispatches the highest value first.
+Tasks of equal priority on one queue are served **oldest first**.
+The default is `0.0`,
+so tasks submitted without a priority run in submission order.
+
+`task_parents` makes a task wait for other tasks.
+The server dispatches the task only after every parent finishes.
+If a parent fails, the task fails too.
+If a parent is canceled, the task is canceled.
+Each parent must already be on the server,
+so the parents are submitted first.
+If the server does not know a parent, `submit` raises `KeyError`.
+
+`fn` cannot take keyword arguments named `task_parents` or `task_priority`,
+because `submit` keeps them.
+
 ## Errors that end a wait
 
 A task whose queues have no worker can never finish.
@@ -173,6 +198,12 @@ The first of these checks is a minute in, not immediate.
 A `squeue` they cannot reach leaves liveness unknown rather than dead.
 They log it, retry it, and do not end the wait.
 
+A task that waits on a parent is also checked on the queues
+of every parent, grandparent and further ancestor
+that is not finished yet.
+A task whose ancestor can never run therefore raises the same error,
+whether or not the wait includes that ancestor.
+
 Both checks only know about workers **this executor** started.
 They refuse an executor that submits to a queue
 where another process launched the pilot jobs.
@@ -186,9 +217,9 @@ and the executor reads both straight off the server:
   or one left over from a server that restarted in the meantime.
 - **the task was canceled**:
   `RuntimeError: Task ... was canceled on the task queue server`.
-  Nothing in this library cancels a task,
-  so this means somebody called `task_cancel` through the `ds-service`
-  client directly.
+  Nothing in this library cancels a task.
+  Somebody called `task_cancel` through the `ds-service` client directly,
+  on this task or on a task above it in its chain of parents.
   `ds-service` never dispatches a canceled task again.
 
 For what to do about each, see
@@ -201,13 +232,19 @@ For what to do about each, see
 `output` is a sentinel until the task completes.
 After that it holds the return value,
 or a `RemoteExecutionError(error, error_id)` if the worker raised.
+`wait` and `as_completed` are what fill it in.
 If a parent task failed, the task does not run,
 and `output` is a `RemoteExecutionError` with an empty `error_id`.
 Its `error` is `Dependency failed (task_id=<id>)`,
 and `<id>` is the task that failed.
-That class lives in `slurm_workflows.utils`,
+`RemoteExecutionError` lives in `slurm_workflows.utils`,
 and imports from the package root like everything else.
-`wait` and `as_completed` are what fill it in.
+
+`priority` and `parent_task_ids` record what `submit` was given
+as `task_priority` and `task_parents`:
+see [`submit` options](#submit-options).
+A change to `priority` on the `Task` has no effect,
+because the server orders by the value that `submit` sent with the task.
 
 `task_name` is a read-only property, and it is `None`
 until `executor.set_task_name(task, name)` sets it.
@@ -221,26 +258,6 @@ Whoever looks at the queue reads it,
 which in practice means [`swtop`](swtop.md).
 `ExploreSpaceSobolQMC` and `OptimizeSpaceBotorch` call it themselves
 for every task they submit.
-
-`task_priority` sets `priority`, and `priority` orders the queue.
-`ds-service` dispatches the highest value first.
-Tasks of equal priority on one queue are served **oldest first**.
-The default is `0.0`,
-so tasks submitted without a priority run in submission order.
-The `Task` records the priority for inspection.
-A change there has no effect,
-because `submit` sent the value the server orders by
-when it enqueued the task.
-
-`task_parents` makes a task wait for other tasks.
-The server dispatches the task only after every parent finishes.
-If a parent fails, the task fails too, and if a parent is canceled,
-the task is canceled.
-Each parent must already be on the server,
-so you submit the parents first.
-If the server does not know a parent, `submit` raises `KeyError`.
-`fn` cannot take keyword arguments named `task_parents` or `task_priority`,
-because `submit` keeps them.
 
 ## `RaiseOnError`
 
@@ -269,6 +286,8 @@ The value decides only whether an exception follows.
 The warning carries the task id
 and, for a worker that raised,
 the `error_id` that appears beside the traceback in that worker's log.
+The warning for tasks whose queues have no pilot job
+counts those tasks and names their queues instead.
 
 With `RAISE_NEVER` the caller reads the outcome off the tasks:
 

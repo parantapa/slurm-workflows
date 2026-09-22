@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from ds_service_client import DsServiceClient
 from slurm_workflows.slurm_pilot_worker import PilotWorker
@@ -29,14 +29,14 @@ class _StoppingClient:
 
     def task_done(
         self, task_id: str, worker_id: str, output: bytes, failed: bool = False
-    ):
+    ) -> None:
         result = self._inner.task_done(task_id, worker_id, output, failed=failed)
         self.completed += 1
         if self.completed >= self._limit:
             raise StopWorker
         return result
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
 
 
@@ -59,7 +59,7 @@ class _IdlingClient:
             raise StopWorker
         return self._inner.task_get(worker_id, queue)
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
 
 
@@ -96,10 +96,10 @@ def make_worker(
 def run_worker(worker: PilotWorker, expect_tasks: int) -> None:
     """Run the worker's real main loop until it completes `expect_tasks` tasks.
 
-    The caller must queue the tasks first:
+    The tasks must arrive, before the call or from another thread:
     `task_get` on an empty queue raises `NoTaskAvailable` at once,
     which the worker answers with a sleep and another request.
-    For this reason, a worker that starts with nothing to do
+    For this reason, a worker that never gets `expect_tasks` tasks
     spins until the hang guard fires.
     """
     # `_StoppingClient` forwards everything it does not override,
@@ -126,4 +126,5 @@ def poll_worker(worker: PilotWorker, polls: int) -> int:
         worker.main()
     except StopWorker:
         pass
+    # The last call raised `StopWorker` instead of fetching.
     return client.polls - 1

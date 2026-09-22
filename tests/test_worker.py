@@ -14,6 +14,7 @@ import os
 import sys
 import threading
 from pathlib import Path
+from typing import Generator, NoReturn
 
 import pytest
 import click
@@ -29,17 +30,17 @@ from test_monitors import wait_for
 
 
 @pytest.fixture(autouse=True)
-def reset_actors():
+def reset_actors() -> Generator[None]:
     support_actor.reset()
     yield
     support_actor.reset()
 
 
-def square(x):
+def square(x: int) -> int:
     return x * x
 
 
-def boom():
+def boom() -> NoReturn:
     raise ValueError("task blew up")
 
 
@@ -632,20 +633,20 @@ class TestCli:
         seen = {}
 
         class FakeWorker:
-            def __init__(self, **kwargs):
+            def __init__(self, **kwargs: object) -> None:
                 seen["kwargs"] = kwargs
 
-            def main(self):
+            def main(self) -> None:
                 seen["sys_path_head"] = list(sys.path[:2])
                 seen["streams"] = (sys.stdout, sys.stderr)
 
-            def close(self):
+            def close(self) -> None:
                 seen["closed"] = True
 
         monkeypatch.setattr(worker_mod, "PilotWorker", FakeWorker)
         return seen
 
-    def invoke(self, tmp_path: Path, **overrides) -> int:
+    def invoke(self, tmp_path: Path, **overrides: str) -> int:
         """Run the CLI and return its exit code.
 
         This helper invokes the CLI directly, not through click's CliRunner.
@@ -685,12 +686,7 @@ class TestCli:
         assert "/extra/path" in captured["sys_path_head"]
 
     def test_leaves_the_process_streams_alone(self, captured, tmp_path):
-        """Slurm writes the worker's output file itself, via `--output`.
-
-        `logging.basicConfig` leaves the streams on the handles
-        the process inherited.
-        A redirect here therefore leaves the file Slurm writes empty.
-        """
+        """A redirect empties the file Slurm writes. See the developer notes."""
         before = (sys.stdout, sys.stderr)
 
         self.invoke(tmp_path)

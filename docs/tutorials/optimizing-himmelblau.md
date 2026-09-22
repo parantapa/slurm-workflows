@@ -15,7 +15,7 @@ under the `bii_nssac` account.
 The complete program can be found at
 [`examples/example_optimize_himmelblau.py`](../../examples/example_optimize_himmelblau.py).
 
-We read [Computing pi on a Slurm cluster](computing-pi.md)
+Work through [Computing pi on a Slurm cluster](computing-pi.md)
 and [Computing pi with a Sobol' QMC exploration](computing-pi-qmc.md)
 first.
 They cover what this one reuses without further comment.
@@ -63,7 +63,7 @@ Each round has three steps:
 3. Evaluate that batch across the pool.
 
 The next round fits the model again.
-[About batch Bayesian optimization](../explanation/about-batch-bayesian-optimization.md)
+[Batch Bayesian optimization](../explanation/batch-bayesian-optimization.md)
 says why a search has this shape.
 
 ## The whole program
@@ -256,7 +256,7 @@ But `EVAL_SBATCH_ARGS` asks for 40 Slurm tasks per node.
 
 The two kinds of work want different nodes.
 That is why there are two job groups and two queue arguments.
-[About batch Bayesian optimization](../explanation/about-batch-bayesian-optimization.md)
+[Batch Bayesian optimization](../explanation/batch-bayesian-optimization.md)
 gives the reason.
 
 The two job groups also have their own setup scripts.
@@ -265,8 +265,8 @@ So `OPTIMIZER_SETUP_SCRIPT` must activate an environment that has it.
 The example aliases it to `EVAL_SETUP_SCRIPT`.
 Both are empty there,
 because on Rivanna a compute node imports botorch with no setup.
-On a cluster where that is not true,
-`OPTIMIZER_SETUP_SCRIPT` is where the environment gets activated.
+[Where the work runs](../reference/optimize-space.md#where-the-work-runs)
+says what each job group needs.
 
 ## Phase 1: the exploration
 
@@ -346,7 +346,7 @@ We drove a Gaussian process across a pool of 80 workers.
 We landed on one of the four minima of a function
 we never told the optimizer anything about.
 The same program, with a different objective and a different space,
-is a calibration of a real model.
+searches the parameters of a real model.
 
 ## Next steps
 
@@ -358,6 +358,6 @@ is a calibration of a real model.
     how the search decides to stop, and the acquisition settings.
 - [Search spaces](../reference/search-space.md) covers integer,
     categorical and log-scaled parameters.
-- [About batch Bayesian optimization](../explanation/about-batch-bayesian-optimization.md)
+- [Batch Bayesian optimization](../explanation/batch-bayesian-optimization.md)
     says why the search has this shape,
     and when it is worth its overhead.

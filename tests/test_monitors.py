@@ -10,6 +10,8 @@ which is the only way to assert on values a kernel decides.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
+from pathlib import Path
 
 import psutil
 import pytest
@@ -26,7 +28,7 @@ from slurm_workflows.monitors import (
 )
 
 
-def wait_for(predicate, timeout: float = 5.0) -> bool:
+def wait_for(predicate: Callable[[], object], timeout: float = 5.0) -> bool:
     """Poll `predicate` until it holds, or the timeout runs out."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -68,7 +70,7 @@ class TestSampleHost:
 
 class TestCgroupSampler:
     @staticmethod
-    def write_cgroup(root, memory: int, cpu_usec: int) -> None:
+    def write_cgroup(root: Path, memory: int, cpu_usec: int) -> None:
         (root / "memory.current").write_text(f"{memory}\n")
         (root / "cpu.stat").write_text(
             f"usage_usec {cpu_usec}\nuser_usec {cpu_usec}\nsystem_usec 0\n"

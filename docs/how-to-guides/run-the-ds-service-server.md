@@ -55,5 +55,5 @@ To install it, see
 
 - [How to watch a run with `swtop`](watch-a-run-with-swtop.md),
     which reads the same server
-- [About the pilot-job model](../explanation/about-the-pilot-job-model.md),
+- [The pilot-job model](../explanation/pilot-job-model.md),
     for why one server belongs to one executor

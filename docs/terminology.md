@@ -112,7 +112,7 @@ Slurm's own "group" is the Unix group in `--gid`.
 
 ### A queue is never a partition
 
-Every example names a job group `bii`,
+The two pi examples name a job group `bii`,
 after the partition its jobs run on.
 That is legal.
 But it reads as though the two were the same thing.
@@ -126,6 +126,7 @@ and leave `bii` to `--partition`.
 | **task** | The `ds-service` unit of work. Unqualified, this is the only thing it means. | `ds-service` | job, work item, future |
 | **task id** | `<executor-name>.task.<n>`. | `ds-service` (`task_id`) | task key, task name |
 | **task name** | The label `set_task_name` writes to `task_name:<task-id>`. Nothing dispatches on it. | this library | task label, description |
+| **parent task** | A task another task waits on, given to `submit` as `task_parents`. The server dispatches a task only after every parent finishes. | `ds-service` (`parent_task_ids`) | predecessor, upstream task, prerequisite |
 | **Slurm task** | A process in a job step, what `--ntasks` counts. Always qualified. | Slurm | bare "task", rank, process |
 | **task rank** | The index of a Slurm task within its job, `%t` in an output pattern. | Slurm | bare "task", task number, task slot |
 | **queue** | A named `ds-service` queue. Equal to a job group name, except for the mapreduce item queue. | `ds-service` | channel, topic, the server, partition |
@@ -166,10 +167,10 @@ For the waiting side's own view of a task:
 
 | Term | What it names | Do not use |
 | --- | --- | --- |
-| **pending** | A task that is `Ready` or `Running`, seen from a wait. | in flight, outstanding, unfinished |
-| **failure** | Any of the four things `RaiseOnError` treats as one. | error, problem, bad task |
-| **starved** | A pending task whose queues never had a pilot job submitted. | orphaned, unserved |
-| **stranded** | A pending task whose queues have no live pilot job left. | dead, abandoned, lost |
+| **pending** | A task that is `Waiting`, `Ready` or `Running`, seen from a wait. | in flight, outstanding, unfinished |
+| **failure** | Any of the five things `RaiseOnError` treats as one. | error, problem, bad task |
+| **starved** | A pending task whose queues, or the queues of an unfinished ancestor, have no pilot job in the executor's job groups. | orphaned, unserved |
+| **stranded** | A pending task whose queues, or the queues of an unfinished ancestor, have no live pilot job left. | dead, abandoned, lost |
 
 **starved** and **stranded** are the words `_starved_tasks`
 and `_stranded_tasks` already use.
@@ -316,5 +317,5 @@ Change both ends in one commit, and say so in the commit message.
 ## Related
 
 - [Developer notes](developer-notes.md), for why the code is the way it is
-- [About the pilot-job model](explanation/about-the-pilot-job-model.md),
+- [The pilot-job model](explanation/pilot-job-model.md),
     which is the same vocabulary written for a user

@@ -21,9 +21,10 @@ import sys
 import signal
 import subprocess
 from pathlib import Path
-from typing import Generator
+from types import FrameType
+from typing import Any, Callable, Generator, Iterator, NoReturn
 from dataclasses import dataclass
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 
 import pytest
 from ds_service_client import DsServiceClient, DsServiceServer
@@ -44,13 +45,13 @@ sys.path.insert(0, str(Path(__file__).parent))
 # Both the executor's result polling and the worker's main loop
 # run until a condition holds.
 # A regression in either turns a failing test into a hanging one,
-# which is far worse in CI.
+# which is far worse.
 # For this reason, a wall-clock alarm bounds every test.
 
 
 @contextmanager
-def _time_limit(seconds: float, message: str):
-    def on_alarm(signum, frame):
+def _time_limit(seconds: float, message: str) -> Iterator[None]:
+    def on_alarm(signum: int, frame: FrameType | None) -> NoReturn:
         raise TimeoutError(message)
 
     previous = signal.signal(signal.SIGALRM, on_alarm)
@@ -63,14 +64,14 @@ def _time_limit(seconds: float, message: str):
 
 
 @pytest.fixture
-def time_limit():
+def time_limit() -> Callable[[float, str], AbstractContextManager[None]]:
     """Bound a block that can spin forever if the code under test regresses."""
 
     return _time_limit
 
 
 @pytest.fixture(autouse=True)
-def _hang_guard():
+def _hang_guard() -> Generator[None]:
     """Backstop so no single test can wedge the suite."""
 
     with _time_limit(60.0, "test exceeded its 60s time limit"):
@@ -78,11 +79,11 @@ def _hang_guard():
 
 
 @pytest.fixture(autouse=True)
-def _restore_environ():
+def _restore_environ() -> Generator[None]:
     """Put `os.environ` back after each test.
 
-    `PilotWorker.__init__` writes `DS_SERVER_ADDRESS` and the
-    `PILOT_WORKER_*` variables, and undoes neither.
+    `PilotWorker.__init__` writes `DS_SERVER_ADDRESS`, `PILOT_WORKER_ID`
+    and the `PILOT_JOB_*` variables, and undoes none of them.
     In a worker the process is the worker, so nothing there has to.
     Without this fixture, one test leaves a dead server's address behind
     for every later test.
@@ -115,7 +116,7 @@ def _srun_lines(script: str) -> list[str]:
 
 
 @pytest.fixture
-def srun_lines():
+def srun_lines() -> Callable[[str], list[str]]:
     """Extract the `srun` command lines from a generated script."""
 
     return _srun_lines
@@ -156,7 +157,7 @@ def ds_service_address() -> Generator[str]:
 
 
 @pytest.fixture
-def ds_client(ds_service_address: str):
+def ds_client(ds_service_address: str) -> Generator[DsServiceClient]:
     """A directly usable client against the test's ds-service."""
     client = DsServiceClient(ds_service_address)
     yield client
@@ -187,7 +188,7 @@ class Submission:
     @property
     def sbatch_directives(self) -> list[str]:
         """`#SBATCH` lines, minus the name and output ones the library adds."""
-        out = []
+        out: list[str] = []
         for line in self.script_text.splitlines():
             if not line.startswith("#SBATCH "):
                 continue
@@ -224,7 +225,7 @@ class FakeSlurm:
 
     # -- the subprocess surface --------------------------------------------
 
-    def run(self, cmd, **kwargs):
+    def run(self, cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         exe = Path(cmd[0]).name
 
         if exe in self.fail:
@@ -240,12 +241,14 @@ class FakeSlurm:
 
         raise AssertionError(f"unexpected command in test: {cmd!r}")
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> Any:
         return getattr(subprocess, name)
 
     # -- individual commands ------------------------------------------------
 
-    def _sbatch(self, cmd, **kwargs):
+    def _sbatch(
+        self, cmd: list[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess[str]:
         script_path = Path(cmd[1])
         job_id = self.next_job_id
         self.next_job_id += 1
@@ -265,11 +268,11 @@ class FakeSlurm:
             stdout = f"Submitted batch job {job_id}\n"
         return subprocess.CompletedProcess(cmd, 0, stdout, "")
 
-    def _squeue(self, cmd):
+    def _squeue(self, cmd: list[str]) -> subprocess.CompletedProcess[str]:
         stdout = "".join(f"{job_id}\n" for job_id in self.running_job_ids)
         return subprocess.CompletedProcess(cmd, 0, stdout, "")
 
-    def _scancel(self, cmd):
+    def _scancel(self, cmd: list[str]) -> subprocess.CompletedProcess[str]:
         for arg in cmd[1:]:
             if arg.startswith("-"):
                 continue
@@ -297,7 +300,9 @@ def fake_slurm(monkeypatch: pytest.MonkeyPatch) -> Generator[FakeSlurm]:
 
 
 @pytest.fixture
-def executor(ds_service_address: str, fake_slurm: FakeSlurm, tmp_path: Path):
+def executor(
+    ds_service_address: str, fake_slurm: FakeSlurm, tmp_path: Path
+) -> Generator[SlurmPilotExecutor]:
     """An executor wired to the real server and the fake Slurm."""
     ex = SlurmPilotExecutor(
         name="testex", server_address=ds_service_address, work_dir=tmp_path / "work"
@@ -307,7 +312,7 @@ def executor(ds_service_address: str, fake_slurm: FakeSlurm, tmp_path: Path):
 
 
 @pytest.fixture
-def pilot_jobs(executor):
+def pilot_jobs(executor: SlurmPilotExecutor) -> Callable[..., None]:
     """Declare that pilot jobs exist for the named groups.
 
     `as_completed` refuses to wait on a queue

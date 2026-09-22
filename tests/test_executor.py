@@ -16,11 +16,12 @@ import logging
 import subprocess
 from pathlib import Path
 from datetime import datetime
+from typing import Any
 
 import pytest
 import cloudpickle
 from typeguard import TypeCheckError
-from ds_service_client import TaskState
+from ds_service_client import DsServiceClient, TaskState
 
 from slurm_workflows import slurm_pilot_executor as spe
 from slurm_workflows.slurm_pilot_executor import (
@@ -38,15 +39,15 @@ def num_groups(ex: SlurmPilotExecutor) -> int:
     return len(ex.groups)
 
 
-def num_workers(ex: SlurmPilotExecutor, detail: bool = False):
-    """Pilot jobs submitted, in total or per group."""
+def num_workers(ex: SlurmPilotExecutor, detail: bool = False) -> int | dict[str, int]:
+    """Pilot jobs the executor still holds, in total or per group."""
 
     if detail:
         return {g.name: len(g.jobs) for g in ex.groups.values()}
     return sum(len(g.jobs) for g in ex.groups.values())
 
 
-def drain(ds_client, queue: str, count: int) -> list[str]:
+def drain(ds_client: DsServiceClient, queue: str, count: int) -> list[str]:
     """Act as a worker: pull `count` tasks and post their real results."""
 
     task_ids = []
@@ -61,7 +62,9 @@ def drain(ds_client, queue: str, count: int) -> list[str]:
     return task_ids
 
 
-def fail_one(ds_client, queue: str, error_id: str = "ERROR_test") -> str:
+def fail_one(
+    ds_client: DsServiceClient, queue: str, error_id: str = "ERROR_test"
+) -> str:
     """Fail one task the way a worker reports a remote exception."""
 
     task = ds_client.task_get("test-worker", queue)
@@ -88,26 +91,26 @@ def ghost_task() -> Task:
 class CountingClient:
     """Counts RPCs so tests can assert on batching."""
 
-    def __init__(self, inner):
+    def __init__(self, inner: DsServiceClient) -> None:
         self._inner = inner
         self.status_calls = 0
         self.status_batch_sizes: list[int] = []
         self.output_calls = 0
 
-    def task_get_status(self, task_id):
+    def task_get_status(self, task_id: str | list[str]) -> TaskState | list[TaskState]:
         self.status_calls += 1
         self.status_batch_sizes.append(1 if isinstance(task_id, str) else len(task_id))
         return self._inner.task_get_status(task_id)
 
-    def task_get_output(self, task_id):
+    def task_get_output(self, task_id: str) -> bytes:
         self.output_calls += 1
         return self._inner.task_get_output(task_id)
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
 
 
-def square(x):
+def square(x: int) -> int:
     return x * x
 
 
@@ -179,7 +182,7 @@ class TestExecutorName:
 
 
 # --------------------------------------------------------------------------
-# define_job_group
+# progress display
 # --------------------------------------------------------------------------
 
 
@@ -190,10 +193,10 @@ class TestProgressDisplay:
     def _pilot_jobs(self, pilot_jobs):
         pilot_jobs("cpu")
 
-    def published(self, ds_client) -> dict:
+    def published(self, ds_client: DsServiceClient) -> dict:
         return json.loads(ds_client.map_get("progress_display"))
 
-    def series(self, ds_client, progress_id: str) -> list[float]:
+    def series(self, ds_client: DsServiceClient, progress_id: str) -> list[float]:
         points = ds_client.time_series_get(f"progress:{progress_id}")
         return [point.value for point in points]
 
@@ -250,6 +253,11 @@ class TestProgressDisplay:
 
         values = self.series(ds_client, self.published(ds_client)["progress_id"])
         assert values, "the display is published before anything is waited on"
+
+
+# --------------------------------------------------------------------------
+# define_job_group
+# --------------------------------------------------------------------------
 
 
 class TestDefineWorker:
@@ -875,9 +883,9 @@ class TestAsCompleted:
                 list(executor.as_completed([ghost_task()], desc="test"))
 
     def test_unknown_task_id_raises_from_wait(self, executor, time_limit):
-        # `wait` gets this by delegating to `as_completed`,
+        # `wait` gets this from `_as_completed`, as `as_completed` does,
         # so the test pins the guarantee to both entry points
-        # rather than trusting the delegation to stay.
+        # rather than trusting the shared loop to stay.
         with time_limit(10, "wait never terminated for an unknown task"):
             with pytest.raises(RuntimeError, match="unknown to the task queue server"):
                 executor.wait([ghost_task()], desc="test")
@@ -885,7 +893,7 @@ class TestAsCompleted:
     def test_canceled_task_raises(self, executor, ds_client, time_limit):
         # `Canceled` arrived with ds-service 4.0.0.
         # Nothing here cancels, so this cancel arrives out of band.
-        # A state the poll loop does not name waits forever.
+        # See the comment on the `else` of the poll loop in `_as_completed`.
         task = executor.submit("cpu", square, 3)
         assert ds_client.task_cancel(task.task_id)
 
@@ -991,6 +999,7 @@ class TestRemoteErrors:
         task = executor.submit("cpu", square, 1)
         fail_one(ds_client, "cpu", error_id="ERROR_xyz")
 
+        # Two of the three policies raise, and this test is about the warning alone.
         try:
             executor.wait([task], raise_on_error=policy, desc="test")
         except RuntimeError:
@@ -1395,7 +1404,6 @@ class TestStrandedTasks:
 
         This is the pattern the README documents:
         submit first, scale workers after.
-        Without the initial delay, `as_completed` raises instead of waiting.
         """
         executor.define_job_group("cpu", [], setup_script)
         task = executor.submit("cpu", square, 6)
@@ -1408,6 +1416,82 @@ class TestStrandedTasks:
         assert done.output == 36
 
 
+class TestWaitingOnParents:
+    """A task waits on its parents, so their queues must be live too."""
+
+    def test_a_parent_on_a_queue_with_no_worker_is_rejected(
+        self, executor, setup_script, time_limit
+    ):
+        executor.define_job_group("cpu", [], setup_script)
+        executor.scale_jobs("cpu", 1)
+        parent = executor.submit("ghost", square, 1)
+        child = executor.submit("cpu", square, 2, task_parents=[parent])
+
+        with time_limit(10, "wait blocked on a parent nobody can run"):
+            with pytest.raises(RuntimeError, match=r"no worker started: \['ghost'\]"):
+                executor.wait([child], desc="test")
+
+    def test_a_grandparent_counts_too(self, executor, setup_script, time_limit):
+        executor.define_job_group("cpu", [], setup_script)
+        executor.scale_jobs("cpu", 1)
+        grandparent = executor.submit("ghost", square, 1)
+        parent = executor.submit("cpu", square, 2, task_parents=[grandparent])
+        child = executor.submit("cpu", square, 3, task_parents=[parent])
+
+        with time_limit(10, "wait blocked on a grandparent nobody can run"):
+            with pytest.raises(RuntimeError, match=r"no worker started: \['ghost'\]"):
+                executor.wait([child], desc="test")
+
+    def test_a_parent_whose_queue_died_strands_the_child(
+        self, executor, fake_slurm, setup_script, check_immediately, time_limit
+    ):
+        executor.define_job_group("cpu", [], setup_script)
+        executor.define_job_group("opt", [], setup_script)
+        executor.scale_jobs("cpu", 1)
+        executor.scale_jobs("opt", 1)
+        opt_job = fake_slurm.submissions[-1].job_id
+        parent = executor.submit("opt", square, 1)
+        child = executor.submit("cpu", square, 2, task_parents=[parent])
+
+        fake_slurm.running_job_ids.remove(opt_job)
+
+        with time_limit(10, "wait blocked on a parent whose queue died"):
+            with pytest.raises(RuntimeError, match=r"no live pilot job.*\['opt'\]"):
+                executor.wait([child], desc="test")
+
+    def test_a_finished_parent_no_longer_needs_its_queue(
+        self,
+        executor,
+        fake_slurm,
+        setup_script,
+        ds_client,
+        check_immediately,
+        time_limit,
+    ):
+        executor.define_job_group("cpu", [], setup_script)
+        executor.define_job_group("opt", [], setup_script)
+        executor.scale_jobs("cpu", 1)
+        executor.scale_jobs("opt", 1)
+        opt_job = fake_slurm.submissions[-1].job_id
+        parent = executor.submit("opt", square, 1)
+        child = executor.submit("cpu", square, 2, task_parents=[parent])
+
+        drain(ds_client, "opt", 1)
+        fake_slurm.running_job_ids.remove(opt_job)
+        drain(ds_client, "cpu", 1)
+
+        with time_limit(10, "wait did not return"):
+            executor.wait([child], desc="test")
+        assert child.output == 4
+
+    def test_the_parents_are_not_shown_in_the_repr(self, executor, pilot_jobs):
+        pilot_jobs("cpu")
+        parent = executor.submit("cpu", square, 1)
+        child = executor.submit("cpu", square, 2, task_parents=[parent])
+
+        assert "_parents" not in repr(child)
+
+
 # --------------------------------------------------------------------------
 # lifecycle
 # --------------------------------------------------------------------------
@@ -1416,16 +1500,13 @@ class TestStrandedTasks:
 class TestLogging:
     """One executor, one log file.
 
-    Each executor names its logger after itself.
-    A logger shared between two executors collects a handler for each one.
-    Every line then lands in every work dir this process opened.
-    The name is therefore the identity here too.
-    Each test here uses its own name,
+    Each test here uses its own executor name,
     rather than the logger a previous test left in the registry.
+    The developer notes, under Logging, say why a shared name breaks this.
     """
 
     @staticmethod
-    def file_handlers(ex) -> list[logging.Handler]:
+    def file_handlers(ex: SlurmPilotExecutor) -> list[logging.Handler]:
         """The executor's own handlers.
 
         This method filters the list,

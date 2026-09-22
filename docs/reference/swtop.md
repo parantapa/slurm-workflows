@@ -84,7 +84,10 @@ The blocks come from different places:
     In the text frames it is the line above.
     It is absent until a driver waits on something.
     The last wait's line stays after it finishes,
-    marked `done` rather than `working`.
+    marked `done` rather than `working`
+    if `swtop` saw it finish.
+    A `swtop` started more than a minute after the wait ended
+    shows it at 0 and `working`.
     A driver that never waits leaves nothing here.
 - **Task counts** are a single RPC, so they always cover every task.
     A server belongs to one executor,
@@ -155,10 +158,12 @@ The remaining workers do not take over the job,
 so a run that scales down loses the readings for what it gave up.
 A single `-` on an otherwise live row
 is one series with nothing recent in it.
-That is what a filesystem the node does not mount looks like.
+That is what a node without that path looks like.
+A path that is not a mount point of its own
+shows the filesystem that holds it.
 
 How the workers elect the sampling worker, and why nothing re-elects it, is in
-[About what a run publishes](../explanation/about-what-a-run-publishes.md).
+[The trail a run leaves](../explanation/the-trail-a-run-leaves.md).
 
 ## Frames of text instead of a UI
 

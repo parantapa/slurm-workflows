@@ -45,8 +45,11 @@ JOB_SERIES = {
 def sample_host() -> dict[str, float]:
     """One reading of this node: free memory, load, and scratch usage.
 
-    The reading omits a filesystem that is not mounted.
-    It does not report that filesystem as zero.
+    The reading omits a scratch path that `psutil.disk_usage` cannot read,
+    such as one that does not exist.
+    It does not report that path as zero.
+    A path that is not a mount point of its own
+    reports the filesystem that holds it.
     """
     values = {
         "free_memory": float(psutil.virtual_memory().available),
@@ -93,10 +96,7 @@ class CgroupSampler:
         return {"memory": memory, "cpu": cores}
 
     def _read_cgroup(self) -> tuple[float, float] | None:
-        """Memory in bytes and cumulative CPU seconds, from cgroup v2.
-
-        None where those files are not readable, and the caller falls back.
-        """
+        """Memory in bytes and cumulative CPU seconds from cgroup v2, or None."""
         try:
             memory = float((self.root / "memory.current").read_text().strip())
             cpu_stat = (self.root / "cpu.stat").read_text()
@@ -113,13 +113,10 @@ class CgroupSampler:
         return None
 
     def _read_processes(self) -> tuple[float, float]:
-        """The same two numbers, summed over the processes in the cgroup.
-
-        A fallback: summed RSS counts shared pages once per process.
-        A cgroup that holds no process with an address space reads as zero,
-        which is what the root cgroup of a systemd host holds.
-        This sums the tree of this process in that case.
-        """
+        """Memory and CPU seconds summed over the processes in the cgroup."""
+        # Only a fallback: summed RSS counts shared pages once per process.
+        # The root cgroup of a systemd host holds no process with an address space,
+        # so it reads as zero, and this sums the tree of this process instead.
         memory, cpu_seconds = self._sum(self._cgroup_processes())
         if memory > 0.0:
             return memory, cpu_seconds
@@ -138,7 +135,8 @@ class CgroupSampler:
                     times = proc.cpu_times()
                     cpu_seconds += times.user + times.system
             except (psutil.NoSuchProcess, psutil.AccessDenied):
-                # A process that exited between the listing and the read.
+                # A process that exited between the listing and the read,
+                # or one this user cannot read.
                 continue
 
         return memory, cpu_seconds
@@ -198,7 +196,8 @@ class Monitor(threading.Thread):
             try:
                 self.append_sample()
             except Exception:
-                # A failed sample leaves a gap. It does not end the series.
+                # A failed sample leaves a gap, not a stop.
+                # See "Monitoring" in the developer notes.
                 self.logger.exception("Monitor %s failed to sample", self.subject)
 
             if self._stopping.wait(self.interval):

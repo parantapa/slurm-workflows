@@ -132,7 +132,7 @@ and ask Slurm what we hold:
 squeue -u $USER
 ```
 
-One job is there, named `compute-pi.job.bii.0`,
+One pilot job is there, named `compute-pi.job.bii.0`,
 after the executor and the job group.
 It moves from `PENDING` to `RUNNING`, and it holds two nodes.
 That job is the whole allocation this run gets.
@@ -140,10 +140,10 @@ That job is the whole allocation this run gets.
 What to watch for while it runs, in order:
 
 * The `ds-service` server starts on the login node.
-* The executor submits one Slurm job across `NUM_NODES` nodes.
+* The executor submits one pilot job across `NUM_NODES` nodes.
 * `srun` starts a worker on every Slurm task in that job.
 * Each worker connects back to the server over InfiniBand.
-    It claims tasks, runs them, and posts results.
+    It claims tasks, runs them, and posts their task outputs.
 * The driver blocks in `wait()` until every task is back.
 
 Notice that the program submits the 800 tasks before a single worker exists.
@@ -162,6 +162,6 @@ does the same calculation with `ExploreSpaceSobolQMC`.
 That class owns the submit-and-wait loop
 and keeps what every evaluation returned.
 
-[About the pilot-job model](../explanation/about-the-pilot-job-model.md)
+[The pilot-job model](../explanation/pilot-job-model.md)
 says why the work has this shape.
 It also says what each of the three processes does.

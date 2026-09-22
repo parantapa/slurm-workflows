@@ -29,7 +29,10 @@ class IntRange:
             raise ValueError(f"IntRange needs max > min, got {self.min}, {self.max}")
 
     def standardize(self, x: int) -> float:
-        """Move from [min, max] range to [0, 1] range."""
+        """Move from [min, max] range to [0, 1] range.
+
+        A value outside the range maps outside `[0, 1]`.
+        """
         return (x - self.min) / (self.max - self.min)
 
     def unstandardize(self, y: float) -> int:
@@ -59,7 +62,11 @@ class FloatRange:
             raise ValueError(f"log_range needs min > 0, got {self.min}")
 
     def standardize(self, x: float) -> float:
-        """Move from [min, max] range to [0, 1] range."""
+        """Move from [min, max] range to [0, 1] range.
+
+        A value outside the range maps outside `[0, 1]`.
+        With `log_range`, raises `ValueError` for an `x` at or below zero.
+        """
         if self.log_range:
             # Both ends and the value into log space, so the mapping back
             # in `unstandardize` is the exact inverse.
@@ -84,8 +91,8 @@ class CategoricalRange:
     `num_categories` must be at least 1.
     `CategoricalRange` accepts `num_categories=1`,
     unlike a degenerate `IntRange`.
-    But one category is a dead dimension.
-    Prefer `extra_objective_kwargs` for that parameter.
+    But one category is a dead dimension,
+    and `extra_objective_kwargs` can pass that value instead.
     """
 
     num_categories: int
@@ -110,6 +117,7 @@ class CategoricalRange:
 
 ParameterRange = IntRange | FloatRange | CategoricalRange
 
+# `Mapping` and not `dict`, for the reason under Conventions in the developer notes.
 SearchSpace = Mapping[str, ParameterRange]
 
 

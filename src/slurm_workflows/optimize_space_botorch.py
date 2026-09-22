@@ -153,6 +153,8 @@ def fit_and_propose(
 ) -> dict[str, Any]:
     """Fit the GP and optimize the acquisition over the unit cube.
 
+    `values` are objective values, lower is better,
+    index-aligned with `unit_points`.
     Returns the `batch` proposed unit points under `CANDIDATES_KEY`,
     and how long each half took under `FIT_SECONDS_KEY`
     and `PROPOSE_SECONDS_KEY`.
@@ -183,6 +185,8 @@ def fit_and_propose(
     started = time.monotonic()
 
     # The whole batch in one call, optimized jointly rather than greedily.
+    # `sequential=True` is the usual advice for large batches,
+    # but it pays the restart cost once per point instead of once per batch.
     candidates, _ = optimize_acqf(
         acqf,
         bounds=bounds,
@@ -224,9 +228,12 @@ class OptimizeSpaceBotorch:
             as `ExploreSpaceSobolQMC.save` or this class's own `save` wrote them.
             The search models a study on every observation
             they hold under its name.
-            A study with none of them raises.
+            A study with none of them raises `RuntimeError`,
+            as does a saved point that the study's space cannot place,
+            or a saved value that is not a finite number.
+            A file that does not hold the results shape raises `ValueError`.
         search_parallelism: batch size for studies that do not carry their own.
-            A study with neither raises.
+            A study with neither raises `ValueError`.
 
         The search validates every study now, not when it runs.
         """
@@ -335,6 +342,8 @@ class OptimizeSpaceBotorch:
             for params in saved.points
         ]
 
+        # Only for the check.
+        # A saved value that is not a finite float raises here.
         for value in saved.values:
             objective_value(study.name, "saved value", {}, {"saved value": value})
 
@@ -349,10 +358,7 @@ class OptimizeSpaceBotorch:
     def _saved_unit_point(
         study: OptimizationStudy, params: Mapping[str, Any]
     ) -> list[float]:
-        """One saved point, standardized into a study's own space.
-
-        Raises if the space cannot place it.
-        """
+        """A saved point in a study's unit cube, or a `RuntimeError`."""
         mismatch = set(params) ^ set(study.space)
         if mismatch:
             raise RuntimeError(
@@ -398,6 +404,7 @@ class OptimizeSpaceBotorch:
 
     def observations(self, name: str) -> tuple[list[list[float]], list[float]]:
         """Everything a study's model uses: the files, then this run."""
+        # For its `KeyError`, which names the studies there are.
         self._study(name)
         prior, results = self.prior[name], self.results[name]
         return (
@@ -414,13 +421,18 @@ class OptimizeSpaceBotorch:
 
         A round is one fit per still-running study,
         then every study's proposed batch, evaluated on its objective queue.
-        Tasks advance in step and drop out independently,
+        Studies advance in step and drop out independently,
         each on its own patience and ceiling.
-        A second call runs another set of rounds from where this stopped.
+        A second call runs another set of rounds for every study,
+        on everything measured so far.
+        It counts rounds and stalled rounds from the start again.
 
         The search names the two tasks of a round
         `<study>-fit-<round>` and `<study>-search-<round>-<index>`
         on the server.
+        It raises `RuntimeError` if a fit fails or proposes a malformed batch,
+        or if an evaluation fails.
+        On an evaluation failure it first records every result that came back.
         """
         active = list(self.studies)
         stalled = {study.name: 0 for study in self.studies}
@@ -660,6 +672,8 @@ class OptimizeSpaceBotorch:
             try:
                 self._record(study, params, submission)
             except RuntimeError:
+                # A failed evaluation has nothing to record,
+                # and `_evaluate` re-raises the batch failure after this.
                 continue
 
     def _record(
@@ -680,15 +694,12 @@ class OptimizeSpaceBotorch:
     def _improved_enough(
         self, study: OptimizationStudy, previous: float, current: float
     ) -> bool:
-        """Whether `current` beats `previous` by at least `min_improvement`.
-
-        The threshold is a fraction of the incumbent's magnitude.
-        Against an incumbent of exactly zero, any strict decrease counts.
-        """
+        """Whether `current` beats `previous` by at least `min_improvement`."""
         if current >= previous:
             return False
 
         magnitude = abs(previous)
+        # Against an incumbent of exactly zero, any strict decrease counts.
         if magnitude == 0.0:
             return True
 

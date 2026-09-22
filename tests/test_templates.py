@@ -181,6 +181,9 @@ class TestLineColFromPos:
 
 
 class TestLoader:
+    # Each call here is one that no `render_template` overload accepts.
+    # The `type: ignore[call-overload]` pragmas mark those calls as deliberate.
+
     def test_unknown_template_name_raises(self):
         with pytest.raises(jinja2.TemplateNotFound):
             render_template("slurm_pilot:no_such_template")  # type: ignore[call-overload]
@@ -422,7 +425,7 @@ class TestOutputRedirectByTaskCount:
 
 
 class TestWorkerScript:
-    def render(self, **overrides):
+    def render(self, **overrides) -> str:
         kwargs = dict(
             worker_exe="slurm-pilot-worker",
             setup_script="module load gcc\nconda activate my-env",
