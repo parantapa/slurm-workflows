@@ -36,6 +36,7 @@ It needs neither botorch nor torch, on the driver or on the workers.
 | `seed` | Optional. The same seed redraws the same design. Without one, a seed is drawn and printed. |
 | `objective_key` | Which entry of the objective's result is the value. `"objective"` by default. |
 | `extra_objective_kwargs` | Extra arguments passed to the objective and not varied. |
+| `priority` | The priority of every task the study submits. The highest priority runs first. `0.0` by default. |
 
 The objective contract is the same for both classes:
 see [The objective](search-space.md#the-objective).

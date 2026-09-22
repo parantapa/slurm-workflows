@@ -59,10 +59,14 @@ class LocalExecutor:
         self.waits: list[str | None] = []
         self.batch_sizes: list[int] = []
         self.names: list[str] = []
+        self.priorities: list[float] = []
 
-    def submit(self, queue, fn, *args, **kwargs) -> Task:
+    def submit(
+        self, queue, fn, *args, task_parents=None, task_priority=0.0, **kwargs
+    ) -> Task:
         self.queues.append(queue)
         self.kwargs.append(dict(kwargs))
+        self.priorities.append(task_priority)
         try:
             output = fn(*args, **kwargs)
         except Exception as e:
@@ -70,7 +74,7 @@ class LocalExecutor:
         return Task(
             task_id=str(len(self.queues)),
             queue=[queue] if isinstance(queue, str) else list(queue),
-            priority=0.0,
+            priority=task_priority,
             function=fn,
             input=(args, kwargs),
             output=output,
@@ -102,6 +106,7 @@ def study(
     points: int | None = 8,
     seed: int | None = SEED,
     objective_key: str = "objective",
+    priority: float = 0.0,
     **extra,
 ) -> ExplorationStudy:
     """One exploration study, with the test defaults filled in."""
@@ -114,6 +119,7 @@ def study(
         seed=seed,
         objective_key=objective_key,
         extra_objective_kwargs=extra,
+        priority=priority,
     )
 
 
@@ -268,6 +274,25 @@ class TestDesign:
 
 
 class TestRun:
+    def test_tasks_take_the_default_priority(self):
+        executor = LocalExecutor()
+        exploration = ExploreSpaceSobolQMC([study(points=4)], as_executor(executor))
+
+        exploration.run()
+
+        assert executor.priorities == [0.0] * 4
+
+    def test_each_study_submits_at_its_own_priority(self):
+        executor = LocalExecutor()
+        exploration = ExploreSpaceSobolQMC(
+            [study("low", points=2), study("high", points=2, priority=3.5)],
+            as_executor(executor),
+        )
+
+        exploration.run()
+
+        assert executor.priorities == [0.0, 0.0, 3.5, 3.5]
+
     def test_it_evaluates_every_point_of_the_design(self):
         exploration = explorer(study(points=8))
 

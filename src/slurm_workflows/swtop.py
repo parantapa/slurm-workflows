@@ -67,7 +67,15 @@ STALE_AFTER_S = 60.0
 UNKNOWN = "?"
 
 # The order the tables list tasks in: what runs now comes first.
-STATE_ORDER = ["Running", "Ready", "Complete", "Canceled", "Undefined"]
+STATE_ORDER = [
+    "Running",
+    "Ready",
+    "Waiting",
+    "Failed",
+    "Finished",
+    "Canceled",
+    "Undefined",
+]
 
 # What each block says when it has nothing to show.
 # Each says why it is empty, since an empty block is usually a question.
@@ -209,9 +217,11 @@ class Collector:
             address=self.address,
             when=datetime.now(),
             counts={
+                "waiting": counts.waiting,
                 "ready": counts.ready,
                 "running": counts.running,
-                "complete": counts.complete,
+                "finished": counts.finished,
+                "failed": counts.failed,
                 "canceled": counts.canceled,
             },
             progress=progress,

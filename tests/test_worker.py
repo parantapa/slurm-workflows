@@ -149,6 +149,20 @@ class TestRemoteErrors:
         assert task.output.error == "task blew up"
         assert task.output.error_id.startswith("ERROR_")
 
+    def test_a_raising_task_is_marked_failed(
+        self, executor, ds_client, ds_service_address, tmp_path
+    ):
+        """Failed, not Finished, so the tasks waiting on it fail too."""
+        task = executor.submit("cpu", boom)
+        child = executor.submit("cpu", square, 2, task_parents=[task])
+
+        worker = make_worker(ds_service_address, tmp_path)
+        run_worker(worker, expect_tasks=1)
+        worker.close()
+
+        assert ds_client.task_get_status(task.task_id) == TaskState.Failed
+        assert ds_client.task_get_status(child.task_id) == TaskState.Failed
+
     def test_worker_survives_a_failing_task(
         self, executor, ds_service_address, tmp_path
     ):

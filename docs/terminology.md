@@ -159,7 +159,7 @@ and that is not a typo to correct.
 
 | States | Owner | Note |
 | --- | --- | --- |
-| `Ready`, `Running`, `Complete`, `Canceled`, `Undefined` | `ds-service` `TaskState` | One `l` in `Canceled`. |
+| `Waiting`, `Ready`, `Running`, `Finished`, `Failed`, `Canceled`, `Undefined` | `ds-service` `TaskState` | One `l` in `Canceled`. |
 | `PENDING`, `RUNNING`, `COMPLETED`, `CANCELLED`, `TIMEOUT` | Slurm job states | Two `l`s in `CANCELLED`. |
 
 For the waiting side's own view of a task:

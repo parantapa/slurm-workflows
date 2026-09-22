@@ -27,8 +27,10 @@ class _StoppingClient:
         self._limit = limit
         self.completed = 0
 
-    def task_done(self, task_id: str, worker_id: str, output: bytes):
-        result = self._inner.task_done(task_id, worker_id, output)
+    def task_done(
+        self, task_id: str, worker_id: str, output: bytes, failed: bool = False
+    ):
+        result = self._inner.task_done(task_id, worker_id, output, failed=failed)
         self.completed += 1
         if self.completed >= self._limit:
             raise StopWorker

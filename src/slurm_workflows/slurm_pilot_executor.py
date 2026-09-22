@@ -80,12 +80,19 @@ MAPREDUCE_TOKEN_LEN: int = 8
 NO_FUNCTION = b""
 NO_TASK_OUTPUT = b""
 
+# How ds-service begins the output of a task it failed
+# because a task it waits on failed.
+# The rest of that output names the failed task.
+# The output is plain text, not a cloudpickle.
+DEPENDENCY_FAILED_PREFIX = b"Dependency failed"
+
 
 class RaiseOnError(Enum):
     """What `as_completed` and `wait` do about a task that fails.
 
     A failure is a task whose worker raised,
     one canceled on the server,
+    one whose parent task failed or was canceled,
     or one the server does not know.
     A pending task is also a failure
     when its queues have no pilot job left to run it.
@@ -128,7 +135,9 @@ class Task:
 
     `output` is `NoOutput` until then.
     Afterward `output` holds the return value,
-    or a `RemoteExecutionError` if the worker raised.
+    or a `RemoteExecutionError` if the worker raised
+    or a parent task failed.
+    `parent_task_ids` holds the ids of the tasks this one waits on.
     """
 
     task_id: str
@@ -137,6 +146,7 @@ class Task:
     function: Callable | str
     input: tuple
     output: Any
+    parent_task_ids: list[str] = field(default_factory=list)
     _task_name: str | None = None
 
     @property
@@ -243,7 +253,7 @@ def _mapreduce_task(
             value = map_fn(item, *map_args, **map_kwargs)
             result = reduce_fn(result, value, *reduce_args, **reduce_kwargs)
 
-            # After the fold, so an item goes Complete only after this task counts it.
+            # After the fold, so an item goes Finished only after this task counts it.
             client.task_done(item_task.task_id, worker_id, NO_TASK_OUTPUT)
 
 
@@ -500,14 +510,13 @@ class SlurmPilotExecutor:
     def _submit(
         self,
         queue: list[str],
+        parent_task_ids: list[str],
+        priority: float,
         fn: Callable | str,
         *args: Any,
         **kwargs: Any,
     ) -> Task:
         """Enqueue one task on the given queues and return its handle."""
-        # Negated: ds-service serves the highest priority first,
-        # and serves one queue oldest first.
-        priority = -time.time()
         function_bytes = cloudpickle.dumps(fn, protocol=pickle.HIGHEST_PROTOCOL)
         input_bytes = cloudpickle.dumps(
             (args, kwargs), protocol=pickle.HIGHEST_PROTOCOL
@@ -523,10 +532,12 @@ class SlurmPilotExecutor:
             function=fn,
             input=(args, kwargs),
             output=NoOutput,
+            parent_task_ids=parent_task_ids,
         )
 
         self.client.task_add(
             task_id=task_id,
+            parent_task_ids=parent_task_ids,
             queue=queue,
             priority=priority,
             function=function_bytes,
@@ -547,19 +558,37 @@ class SlurmPilotExecutor:
 
     @typechecked
     def submit(
-        self, queue: str | list[str], fn: Callable | str, *args: Any, **kwargs: Any
+        self,
+        queue: str | list[str],
+        fn: Callable | str,
+        *args: Any,
+        task_parents: list[Task] | None = None,
+        task_priority: float = 0.0,
+        **kwargs: Any,
     ) -> Task:
         """Enqueue one task and return its handle immediately.
 
         `fn` is a callable, or a method name for a group with an actor.
         This method does not check the queue name.
         `wait` and `as_completed` report a task on a queue no group serves.
-        The server dispatches tasks on one queue oldest first.
+
+        `task_parents` are the tasks this one waits on.
+        The server dispatches it only after every parent finishes.
+        A parent that fails fails this task too,
+        and a parent that is canceled cancels it.
+        Raises `KeyError` for a parent the server does not know.
+
+        The server dispatches the highest `task_priority` first,
+        and tasks of equal priority on one queue oldest first.
+        `fn` cannot take keyword arguments
+        named `task_parents` or `task_priority`,
+        because this method keeps them.
         """
         if isinstance(queue, str):
             queue = [queue]
+        parent_task_ids = [parent.task_id for parent in task_parents or []]
 
-        return self._submit(queue, fn, *args, **kwargs)
+        return self._submit(queue, parent_task_ids, task_priority, fn, *args, **kwargs)
 
     def _require_actor_queues(self, queue: list[str], what: str) -> None:
         """Refuse a method name where a job group has no actor to find it on."""
@@ -682,9 +711,10 @@ class SlurmPilotExecutor:
         for index, item in enumerate(items):
             self.client.task_add(
                 task_id=MAPREDUCE_ITEM_TEMPLATE.format(queue=mr_queue, index=index),
+                parent_task_ids=[],
                 queue=[mr_queue],
-                # Negated, as in `_submit`: one queue serves oldest first.
-                priority=-time.time(),
+                # One priority for all, so the queue serves them oldest first.
+                priority=0.0,
                 function=NO_FUNCTION,
                 input=cloudpickle.dumps(item, protocol=pickle.HIGHEST_PROTOCOL),
             )
@@ -696,6 +726,8 @@ class SlurmPilotExecutor:
         for index in range(min(num_tasks, len(items))):
             task = self._submit(
                 queue,
+                [],
+                0.0,
                 _mapreduce_task,
                 mr_queue,
                 map_fn,
@@ -774,13 +806,25 @@ class SlurmPilotExecutor:
             next_pending: list[Task] = []
             completed = 0
             for task, state in zip(pending, states):
-                if state == TaskState.Complete:
+                if state == TaskState.Finished:
                     output = self.client.task_get_output(task.task_id)
                     task.output = cloudpickle.loads(output)
                     completed += 1
-                    if isinstance(task.output, RemoteExecutionError):
-                        # The task finished.
+                    yield task
+                elif state == TaskState.Failed:
+                    output = self.client.task_get_output(task.task_id)
+                    completed += 1
+                    if output.startswith(DEPENDENCY_FAILED_PREFIX):
+                        # The task never ran.
+                        # The server wrote this output, not a worker,
+                        # so there is no traceback and no error id.
+                        reason = output.decode("utf-8", errors="replace")
+                        task.output = RemoteExecutionError(error=reason, error_id="")
+                        failed(f"Task {task.task_id} did not run: {reason}")
+                    else:
+                        # The worker raised.
                         # What it produced is the failure.
+                        task.output = cloudpickle.loads(output)
                         failed(
                             f"Task {task.task_id} failed on its worker: "
                             f"{task.output.error} "
@@ -788,7 +832,8 @@ class SlurmPilotExecutor:
                         )
                     yield task
                 elif state == TaskState.Canceled:
-                    # Something outside this run canceled the task.
+                    # Something outside this run canceled the task,
+                    # or a task it waits on.
                     # The server never dispatches it again.
                     failed(
                         f"Task {task.task_id} was canceled on the task queue "

@@ -443,6 +443,7 @@ class TestMapreduceTask:
         for index in range(60):
             ds_client.task_add(
                 task_id=f"{queue}.item.{index}",
+                parent_task_ids=[],
                 queue=[queue],
                 priority=float(-index),
                 function=b"",
@@ -473,6 +474,7 @@ class TestMapreduceTask:
         for index in range(5):
             ds_client.task_add(
                 task_id=f"{queue}.item.{index}",
+                parent_task_ids=[],
                 queue=[queue],
                 priority=float(-index),
                 function=b"",
@@ -483,7 +485,7 @@ class TestMapreduceTask:
 
         for index in range(5):
             task_id = f"{queue}.item.{index}"
-            assert ds_client.task_get_status(task_id) == TaskState.Complete
+            assert ds_client.task_get_status(task_id) == TaskState.Finished
             # The mapped value went home in the task's return value,
             # so the item task stores nothing of its own.
             assert ds_client.task_get_output(task_id) == b""

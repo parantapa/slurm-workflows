@@ -63,7 +63,7 @@ Generated scripts and all logs land there.
 | --- | --- |
 | `define_job_group(name, sbatch_args, ...)` | Register a job group. Submits nothing. The job group name is also the queue name. A second identical definition does nothing. A definition that differs raises `AssertionError`. |
 | `scale_jobs(name, count)` | Submit or cancel pilot jobs so the job group has `count` jobs. |
-| `submit(queue, fn, *args, **kwargs) -> Task` | Enqueue one task and return a `Task` straight away. `queue` is a job group name or a list of them. `fn` is a callable, or a method name (`str`) for actor workers. |
+| `submit(queue, fn, *args, task_parents=None, task_priority=0.0, **kwargs) -> Task` | Enqueue one task and return a `Task` straight away. `queue` is a job group name or a list of them. `fn` is a callable, or a method name (`str`) for actor workers. `task_parents` is a list of the `Task`s this one waits on. `task_priority` orders the queue. |
 | [`mapreduce(desc, queue, ...)`](mapreduce.md) | Map an iterable across the pool and fold the results into one value. Blocks. `init` must be the identity of `reduce_fn`. |
 | `as_completed(tasks, desc, unit="task", raise_on_error=...)` | Yield tasks as their results arrive. `desc` and `unit` label the progress `swtop` draws. Raises `RuntimeError` rather than blocking forever on a task that can never finish. |
 | `wait(tasks, desc, unit="task", raise_on_error=...)` | Same, but discards the iterator. Blocks until all are done. |
@@ -197,10 +197,14 @@ For what to do about each, see
 ## `Task`
 
 `submit` returns a `Task` with `task_id`, `queue`, `priority`, `function`,
-`input`, and `output`.
+`input`, `output`, and `parent_task_ids`.
 `output` is a sentinel until the task completes.
 After that it holds the return value,
 or a `RemoteExecutionError(error, error_id)` if the worker raised.
+If a parent task failed, the task does not run,
+and `output` is a `RemoteExecutionError` with an empty `error_id`.
+Its `error` is `Dependency failed (task_id=<id>)`,
+and `<id>` is the task that failed.
 That class lives in `slurm_workflows.utils`,
 and imports from the package root like everything else.
 `wait` and `as_completed` are what fill it in.
@@ -218,14 +222,25 @@ which in practice means [`swtop`](swtop.md).
 `ExploreSpaceSobolQMC` and `OptimizeSpaceBotorch` call it themselves
 for every task they submit.
 
-`submit` assigns `priority`, and `priority` orders the queue.
-`ds-service` dispatches the highest value first,
-and `submit` sets it from a negated wall clock,
-so one queue serves its tasks **oldest first**.
-The `Task` records it for inspection.
+`task_priority` sets `priority`, and `priority` orders the queue.
+`ds-service` dispatches the highest value first.
+Tasks of equal priority on one queue are served **oldest first**.
+The default is `0.0`,
+so tasks submitted without a priority run in submission order.
+The `Task` records the priority for inspection.
 A change there has no effect,
 because `submit` sent the value the server orders by
 when it enqueued the task.
+
+`task_parents` makes a task wait for other tasks.
+The server dispatches the task only after every parent finishes.
+If a parent fails, the task fails too, and if a parent is canceled,
+the task is canceled.
+Each parent must already be on the server,
+so you submit the parents first.
+If the server does not know a parent, `submit` raises `KeyError`.
+`fn` cannot take keyword arguments named `task_parents` or `task_priority`,
+because `submit` keeps them.
 
 ## `RaiseOnError`
 
@@ -233,7 +248,8 @@ What `as_completed` and `wait` do about a task that fails.
 A failure is any of these:
 
 - A task whose worker raised. Its `output` is a `RemoteExecutionError`.
-- A task canceled on the server.
+- A task whose parent task failed. Its `output` is a `RemoteExecutionError`.
+- A task canceled on the server, or one whose parent task was canceled.
 - A task the server does not know.
 - A pending task whose queues have no pilot job left to run them.
 

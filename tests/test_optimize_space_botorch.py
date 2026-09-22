@@ -101,10 +101,14 @@ class LocalExecutor:
         self.waits: list[str | None] = []
         self.batch_sizes: list[int] = []
         self.names: list[str] = []
+        self.priorities: list[float] = []
 
-    def submit(self, queue, fn, *args, **kwargs) -> Task:
+    def submit(
+        self, queue, fn, *args, task_parents=None, task_priority=0.0, **kwargs
+    ) -> Task:
         self.queues.append(queue)
         self.kwargs.append(dict(kwargs))
+        self.priorities.append(task_priority)
         try:
             output = fn(*args, **kwargs)
         except Exception as e:
@@ -112,7 +116,7 @@ class LocalExecutor:
         return Task(
             task_id=str(len(self.queues)),
             queue=[queue] if isinstance(queue, str) else list(queue),
-            priority=0.0,
+            priority=task_priority,
             function=fn,
             input=(args, kwargs),
             output=output,
@@ -268,6 +272,7 @@ def make_study(
         "raw_samples",
         "mc_samples",
         "acqf_timeout_s",
+        "priority",
     ):
         if field in extra:
             settings[field] = extra.pop(field)
@@ -885,6 +890,21 @@ class TestOptimizerQueue:
         )
         opt.run()
         assert executor.queues == [["a", "b"], "cpu"]
+
+    def test_tasks_take_the_default_priority(self, tmp_path):
+        opt, executor = make_opt(tmp_path, explore=2, rounds=1, parallel=2)
+        opt.run()
+
+        assert executor.priorities == [0.0] * 3
+
+    def test_the_fit_and_the_evaluations_take_the_study_priority(self, tmp_path):
+        opt, executor = make_opt(
+            tmp_path, explore=2, rounds=2, parallel=2, priority=2.5
+        )
+        opt.run()
+
+        assert executor.queues == ["opt", "cpu", "cpu"] * 2
+        assert executor.priorities == [2.5] * 6
 
     def test_one_queue_may_serve_both(self, tmp_path):
         """Nothing deadlocks: the two kinds are never in flight together."""

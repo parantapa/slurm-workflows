@@ -20,6 +20,7 @@ from datetime import datetime
 import pytest
 import cloudpickle
 from typeguard import TypeCheckError
+from ds_service_client import TaskState
 
 from slurm_workflows import slurm_pilot_executor as spe
 from slurm_workflows.slurm_pilot_executor import (
@@ -61,11 +62,13 @@ def drain(ds_client, queue: str, count: int) -> list[str]:
 
 
 def fail_one(ds_client, queue: str, error_id: str = "ERROR_test") -> str:
-    """Complete one task the way a worker reports a remote exception."""
+    """Fail one task the way a worker reports a remote exception."""
 
     task = ds_client.task_get("test-worker", queue)
     output = RemoteExecutionError(error="boom", error_id=error_id)
-    ds_client.task_done(task.task_id, "test-worker", cloudpickle.dumps(output))
+    ds_client.task_done(
+        task.task_id, "test-worker", cloudpickle.dumps(output), failed=True
+    )
     return task.task_id
 
 
@@ -632,25 +635,114 @@ class TestSubmit:
         assert cloudpickle.loads(ds_client.task_get_output(drained)) == 42
 
     def test_submission_order_is_dispatch_order(self, executor, ds_client):
-        """ds-service serves tasks oldest first.
-
-        ds-service dispatches the highest priority first.
-        For this reason,
-        a priority that rises with time hands out the most recently submitted task,
-        and leaves the oldest until last.
-        """
+        """ds-service serves tasks of equal priority on one queue oldest first."""
         tasks = [executor.submit("cpu", square, i) for i in range(6)]
 
         served = drain(ds_client, "cpu", 6)
 
         assert served == [t.task_id for t in tasks]
 
-    def test_an_earlier_task_outranks_a_later_one(self, executor):
-        """The same ordering, read off the priorities themselves."""
+    def test_the_default_priority_is_zero(self, executor):
+        task = executor.submit("cpu", square, 1)
+
+        assert task.priority == 0.0
+
+    def test_a_higher_priority_is_served_first(self, executor, ds_client):
+        low = executor.submit("cpu", square, 1)
+        high = executor.submit("cpu", square, 2, task_priority=5.0)
+        mid = executor.submit("cpu", square, 3, task_priority=1.0)
+
+        served = drain(ds_client, "cpu", 3)
+
+        assert high.priority == 5.0
+        assert served == [high.task_id, mid.task_id, low.task_id]
+
+    def test_task_keywords_do_not_reach_the_function(self, executor, ds_client):
+        parent = executor.submit("cpu", square, 1)
+        executor.submit(
+            "cpu", square, 2, task_parents=[parent], task_priority=1.0, extra=3
+        )
+
+        drain(ds_client, "cpu", 1)
+        fetched = ds_client.task_get("test-worker", "cpu")
+
+        assert cloudpickle.loads(fetched.input) == ((2,), {"extra": 3})
+
+    def test_rejects_a_non_task_parent(self, executor):
+        with pytest.raises(TypeCheckError):
+            executor.submit("cpu", square, 1, task_parents=["a-task-id"])
+
+
+class TestTaskParents:
+    @pytest.fixture(autouse=True)
+    def _pilot_jobs(self, pilot_jobs):
+        pilot_jobs("cpu")
+
+    def test_a_task_has_no_parents_by_default(self, executor):
+        task = executor.submit("cpu", square, 1)
+
+        assert task.parent_task_ids == []
+
+    def test_the_parent_ids_are_recorded(self, executor):
         first = executor.submit("cpu", square, 1)
         second = executor.submit("cpu", square, 2)
+        child = executor.submit("cpu", square, 3, task_parents=[first, second])
 
-        assert first.priority > second.priority
+        assert child.parent_task_ids == [first.task_id, second.task_id]
+
+    def test_a_child_waits_for_its_parent(self, executor, ds_client):
+        parent = executor.submit("cpu", square, 2)
+        # A higher priority would win, if the child were Ready.
+        child = executor.submit(
+            "cpu", square, 3, task_parents=[parent], task_priority=10.0
+        )
+
+        assert ds_client.task_get_status(child.task_id) == TaskState.Waiting
+        assert drain(ds_client, "cpu", 1) == [parent.task_id]
+        assert ds_client.task_get_status(child.task_id) == TaskState.Ready
+        assert drain(ds_client, "cpu", 1) == [child.task_id]
+
+        executor.wait([parent, child], desc="test")
+        assert (parent.output, child.output) == (4, 9)
+
+    def test_an_unknown_parent_raises(self, executor):
+        with pytest.raises(KeyError):
+            executor.submit("cpu", square, 1, task_parents=[ghost_task()])
+
+    def test_a_failed_parent_fails_the_child(self, executor, ds_client):
+        parent = executor.submit("cpu", square, 1)
+        child = executor.submit("cpu", square, 2, task_parents=[parent])
+        fail_one(ds_client, "cpu")
+
+        executor.wait(
+            [parent, child], raise_on_error=RaiseOnError.RAISE_NEVER, desc="test"
+        )
+
+        assert isinstance(child.output, RemoteExecutionError)
+        assert child.output.error == f"Dependency failed (task_id={parent.task_id})"
+        assert child.output.error_id == ""
+
+    def test_a_failed_parent_raises_for_the_child(self, executor, ds_client):
+        parent = executor.submit("cpu", square, 1)
+        child = executor.submit("cpu", square, 2, task_parents=[parent])
+        fail_one(ds_client, "cpu")
+        list(
+            executor.as_completed(
+                [parent], desc="test", raise_on_error=RaiseOnError.RAISE_NEVER
+            )
+        )
+
+        with pytest.raises(RuntimeError, match=f"{child.task_id} did not run"):
+            executor.wait([child], desc="test")
+
+    def test_a_canceled_parent_cancels_the_child(self, executor, ds_client, time_limit):
+        parent = executor.submit("cpu", square, 1)
+        child = executor.submit("cpu", square, 2, task_parents=[parent])
+        assert ds_client.task_cancel(parent.task_id)
+
+        with time_limit(10, "wait never terminated for a canceled parent"):
+            with pytest.raises(RuntimeError, match="was canceled"):
+                executor.wait([child], desc="test")
 
 
 class TestTaskName:

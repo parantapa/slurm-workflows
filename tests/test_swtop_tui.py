@@ -68,7 +68,7 @@ def snapshot(**kwargs) -> Snapshot:
     filled = Snapshot(
         address="host:1",
         when=datetime.now(),
-        counts={"ready": 1, "running": 2, "complete": 3, "canceled": 0},
+        counts={"ready": 1, "running": 2, "finished": 3, "canceled": 0},
         progress=ProgressInfo("p-1", "explore", "point", 8, 2),
         worker_jobs=[
             PilotJobInfo("run.job.cpu.0", "cpu", "42", "2026-09-07T11:04:57-04:00")

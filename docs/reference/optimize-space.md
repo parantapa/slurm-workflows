@@ -115,6 +115,7 @@ The exploration study's fields, minus the design ones, plus the search:
 | `objective_key` | `"objective"` | Which entry of the result is minimized. |
 | `num_restarts`, `raw_samples`, `mc_samples`, `acqf_timeout_s` | `10`, `128`, `128`, `10.0` | Tuning for the propose step. |
 | `extra_objective_kwargs` | `{}` | Extra arguments passed to the objective and not varied. |
+| `priority` | `0.0` | The priority of every task the study submits, fits and evaluations alike. The highest priority runs first. |
 
 ## Methods
 

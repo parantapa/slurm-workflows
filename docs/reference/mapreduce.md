@@ -150,7 +150,7 @@ so `task_get_worker_id` on an item names the worker that folded it.
 
 Each item becomes a task on it, `<queue>.item.<i>`.
 That task holds the pickled item and no function.
-A task marks its item complete once it folds the value in,
+A task marks its item finished once it folds the value in,
 and the output it records is empty.
 The value travels home inside the task that computed it.
 `ds-service` has no way to delete a task,

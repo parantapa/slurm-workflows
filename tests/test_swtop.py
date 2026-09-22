@@ -118,9 +118,11 @@ class TestCollectTasks:
         snapshot = collector.snapshot()
 
         assert snapshot.counts == {
+            "waiting": 0,
             "ready": 0,
             "running": 0,
-            "complete": 0,
+            "finished": 0,
+            "failed": 0,
             "canceled": 0,
         }
         assert snapshot.workers == []
@@ -201,7 +203,7 @@ class TestCollectTasks:
 
         states = [(t.name, t.state) for t in collector.snapshot().tasks]
 
-        assert states == [("a-running", "Running"), ("b-ready", "Complete")]
+        assert states == [("a-running", "Running"), ("b-ready", "Finished")]
 
 
 class TestCollectProgress:

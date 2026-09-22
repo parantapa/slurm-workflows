@@ -99,6 +99,9 @@ class OptimizationStudy:
 
     extra_objective_kwargs: extra keyword arguments for the objective.
         Must not shadow a parameter of the space.
+    priority: the priority of every task this study submits,
+        the fits as well as the evaluations.
+        The server dispatches the highest priority first.
     """
 
     name: str
@@ -117,6 +120,7 @@ class OptimizationStudy:
     mc_samples: int = 128
     acqf_timeout_s: float = 10.0
     extra_objective_kwargs: dict[str, Any] = field(default_factory=dict)
+    priority: float = 0.0
 
 
 @dataclass
@@ -515,6 +519,7 @@ class OptimizeSpaceBotorch:
                 raw_samples=study.raw_samples,
                 mc_samples=study.mc_samples,
                 timeout_s=study.acqf_timeout_s,
+                task_priority=study.priority,
             )
             self.executor.set_task_name(submission, f"{study.name}-fit-{round_number}")
             submissions.append((study.name, submission))
@@ -599,6 +604,7 @@ class OptimizeSpaceBotorch:
                 submission = self.executor.submit(
                     study.objective_queue,
                     study.objective,
+                    task_priority=study.priority,
                     **params,
                     **study.extra_objective_kwargs,
                 )

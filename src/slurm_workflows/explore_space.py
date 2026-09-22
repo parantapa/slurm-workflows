@@ -49,6 +49,8 @@ class ExplorationStudy:
         The exploration records every other key and does not rank it.
     extra_objective_kwargs: extra keyword arguments for the objective.
         Must not shadow a parameter of the space.
+    priority: the priority of every task this study submits.
+        The server dispatches the highest priority first.
     """
 
     name: str
@@ -59,6 +61,7 @@ class ExplorationStudy:
     seed: int | None = None
     objective_key: str = "objective"
     extra_objective_kwargs: dict[str, Any] = field(default_factory=dict)
+    priority: float = 0.0
 
 
 @dataclass
@@ -254,6 +257,7 @@ class ExploreSpaceSobolQMC:
                 submission = self.executor.submit(
                     study.objective_queue,
                     study.objective,
+                    task_priority=study.priority,
                     **params,
                     **study.extra_objective_kwargs,
                 )

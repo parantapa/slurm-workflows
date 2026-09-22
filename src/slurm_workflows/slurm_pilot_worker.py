@@ -233,7 +233,8 @@ class PilotWorker:
         a worker lives until its Slurm job ends.
         The worker catches every `Exception` a task raises,
         logs it under a generated `error_id`,
-        and returns it to the caller as a `RemoteExecutionError`.
+        and returns it to the caller as a `RemoteExecutionError`
+        on a task it marks Failed.
         As a result, one bad task cannot end the worker.
         """
         self.logger.info("Starting worker: %s" % self.worker_id)
@@ -274,7 +275,10 @@ class PilotWorker:
 
                     retval = RemoteExecutionError(error=str(e), error_id=eid)
                     output = cloudpickle.dumps(retval, protocol=pickle.HIGHEST_PROTOCOL)
-                    self.client.task_done(task.task_id, self.worker_id, output)
+                    # Failed, not Finished, so every task waiting on this one fails too.
+                    self.client.task_done(
+                        task.task_id, self.worker_id, output, failed=True
+                    )
             except Exception:
                 self.logger.exception("Unexpected exception")
 

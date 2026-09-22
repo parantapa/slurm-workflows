@@ -40,7 +40,7 @@ A summary line of task counts, the progress of the wait the driver is in,
 and then five blocks:
 
 ```
-tasks  ready 118  running 40  complete 242  canceled 0  total 400
+tasks  waiting 0  ready 118  running 40  finished 240  failed 2  canceled 0  total 400
 
 explore  [###############---------]  242/400 point  60%  working
 
@@ -69,8 +69,8 @@ eval-2   my-run.task.12  Ready
 -        my-run.task.13  Ready
 ```
 
-`swtop` lists tasks running first, then ready,
-then complete, canceled and undefined,
+`swtop` lists tasks running first, then ready and waiting,
+then failed, finished, canceled and undefined,
 and named before unnamed within each state.
 
 The blocks come from different places:
@@ -169,7 +169,7 @@ A header line names the server and the time of the reading:
 ```
 swtop  10.0.0.1:5051  2026-01-30 11:04:57
 
-tasks  ready 118  running 40  complete 242  canceled 0  total 400
+tasks  waiting 0  ready 118  running 40  finished 240  failed 2  canceled 0  total 400
 
 explore  [###############---------]  242/400 point  60%  working
 ...

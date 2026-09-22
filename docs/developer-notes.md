@@ -229,6 +229,14 @@ A state that falls through it therefore waits forever,
 and the loop never reports that the task cannot finish.
 ds-service later added `Canceled`, and that new state exposed this.
 
+**A worker marks a task that raised as `Failed`.**
+It calls `task_done` with `failed=True`,
+so the server fails every task that waits on it.
+A task that the server failed for this reason never ran.
+Its output is the plain text `Dependency failed (task_id=...)`,
+not a cloudpickle,
+and the poll loop checks for that prefix before it unpickles.
+
 **`task_done` is per worker.**
 The worker passes its own `worker_id`,
 and the server refuses the call from any other worker.
@@ -255,14 +263,13 @@ refuse a queue served by jobs this executor did not start.
 Task ids and worker ids are still executor-prefixed,
 because a *cluster* holds many runs even when a server holds one.
 
-**`submit` sets `priority` to a *negated* wall clock.**
+**`submit` defaults `priority` to `0.0`.**
 ds-service dispatches the highest priority first,
-so a timestamp that rises with time serves the newest task first
+and tasks of equal priority on one queue oldest first.
+The default therefore keeps submission order.
+Item tasks and map tasks of `mapreduce` also use `0.0`.
+A priority taken from a rising clock serves the newest task first
 and leaves the oldest until last.
-The result is a queue that runs backwards and never says so.
-A wall clock rather than `perf_counter` costs nothing
-and keeps two processes' tasks comparable.
-The one-executor-per-server invariant says two processes never share a server.
 But a stale `Task` from a restarted driver still produces that case.
 
 **The payload decides how the worker resolves a task's function.**
@@ -424,7 +431,7 @@ and the wait raises.
 
 **A map task marks its item task done after it folds the value in, not before,
 and it records an empty output.**
-`Complete` on the item queue therefore means "counted",
+`Finished` on the item queue therefore means "counted",
 which is what a reader of the item queue expects.
 The mapped value travels home inside the map task that computed it.
 A second copy on the item task
