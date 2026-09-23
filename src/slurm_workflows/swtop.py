@@ -368,7 +368,7 @@ class Collector:
             TaskInfo(
                 task_id=task_id,
                 name=self._task_names.get(task_id, UNNAMED),
-                state=TaskState.Name(state),
+                state=TaskState(state).name,
             )
             for task_id, state in zip(task_ids, states)
         ]
