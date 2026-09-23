@@ -21,7 +21,8 @@ as soon as `sbatch` returns.
 Each worker writes `worker_info:<worker-id>`
 when it starts.
 
-Nothing merges the two, and that is the point.
+Nothing merges the two,
+and that is the point.
 A pilot job exists from the moment the executor submits it.
 But nobody knows the node it will land on or the pids it will run
 until Slurm starts it.
@@ -82,7 +83,8 @@ has the fields.
 
 The workers sample the node and job readings themselves,
 so the cluster runs no extra process.
-But a node runs one worker per Slurm task, and a pilot job spans many nodes.
+But a node runs one worker per Slurm task,
+and a pilot job spans many nodes.
 Most workers must therefore not sample,
 or every reading arrives forty times over.
 

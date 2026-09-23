@@ -69,9 +69,9 @@ The workers elect them with the `host_monitor:<hostname>`
 and `slurm_job_monitor:<job-id>` counters.
 [`swtop`](swtop.md) displays the result.
 
-Why a run publishes in these two halves rather than one is in
-[The trail a run leaves](../explanation/the-trail-a-run-leaves.md).
-That page also says why nothing updates a key after the first write.
+Why a run publishes in these two halves rather than one
+is in [The trail a run leaves](../explanation/the-trail-a-run-leaves.md).
+That page also says why nothing updates these two kinds of key after the first write.
 
 ## Watching a wait
 
@@ -105,8 +105,8 @@ and the series holds the history of each.
 which the generated batch script invokes on the compute node.
 It takes six required options: the server address, the pilot job's name,
 its job group, its actor class name, the work dir and the worker `sys.path`.
-It is what the `worker_exe` argument of
-[`define_job_group`](executor.md#define_job_group-options) names.
+It is what the `worker_exe` argument
+of [`define_job_group`](executor.md#define_job_group-options) names.
 A driver never calls it.
 A wrapper that sets an environment or a profiler around it
 is what `worker_exe` is for.
@@ -150,8 +150,8 @@ Which of the two holds a worker's log depends on the job group's definition:
     and still gets four per-Slurm-task files.
 
     The batch file records which way a job went.
-    It opens with the Slurm task count the job decided on
-    (`Num Slurm tasks: 4`), says so when it redirects,
+    It opens with the Slurm task count the job decided on (`Num Slurm tasks: 4`),
+    says so when it redirects,
     and traces the `srun` command it ran.
 - **`is_batch_worker=True`** runs one worker directly on the batch host,
     with no `srun` and so no per-Slurm-task file.

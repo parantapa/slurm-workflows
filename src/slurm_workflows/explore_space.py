@@ -40,11 +40,12 @@ class ExplorationStudy:
     name: keys its results, and must be unique within an exploration.
     objective: its argument names must match the keys of `space`,
         and it returns a mapping carrying `objective_key`.
+    objective_queue: the queue, or queues, every evaluation goes to.
     num_exploration_points: number of points to sample.
         The exploration truncates it to the nearest lower power of two.
         When None, the count comes from the exploration.
     seed: seed for this study's design.
-        When None, the exploration draws one from `os.urandom` and prints it.
+        When None, the exploration draws a random one and prints it.
     objective_key: the key of the result to rank points by, lower first.
         The exploration records every other key and does not rank it.
     extra_objective_kwargs: extra keyword arguments for the objective.
@@ -126,7 +127,8 @@ class ExplorationResult:
     """What one study measured, in submission order.
 
     The four lists are index-aligned.
-    The exploration evaluates `points[i]`, gets `outputs[i]` back,
+    The exploration evaluates `points[i]`,
+    gets the objective's whole result back as `outputs[i]`,
     ranks the point by `values[i]`,
     and records `unit_points[i]` as its place in the unit cube.
     `unit_points` is where the objective ran, after any rounding.
@@ -134,13 +136,15 @@ class ExplorationResult:
 
     points: list[dict[str, Any]] = field(default_factory=list)
     values: list[float] = field(default_factory=list)
-    # The objective's whole result, not just the number ranked from it.
     outputs: list[dict[str, Any]] = field(default_factory=list)
     unit_points: list[list[float]] = field(default_factory=list)
 
 
 class ExploreSpaceSobolQMC:
-    """Sobol' QMC explorations of one or more search spaces, run together."""
+    """Sobol' QMC explorations of one or more search spaces, run together.
+
+    A method that takes a study name raises `KeyError` for a name no study has.
+    """
 
     def __init__(
         self,
@@ -150,12 +154,11 @@ class ExploreSpaceSobolQMC:
     ) -> None:
         """Validate every study and fill in what it left to the exploration.
 
-        The studies all run together,
-        so a small exploration does not wait on a large one.
         `num_exploration_points` is the count for studies that do not carry their own.
-        A study with neither raises `ValueError`.
-        The exploration validates every study now, not when it runs,
-        and raises `ValueError` for one that fails.
+        The exploration validates every study now, not when it runs.
+        It raises `ValueError` for an empty list, for a repeated study name,
+        and for a study that fails validation,
+        such as one with no point count from either source.
         `self.studies` holds copies with the point count and seed filled in.
         The caller's own objects stay as they are.
         """
@@ -168,6 +171,7 @@ class ExploreSpaceSobolQMC:
             raise ValueError(f"exploration study names must be unique: {duplicates}")
 
         self.executor = executor
+        # Validate here, so a bad study fails before anything reaches the cluster.
         self.studies = [
             self._resolve(study, num_exploration_points) for study in studies
         ]
@@ -236,7 +240,8 @@ class ExploreSpaceSobolQMC:
         Reproducible: the same seed redraws the same design.
         """
         study = self._study(name)
-        assert study.num_exploration_points is not None  # _resolve fills it in
+        # `_resolve` fills in both.
+        assert study.num_exploration_points is not None
         assert study.seed is not None
 
         # `random_base2`: `_resolve` already floored the count to a power of two,
@@ -249,12 +254,16 @@ class ExploreSpaceSobolQMC:
         """Evaluate every study's design, all of them in one batch.
 
         Blocks until every point of every study is back.
-        A second call re-evaluates the same designs.
+        A second call re-evaluates the same designs,
+        and appends to the results the first call recorded.
         The exploration names each point `<study>-explore-<index>` on the server.
         It prints each study's best point when done.
         If any evaluation fails,
         it records every result that came back, then raises `RuntimeError`.
         """
+        # Every submit comes before the one wait,
+        # so the pool does not sit idle while one study waits out its last points.
+        # See the developer notes, Sobol' exploration.
         submitted: list[tuple[ExplorationStudy, dict[str, Any], Task]] = []
         for study in self.studies:
             design = self.design(study.name)
@@ -275,7 +284,8 @@ class ExploreSpaceSobolQMC:
         try:
             self._wait(submitted)
         except RuntimeError:
-            # Keep what did come back before reporting the failure.
+            # Keep what came back before re-raising.
+            # See the developer notes, Task flow.
             self._record_returned(submitted)
             raise
 
@@ -304,7 +314,8 @@ class ExploreSpaceSobolQMC:
                     if isinstance(submission.output, RemoteExecutionError)
                 }
             )
-            # Empty when nothing came back at all, for example after a canceled task.
+            # Empty when no failure came back as an output,
+            # for example when every failure is a canceled task.
             # Then the cause is in the exception this chains to.
             named = f" of {failed}" if failed else ""
             raise RuntimeError(
@@ -314,7 +325,7 @@ class ExploreSpaceSobolQMC:
     def _record_returned(
         self, submitted: list[tuple[ExplorationStudy, dict[str, Any], Task]]
     ) -> None:
-        """Record every evaluation that came back. For the failure path only."""
+        """Record every evaluation that came back, on the failure path of `run`."""
         for study, params, submission in submitted:
             try:
                 self._record(study, params, submission)
@@ -352,6 +363,7 @@ class ExploreSpaceSobolQMC:
 
     def _best_index(self, name: str) -> int:
         """Index of the lowest objective value one study saw."""
+        # Through `_study`, so an unknown name raises its `KeyError`.
         values = self.results[self._study(name).name].values
         if not values:
             raise RuntimeError(f"{name}: nothing has been evaluated yet")

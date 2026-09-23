@@ -173,10 +173,8 @@ Enqueueing is one RPC per item, from the driver, before any work starts,
 and there is no batched form of it.
 The whole iterable is also held in memory twice,
 once on the driver and once on the server.
-Both say the same thing:
-an item must carry enough work to be worth a round trip.
-A chunk, several small units combined into one item,
-amortizes that round trip.
+How to size an item against that cost
+is in [How to fold results across workers](../how-to-guides/fold-results-across-workers.md#chunk-the-items-when-each-one-is-small).
 
 ## What it refuses
 

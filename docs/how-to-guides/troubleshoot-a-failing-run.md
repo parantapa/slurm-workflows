@@ -97,6 +97,7 @@ because you never called `scale_jobs` for those queues.
 The queues can belong to the task itself,
 or to a parent task that is not finished yet.
 Either you never scaled the job group, or the queue name is a typo.
+If you never scaled it, call `scale_jobs` for it before you wait.
 The executor does not check the queue name at `submit` time,
 so compare it against your `define_job_group` names.
 
@@ -107,7 +108,10 @@ You scaled the job group, but its pilot jobs then left the cluster.
 The cause is the time limit, a cancellation,
 or an exit before the queue drained.
 The worker's `.out` file says which.
-Scale the job group back up.
+Scale the job group down to 0, then back up.
+`scale_jobs` counts every pilot job it submitted,
+the ones that left the cluster included,
+so a call with the old count submits nothing.
 Then submit the tasks again.
 
 ## `RuntimeError: Task ... was canceled on the task queue server`
@@ -126,7 +130,8 @@ Two cases produce this error.
 The first is a `Task` you built by hand.
 The second is a `Task` from a server that restarted since then.
 
-Either way the output is gone, because the map died with the server.
+Either way the server holds no such task,
+so there is no task output to read.
 Submit the work again through the executor that owns the current run.
 A `Task` from an earlier run does not work.
 
@@ -137,7 +142,10 @@ The worker script runs it,
 so the traceback lands in the worker's `<job-name>-<jobid>-<rank>.out` file.
 Open that file rather than the batch file,
 fix the script,
-then scale the job group back up.
+then start the run again.
+A second `define_job_group` with a changed `setup_script`
+raises `AssertionError`,
+so the fix cannot reach a job group the executor already holds.
 
 ## `ModuleNotFoundError` on a worker
 
@@ -160,6 +168,9 @@ Three causes leave the workers block empty
 while the pilot jobs block holds entries.
 The pilot jobs are still pending, their setup scripts did not finish,
 or their workers cannot reach the server.
+For the last two, go to
+[Pilot jobs start and exit within seconds](#pilot-jobs-start-and-exit-within-seconds)
+and [Tasks never complete, but the pilot jobs run](#tasks-never-complete-but-the-pilot-jobs-run).
 
 ## Related
 

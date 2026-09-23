@@ -128,9 +128,9 @@ It carries every point measured so far, so a fit costs more every round.
 A second call to `run()` starts another set of rounds.
 The new rounds model everything the earlier calls measured.
 
-Why a round chooses the whole batch at once, and why the fit runs on a worker,
-is in
-[Batch Bayesian optimization](../explanation/batch-bayesian-optimization.md).
+Why a round chooses the whole batch at once,
+and why the fit runs on a worker,
+is in [Batch Bayesian optimization](../explanation/batch-bayesian-optimization.md).
 
 ## When it stops
 
@@ -143,7 +143,8 @@ and an improving round resets the streak.
 A stalled round below it still counts toward `patience`,
 but it cannot be the round that ends the search.
 The earliest stop is therefore `max(min_search_rounds, patience)` rounds,
-and a search that never improves stops there exactly.
+and a search that never improves stops there exactly,
+unless `max_search_rounds` is lower and stops it first.
 `max_search_rounds` stops the search even while it still improves.
 Each stalled round reports how far it has to go,
 under whichever bound is further away.

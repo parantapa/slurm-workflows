@@ -30,7 +30,7 @@ Omit `port` to get an arbitrary free one.
 
 ## Choose an interface the compute nodes can reach
 
-The server must be reachable from the compute nodes.
+Name an `interface` that the compute nodes can reach.
 `DsServiceServer` binds it to the IPv4 address of the `interface` you name.
 The example uses `ib0`, the Infiniband interface of the node the driver runs on.
 That node is a login node, or the compute node of the driver's own Slurm job.

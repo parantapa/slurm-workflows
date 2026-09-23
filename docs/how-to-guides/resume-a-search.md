@@ -49,23 +49,22 @@ A third run passes three files, and so on.
 
 ## Keep the study name the same
 
+Give the `OptimizationStudy` the `name`
+that the exploration and the earlier searches ran under.
 The optimizer models a study on the observations the files hold under its name.
-So the `name` on the `OptimizationStudy` must be the name
-the exploration and the earlier searches ran under.
 A study with nothing under its name in any file is an error,
 not a search with no model.
 
 ## Keep the space the same
 
-The constructor re-checks every saved point against the space the study
-declares, and three kinds of mismatch raise `RuntimeError`:
+The constructor re-checks every saved point against the space the study declares.
+A mismatch raises `RuntimeError`.
 
-- A point whose parameters do not match the space.
-- A point outside a range the study now declares.
-- A point a log range cannot place, at or below zero.
-
-You can widen a range.
-Do not narrow one past a point you already measured.
+- Keep the parameters of the space the same as those of the saved points.
+- You can widen a range.
+    Do not narrow one past a point you already measured.
+- Do not make a range a log range
+    if a saved point in it is at or below zero.
 
 ## Related
 

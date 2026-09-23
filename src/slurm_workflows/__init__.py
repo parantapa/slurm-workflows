@@ -1,6 +1,7 @@
 """HPC workflow helpers for Slurm clusters.
 
-Every public name of this package except `NoOutput` is importable from here.
+The names in `__all__` are importable from here.
+`NoOutput` is not, and imports from `slurm_pilot_executor`.
 `OptimizeSpaceBotorch` and `OptimizationStudy` resolve on first use,
 so `import slurm_workflows` works without botorch installed.
 """
@@ -17,6 +18,8 @@ from .explore_space import (
 )
 from .utils import RemoteExecutionError
 
+# Never imported at runtime, since botorch is optional.
+# See the developer notes, Batch Bayesian optimization.
 if TYPE_CHECKING:
     from .optimize_space_botorch import OptimizationStudy, OptimizeSpaceBotorch
 

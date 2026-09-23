@@ -40,7 +40,9 @@ Unlike the two pi tutorials, this one needs botorch in two places:
 - On the login node, which imports the optimizer.
 - In the environment of the workers that run the model fit.
 
-The `botorch` extra of the setup instructions covers both.
+So when we follow the setup instructions,
+we install the `botorch` extra.
+It covers both.
 
 ## What the search minimizes
 
@@ -235,6 +237,10 @@ So [`swtop`](../how-to-guides/watch-a-run-with-swtop.md) shows
 as the run works through them.
 We start it in another shell now,
 and watch a round go by.
+The program does not print the server address `swtop` needs.
+The worker script `himmelblau.job.eval.0.sh`
+in the work directory the executor prints
+carries it after `--server-address`.
 
 The run takes a while.
 The rest of this tutorial reads the program while it works.

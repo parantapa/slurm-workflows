@@ -62,7 +62,7 @@ slurm jobs (1)
 JOB      MEMORY  CPU
 1846231  148.2G  39.4 cores
 
-tasks (3)
+tasks (400)
 NAME     TASK ID         STATE    WORKER
 train-7  my-run.task.7   Running  my-run.job.cpu.0
 eval-2   my-run.task.12  Ready
@@ -123,6 +123,8 @@ The two kinds of task in a search round get
 `<study>-fit-<round>` and `<study>-search-<round>-<index>`.
 They zero pad the index to the width of the batch,
 so the names sort in submission order.
+[`mapreduce`](mapreduce.md) names each map task `<item-queue>.task.<i>`,
+and leaves its item tasks unnamed.
 
 ## What the hosts and jobs blocks measure
 
@@ -162,8 +164,9 @@ That is what a node without that path looks like.
 A path that is not a mount point of its own
 shows the filesystem that holds it.
 
-How the workers elect the sampling worker, and why nothing re-elects it, is in
-[The trail a run leaves](../explanation/the-trail-a-run-leaves.md).
+How the workers elect the sampling worker,
+and why nothing re-elects it,
+is in [The trail a run leaves](../explanation/the-trail-a-run-leaves.md).
 
 ## Frames of text instead of a UI
 

@@ -21,6 +21,9 @@ from typing import Any, Callable, Iterable, Mapping
 import torch
 from botorch.models import SingleTaskGP
 from botorch.models.transforms import Standardize
+
+# The tests monkeypatch the next three names as module globals.
+# See the developer notes, Batch Bayesian optimization.
 from botorch.fit import fit_gpytorch_mll
 from botorch.optim import optimize_acqf
 from botorch.acquisition import qLogNoisyExpectedImprovement
@@ -63,6 +66,7 @@ class OptimizationStudy:
     objective: the search minimizes it.
         Its argument names must match the keys of `space`,
         and it returns a mapping carrying `objective_key`.
+    objective_queue: where the evaluations run, one task per point.
     optimizer_queue: where the model fit and the acquisition optimization run,
         one task per round.
         Its workers need botorch.
@@ -211,6 +215,12 @@ class OptimizeSpaceBotorch:
     The search rounds integer and categorical parameters
     from a continuous candidate.
     So a mostly-discrete space re-evaluates points.
+
+    `studies` holds copies of the studies with `search_parallelism` filled in.
+    `prior` holds what the files held,
+    and `results` what this instance evaluated,
+    both keyed by study name.
+    A method that takes a study name raises `KeyError` for a name no study has.
     """
 
     def __init__(
@@ -236,6 +246,7 @@ class OptimizeSpaceBotorch:
             A study with neither raises `ValueError`.
 
         The search validates every study now, not when it runs.
+        An invalid study, an empty list or a repeated name raises `ValueError`.
         """
         if not studies:
             raise ValueError("no optimization studies given")
@@ -248,10 +259,7 @@ class OptimizeSpaceBotorch:
         self.executor = executor
         self.studies = [self._resolve(study, search_parallelism) for study in studies]
 
-        # What the files hold, keyed by study name.
-        # `save` does not write it back.
         self.prior: dict[str, OptimizationResult] = {}
-        # What this instance evaluated, which is what `save` writes.
         self.results: dict[str, OptimizationResult] = {}
 
         loaded = load_results(files)
@@ -403,7 +411,10 @@ class OptimizeSpaceBotorch:
         return space_dim(self._study(name).space)
 
     def observations(self, name: str) -> tuple[list[list[float]], list[float]]:
-        """Everything a study's model uses: the files, then this run."""
+        """Everything a study's model uses: the files, then this run.
+
+        The pair is `(unit_points, values)`, index-aligned.
+        """
         # For its `KeyError`, which names the studies there are.
         self._study(name)
         prior, results = self.prior[name], self.results[name]
@@ -426,9 +437,10 @@ class OptimizeSpaceBotorch:
         A second call runs another set of rounds for every study,
         on everything measured so far.
         It counts rounds and stalled rounds from the start again.
+        It prints each study's progress and why it stopped to stdout.
 
-        The search names the two tasks of a round
-        `<study>-fit-<round>` and `<study>-search-<round>-<index>`
+        The search names a study's fit in a round `<study>-fit-<round>`
+        and each of its evaluations `<study>-search-<round>-<index>`
         on the server.
         It raises `RuntimeError` if a fit fails or proposes a malformed batch,
         or if an evaluation fails.
@@ -472,8 +484,8 @@ class OptimizeSpaceBotorch:
 
                 stalled[study.name] += 1
 
-                # Whichever bound is further away: the streak reaching
-                # `patience`, or the rounds reaching the floor.
+                # Whichever bound is further away:
+                # the streak reaching `patience`, or the rounds reaching the floor.
                 remaining = max(
                     study.patience - stalled[study.name],
                     study.min_search_rounds - round_number,
@@ -659,7 +671,8 @@ class OptimizeSpaceBotorch:
                     if isinstance(submission.output, RemoteExecutionError)
                 }
             )
-            # Empty when nothing came back at all, for example after a canceled task.
+            # Empty when no failure came back as an output,
+            # for example when every failure is a canceled task.
             # Then the cause is in the exception this chains to.
             named = f" of {failed}" if failed else ""
             raise RuntimeError(f"{what} failed during {desc}{named}") from e
@@ -667,7 +680,7 @@ class OptimizeSpaceBotorch:
     def _record_returned(
         self, submitted: list[tuple[OptimizationStudy, dict[str, Any], Task]]
     ) -> None:
-        """Record every evaluation that came back. For the failure path only."""
+        """Record every evaluation that came back, on the failure path only."""
         for study, params, submission in submitted:
             try:
                 self._record(study, params, submission)
@@ -689,6 +702,8 @@ class OptimizeSpaceBotorch:
         # A copy, so a later change to the returned mapping
         # cannot rewrite what the run recorded.
         result.outputs.append(dict(output))
+        # From the rounded params, never the continuous candidate.
+        # See the developer notes, Batch Bayesian optimization.
         result.unit_points.append(to_unit(study.space, params))
 
     def _improved_enough(
@@ -724,7 +739,6 @@ class OptimizeSpaceBotorch:
         known = self._all(name)
         best = min(range(len(known.values)), key=known.values.__getitem__)
         params = format_mapping(known.points[best])
-        # The whole result, not just the objective value.
         output = format_mapping(known.outputs[best])
         print(
             f"{name}: best after {len(known.values)} points "

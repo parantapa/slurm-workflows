@@ -18,7 +18,7 @@ from typing import Any, Mapping, Sequence
 class IntRange:
     """Integer range, inclusive of both bounds.
 
-    `max` must be greater than `min`.
+    `max` must be greater than `min`, or construction raises `ValueError`.
     """
 
     min: int
@@ -45,10 +45,10 @@ class IntRange:
 class FloatRange:
     """Floating-point range, inclusive of both bounds.
 
-    `max` must be greater than `min`.
+    `max` must be greater than `min`, or construction raises `ValueError`.
     With `log_range`, an optimizer searches the range in log space,
     so every decade gets an equal share of the budget.
-    `log_range` also needs `min` above zero.
+    `log_range` also needs `min` above zero, or construction raises `ValueError`.
     """
 
     min: float
@@ -76,7 +76,11 @@ class FloatRange:
         return (x - lo) / (hi - lo)
 
     def unstandardize(self, y: float) -> float:
-        """Move from [0, 1] range to [min, max] range."""
+        """Move from [0, 1] range to [min, max] range.
+
+        A `y` outside `[0, 1]` clamps to the nearer bound.
+        """
+        # An optimizer can return a point slightly outside the unit cube.
         y = min(max(y, 0.0), 1.0)
         if self.log_range:
             lo, hi = math.log(self.min), math.log(self.max)
@@ -88,7 +92,7 @@ class FloatRange:
 class CategoricalRange:
     """Categorical range, standardized as an index in `[0, n - 1]`.
 
-    `num_categories` must be at least 1.
+    `num_categories` must be at least 1, or construction raises `ValueError`.
     `CategoricalRange` accepts `num_categories=1`,
     unlike a degenerate `IntRange`.
     But one category is a dead dimension,
@@ -108,7 +112,10 @@ class CategoricalRange:
         return x / (self.num_categories - 1)
 
     def unstandardize(self, y: float) -> int:
-        """Move from [0, 1] range to [0, num_categories - 1] range."""
+        """Move from [0, 1] range to [0, num_categories - 1] range.
+
+        A `y` outside `[0, 1]` clamps to the nearer bound.
+        """
         if self.num_categories == 1:
             return 0
         i = round(y * (self.num_categories - 1))

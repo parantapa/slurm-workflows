@@ -79,6 +79,9 @@ class CgroupSampler:
     def sample(self) -> dict[str, float]:
         """One reading: total memory in bytes, and cores used since the last."""
         now = time.monotonic()
+        # The cgroup's own accounting comes first,
+        # because it covers every process Slurm put in the job,
+        # including ones the worker never started.
         reading = self._read_cgroup()
         if reading is None:
             reading = self._read_processes()
@@ -171,6 +174,9 @@ class Monitor(threading.Thread):
     """Appends one sampler's readings to `ds-service`, on a timer.
 
     Runs as a daemon thread.
+    `prefixes` maps each key the sampler returns to its series prefix.
+    `interval` is the time between readings, in seconds.
+    A failed reading is logged, and the thread carries on.
     """
 
     def __init__(
@@ -218,6 +224,8 @@ class Monitor(threading.Thread):
     def stop(self, timeout: float = 10.0) -> None:
         """Ask the thread to finish its wait and end, then wait for it to end.
 
+        Waits at most `timeout` seconds,
+        and returns then even if the thread has not ended.
         Idempotent, and safe on a thread that never started.
         """
         self._stopping.set()
@@ -231,7 +239,10 @@ def start_host_monitor(
     interval: float = DEFAULT_MONITOR_INTERVAL_S,
     logger: logging.Logger | None = None,
 ) -> Monitor:
-    """Start sampling this node, and return the running thread."""
+    """Start sampling this node, and return the running thread.
+
+    `interval` is the time between readings, in seconds.
+    """
     monitor = Monitor(
         client=client,
         subject=hostname,
@@ -250,7 +261,10 @@ def start_slurm_job_monitor(
     interval: float = DEFAULT_MONITOR_INTERVAL_S,
     logger: logging.Logger | None = None,
 ) -> Monitor:
-    """Start sampling this job's cgroup, and return the running thread."""
+    """Start sampling this job's cgroup, and return the running thread.
+
+    `interval` is the time between readings, in seconds.
+    """
     monitor = Monitor(
         client=client,
         subject=str(slurm_job_id),

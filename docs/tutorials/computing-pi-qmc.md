@@ -140,6 +140,11 @@ at the address the driver gave the executor:
 swtop 10.0.0.1:5051
 ```
 
+The program does not print that address.
+The executor prints its work directory when it starts,
+and the worker script `compute-pi-qmc.job.bii.0.sh` in that directory
+carries the address after `--server-address`.
+
 We watch the `ready` count fall from 4096 toward zero,
 as the workers claim the points and post what the objective returned.
 
@@ -191,7 +196,8 @@ It does not draw every point up front.
 [Computing pi on a Slurm cluster](computing-pi.md)
 computes the same number the other way round.
 It submits each piece of work itself with `submit` and `wait`.
-If the work is not a function over a space, copy that shape.
+When our work is not a function over a space,
+we copy that shape.
 
 [`ExploreSpaceSobolQMC`](../reference/explore-space.md) is the full API
 for an exploration: the objective contract, the methods,

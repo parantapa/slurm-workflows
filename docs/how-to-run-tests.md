@@ -57,7 +57,8 @@ so a fresh process per test also means no state leaks between tests.
 `$DS_SERVICE_BIN` can be a whole command line rather than a path.
 
 If neither finds it, the tests that need a server skip.
-The template and `slurm_utils` tests still run.
+The tests that need no server still run,
+such as the template, `slurm_utils`, search space and `utils` tests.
 
 ## Layout
 
@@ -112,8 +113,9 @@ Paths are relative to [`tests/`](../tests).
   and the polling tests use a tighter explicit `time_limit` fixture.
 - **The botorch tests mostly use a stand-in executor.**
   `LocalExecutor` runs the objective inline.
-  The optimizer's contract with the executor is two calls wide:
-  `submit` returns a `Task`, and `wait` fills in its `output`.
+  The optimizer's contract with the executor is three calls wide:
+  `submit` returns a `Task`, `set_task_name` names it,
+  and `wait` fills in its `output`.
   A GP fit already dominates each test,
   so a queue round trip adds nothing.
   `TestRealExecutor` keeps the stand-in honest,

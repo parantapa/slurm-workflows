@@ -71,8 +71,9 @@ def cancel_jobs(
     batch: bool = False,
     full: bool = False,
 ) -> None:
-    """Cancel the given jobs. An empty list is a no-op.
+    """Cancel the given jobs.
 
+    An empty list is a no-op.
     `term`, `batch` and `full` add `scancel`'s `--signal=TERM`,
     `--batch` and `--full` respectively.
     Raises `subprocess.CalledProcessError` if `scancel` fails,

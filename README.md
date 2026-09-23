@@ -4,8 +4,8 @@
 
 `slurm-workflows` lets you run Python functions on a Slurm cluster
 without sbatch scripts written by hand.
-It provides an interface inspired by
-[`concurrent.futures`](https://docs.python.org/3/library/concurrent.futures.html).
+It provides an interface
+inspired by [`concurrent.futures`](https://docs.python.org/3/library/concurrent.futures.html).
 The interface launches long-lived **workers** inside pilot jobs.
 It then dispatches tasks to those workers.
 You pay Slurm's scheduling latency once per pilot job, not once per task.

@@ -1,43 +1,8 @@
-"""Tests for the botorch-based parallel optimizer.
+"""Tests for the botorch-based parallel optimizer."""
 
-The optimizer's contract with the executor is three calls wide:
-`submit()` returns a `Task`, `set_task_name()` names it,
-and `wait()` fills in that task's `output`.
-Most tests here drive that contract through `LocalExecutor`,
-which runs inline whatever the optimizer hands it.
-That covers both the objective and, since the fit became a task of its own,
-`fit_and_propose`.
-The GP fit and the acquisition optimization
-are the expensive part of these tests.
-A queue round trip on top adds nothing the optimizer can tell apart.
-
-The inline fit is also what makes the monkeypatching work:
-a patched `osb.optimize_acqf` reaches the task
-because the task ran in this process.
-`TestOptimizerQueue` covers what appears only once the fit runs elsewhere:
-which queue the fit went to,
-and what a failure on the far end reports.
-
-Observations come from a results file, as they do in a real run:
-`explored()` runs a real `ExploreSpaceSobolQMC` exploration and saves it,
-so the file the optimizer reads is the file the explorer writes.
-
-`TestRealExecutor` keeps the stand-in honest.
-It runs a whole exploration and optimization through the real executor,
-the real ds-service queue and a real worker, the fit included.
-That pins the three-call contract against the real implementation.
-
-The four tests in `TestSearchBehaviour` assert behavior of the search
-rather than its bookkeeping.
-They are what catches a flipped sign on the objective,
-because botorch maximizes and this optimizer minimizes.
-They are stochastic.
-The torch global RNG stays unseeded, so each run is a fresh sample.
-Their thresholds come from measured spreads.
-All four use unimodal objectives:
-an earlier multimodal version of the random-search comparison
-lost 1 run in 10.
-"""
+# Why most tests run on LocalExecutor,
+# and where the thresholds of TestSearchBehaviour come from:
+# see how-to-run-tests.md, Notes for future changes.
 
 from __future__ import annotations
 
@@ -167,28 +132,20 @@ class LocalExecutor:
 
 
 def as_executor(executor: LocalExecutor) -> SlurmPilotExecutor:
-    """Type the stand-in as the executor it stands in for.
-
-    `LocalExecutor` satisfies the whole contract the optimizer uses.
-    That contract is three calls:
-    `submit()` returns a `Task`, `set_task_name()` names it,
-    and `wait()` fills in its `output`.
-    `LocalExecutor` does not inherit from `SlurmPilotExecutor`,
-    whose `__init__` opens a real queue connection.
-    The cast asserts that the three-call contract is enough,
-    and `TestRealExecutor` proves it.
-    """
+    """Type the stand-in as the executor it stands in for."""
+    # The optimizer makes three calls on the executor:
+    # `submit`, `set_task_name` and `wait`.
+    # `LocalExecutor` covers all three,
+    # and does not subclass `SlurmPilotExecutor`,
+    # whose `__init__` connects to a real server.
+    # `TestRealExecutor` checks that the three calls are enough.
     return cast(SlurmPilotExecutor, executor)
 
 
 def sphere(x, y):
     """Convex, minimum f = 0 at the origin.
 
-    Objectives return a mapping, not a bare number:
-    the value to minimize under "objective",
-    plus whatever else is worth recording.
-    The extra key here keeps the tests honest
-    about whether the optimizer carries it through.
+    The extra "note" key checks that the optimizer carries a whole output through.
     """
     return {"objective": x * x + y * y, "note": "sphere"}
 
@@ -207,7 +164,8 @@ def benign(**params: float) -> dict[str, float]:
     """An objective for the *prior* file, whatever the space.
 
     Tests of a broken objective still need observations to start from.
-    The file carries numbers alone, and it does not record what ranked them.
+    The file records each value,
+    but not the objective or the key that produced it.
     The search's own key and objective are therefore free to differ from this.
     """
     return {"objective": float(sum(params.values()))}
@@ -257,11 +215,9 @@ def make_study(
 ) -> OptimizationStudy:
     """One optimization study, with the test defaults filled in.
 
-    `rounds` pins the round count, because it sets both search bounds to it.
-    That switches early stopping off.
-    A stall ends the search only at a round at or above the floor.
-    With floor == ceiling, that round is the one the loop ends on anyway,
-    so the search runs exactly that many rounds.
+    `rounds` sets both search bounds,
+    so the search runs exactly that many rounds
+    and never stops early.
     Tests that are *about* early stopping pass the bounds themselves.
     """
     space = BOX_2D if space is None else space
@@ -737,10 +693,8 @@ class TestAcquisition:
         opt, _ = make_opt(tmp_path, explore=4, rounds=2, parallel=2)
         opt.run()
 
-        # Against the study's own setting rather than a literal.
-        # The default lives in the dataclass,
-        # so a literal here only means an edit to this test
-        # whenever that default changes.
+        # Against the study's own setting, never a literal.
+        # See the developer notes, Batch Bayesian optimization.
         assert timeouts == [opt.studies[0].acqf_timeout_s] * 2
         assert timeouts[0] is not None
 
@@ -1199,7 +1153,7 @@ class TestPartialFailure:
 
     @staticmethod
     def fails_at(threshold: float) -> Callable[..., dict[str, float]]:
-        """An objective that raises on the points past `threshold`."""
+        """An objective that raises at every point whose `x` exceeds `threshold`."""
 
         def objective(x, y):
             if x > threshold:
@@ -1210,17 +1164,13 @@ class TestPartialFailure:
 
     @staticmethod
     def fails_every_other() -> Callable[..., dict[str, float]]:
-        """An objective that raises on every second point it receives.
-
-        A threshold on `x` cannot produce a *partial* failure here.
-        The acquisition decides where a round's points land,
-        and the torch global RNG stays unseeded.
-        A round can therefore land wholly on either side of any threshold.
-        Such a round either loses the failure the test needs,
-        or loses the successes it checks were kept.
-        A count of the calls splits the round whatever the search proposes,
-        and `LocalExecutor` runs them inline in submission order.
-        """
+        """An objective that raises on every second point it receives."""
+        # A threshold on `x`, as in `fails_at`, cannot split a search round:
+        # the acquisition places the points,
+        # and torch's RNG is unseeded,
+        # so a round can land wholly on one side of it.
+        # A count of the calls splits every round,
+        # because `LocalExecutor` runs them inline in submission order.
         seen = 0
 
         def objective(x, y):
@@ -1524,10 +1474,8 @@ class TestSearchBehaviour:
 
     def test_search_moves_toward_the_minimum(self, tmp_path):
         # f(x) = x on [0, 1]: a flipped sign sends the search to 1.0 instead.
-        # This test asserts on the median search point.
-        # qLogNEI keeps probing away from the incumbent,
-        # so the max is not a reliable signal.
-        # The best is already near the minimum from the exploration file.
+        # Why the median, not the max or the best point:
+        # see how-to-run-tests.md, Notes for future changes.
         space = {"x": FloatRange(0.0, 1.0)}
         opt, _ = make_opt(
             tmp_path,
@@ -1806,7 +1754,7 @@ class TestBestPoint:
 
 
 class TestRealExecutor:
-    """One end-to-end run against the real queue, executor and worker."""
+    """One end-to-end run against the real server, executor and worker."""
 
     @pytest.fixture(autouse=True)
     def _pilot_jobs(self, pilot_jobs):
@@ -1860,7 +1808,7 @@ class TestRealExecutor:
 
         params, value = opt.best_point("e2e")
         assert math.isclose(value, sphere(**params)["objective"])
-        # The whole mapping survives the round trip through the real queue,
+        # The whole mapping survives the round trip through the real server,
         # not only the number the fit used.
         assert opt.best_output("e2e") == {"objective": value, "note": "sphere"}
         assert value < BOX_2D["x"].max ** 2 + BOX_2D["y"].max ** 2

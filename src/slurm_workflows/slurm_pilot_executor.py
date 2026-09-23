@@ -70,12 +70,12 @@ PROGRESS_INTERVAL_S: float = 1.0
 MAPREDUCE_QUEUE_TEMPLATE = "{name}.mapreduce.{index}.{token}"
 MAPREDUCE_ITEM_TEMPLATE = "{queue}.item.{index}"
 
-# How many hex characters of a UUID4 a mapreduce queue name carries.
+# How many hex characters of a UUID4 an item queue name carries.
 MAPREDUCE_TOKEN_LEN: int = 8
 
 # What an item task carries in place of a function,
 # and what it records as its output.
-# Only a mapreduce task claims an item task,
+# Only a map task claims an item task,
 # and that task reads the item out of the task's input,
 # so nothing ever deserializes either field.
 NO_FUNCTION = b""
@@ -169,7 +169,7 @@ class Task:
 class JobGroup:
     """A named recipe for pilot jobs, and the queue their workers serve.
 
-    `scale_jobs` sets how many pilot jobs the group has.
+    `scale_jobs` sets how many pilot jobs the job group has.
     How many workers those jobs start is decided by the sbatch arguments
     and `is_batch_worker`.
     The name is also the queue name:
@@ -237,20 +237,19 @@ def _mapreduce_task(
     """Map and fold every item this task claims from `mr_queue`."""
     # The id of the worker that runs this task, from the environment.
     # One worker runs one task at a time,
-    # so its id names this mapreduce task as well.
+    # so its id names this map task as well.
     worker_id = os.environ["PILOT_WORKER_ID"]
 
-    # Once, not once per item: a worker builds its actor at startup
-    # and keeps it for the life of the Slurm job.
+    # Once, not once per item.
+    # See Mapreduce in the developer notes.
     if isinstance(map_fn, str):
         map_fn = _resolve_map_method(map_fn)
 
     result = init
 
     # A client of this task's own.
-    # A task has no handle on the worker's client,
-    # and `DsServiceClient()` reads the address
-    # the worker put in the environment.
+    # `DsServiceClient()` reads the address the worker put in the environment.
+    # See Mapreduce in the developer notes.
     with DsServiceClient() as client:
         while True:
             # No retry on `TimeoutError`: `task_get` is not idempotent.
@@ -275,10 +274,11 @@ def _mapreduce_task(
 class SlurmPilotExecutor:
     """Runs Python callables on a Slurm cluster through a pool of workers.
 
-    Give each executor a `ds-service` server of its own:
-    everything on a server belongs to one run.
-    Use the executor as a context manager, or call `close()`,
-    so the executor cancels the pilot jobs when the run ends.
+    Each executor needs a `ds-service` server of its own,
+    because everything on a server belongs to one run.
+    The executor cancels its pilot jobs in `close()` and `stop()`,
+    and `scale_jobs` cancels those above the count it is given.
+    A `with` block calls `close()` at its end.
     """
 
     @typechecked
@@ -296,7 +296,8 @@ class SlurmPilotExecutor:
         and hold at least `MIN_EXECUTOR_NAME_LEN` characters.
         Anything else raises `ValueError`.
         `work_dir` defaults to a timestamped directory in the user cache.
-        The executor creates that directory if it does not exist.
+        The executor creates the work directory if it does not exist,
+        prints its path on stdout, and logs to `executor.log` in it.
         """
         if len(name) < MIN_EXECUTOR_NAME_LEN:
             raise ValueError(
@@ -369,7 +370,7 @@ class SlurmPilotExecutor:
         even for an otherwise identical definition.
         `is_batch_worker` runs one worker in the batch script itself,
         rather than one per Slurm task under `srun`.
-        A second, identical definition of a group does nothing.
+        A second, identical definition of a job group does nothing.
         A definition that differs from the first one raises `AssertionError`.
         """
         python_str_paths: list[str] = []
@@ -403,7 +404,8 @@ class SlurmPilotExecutor:
             self.groups[group.name] = group
 
         # These go into the map, cloudpickled and keyed on the job group name.
-        # Each worker reads them at startup.
+        # Each worker reads them at startup, under the same keys.
+        # See Task flow in the developer notes.
         if actor_class_args is not None:
             self.client.map_set(
                 f"actor_class_args:{name}",
@@ -479,10 +481,10 @@ class SlurmPilotExecutor:
 
     @typechecked
     def scale_jobs(self, name: str, count: int) -> None:
-        """Submit or cancel pilot jobs so the group holds `count` of them.
+        """Submit or cancel pilot jobs so the job group holds `count` of them.
 
         Returns as soon as `sbatch` accepts the jobs, not when they start.
-        Raises `AssertionError` for a group `define_job_group` did not register.
+        Raises `AssertionError` for a job group `define_job_group` did not register.
         A failed `squeue` or `scancel` raises `RuntimeError`.
         A failed `sbatch` raises what `submit_sbatch_job` raises.
         """
@@ -596,9 +598,9 @@ class SlurmPilotExecutor:
     ) -> Task:
         """Enqueue one task and return its handle immediately.
 
-        `fn` is a callable, or a method name for a group with an actor.
+        `fn` is a callable, or a method name for a job group with an actor.
         This method does not check the queue name.
-        `wait` and `as_completed` report a task on a queue no group serves.
+        `wait` and `as_completed` report a task on a queue no job group serves.
 
         `task_parents` are the tasks this one waits on.
         The server dispatches it only after every parent finishes.
@@ -715,13 +717,14 @@ class SlurmPilotExecutor:
         reduce_args = tuple(reduce_extra_args or ())
         reduce_kwargs = dict(reduce_extra_kwargs or {})
 
-        # The copy each task folds into arrives by cloudpickle.
-        # This one takes the same route, so both folds behave alike,
-        # and an `init` that cannot travel fails here rather than remotely.
+        # A cloudpickle round trip, like the copy each map task folds into.
+        # See Mapreduce in the developer notes.
         result = cloudpickle.loads(
             cloudpickle.dumps(init, protocol=pickle.HIGHEST_PROTOCOL)
         )
 
+        # Read out in full, never streamed.
+        # See Mapreduce in the developer notes.
         items = list(iterable)
         if not items:
             return result
@@ -935,6 +938,7 @@ class SlurmPilotExecutor:
         """Block until every task is done.
 
         `desc` and `unit` label the progress `swtop` draws for this call.
+        It fills in each task's `output` as `as_completed` does.
         A failure raises `RuntimeError` as `raise_on_error` directs.
         """
         tasks = list(tasks)
@@ -978,13 +982,13 @@ class SlurmPilotExecutor:
 
     def _live_queues(self, queues: Iterable[str] | None = None) -> set[str]:
         """Queues `squeue` still lists a job for, pending or running."""
-        # Whatever this raises propagates, and `_stranded_tasks` catches it.
+        # A failed or timed-out `squeue` propagates,
+        # and `_stranded_tasks` catches it.
         job_ids = get_running_jobids()
 
         groups = self.groups.values()
         if queues is not None:
-            # Only the names given.
-            # A name no group has is absent from the answer.
+            # A name no job group has is absent from the answer.
             wanted = set(queues)
             groups = [g for g in groups if g.name in wanted]
 
@@ -1033,14 +1037,12 @@ class SlurmPilotExecutor:
         return needed
 
     def _starved_tasks(self, pending: list[Task]) -> tuple[list[Task], str]:
-        """Pending tasks with no pilot job ever submitted for them, and a message.
-
-        A task also counts when an unfinished ancestor has none.
-        """
+        """Pending tasks with no pilot job ever submitted for them, and a message."""
         # This executor's own bookkeeping, not a question to the cluster:
         # the check must work before any job can start.
         started = {name for name, group in self.groups.items() if group.jobs}
 
+        # A task also counts when an unfinished ancestor has none.
         needed = self._needed_queues(pending)
         dead = {
             task.task_id: [
@@ -1062,10 +1064,8 @@ class SlurmPilotExecutor:
         )
 
     def _stranded_tasks(self, pending: list[Task]) -> tuple[list[Task], str]:
-        """Pending tasks whose queues have no pilot job left, and a message.
-
-        A task also counts when an unfinished ancestor's queues have none.
-        """
+        """Pending tasks whose queues have no pilot job left, and a message."""
+        # A task also counts when an unfinished ancestor's queues have none.
         needed = self._needed_queues(pending)
         try:
             live = self._live_queues(
@@ -1101,7 +1101,7 @@ class SlurmPilotExecutor:
         )
 
     def _cleanup_all_workers(self) -> None:
-        """Cancel every pilot job still on the cluster. Reports, never raises."""
+        """Cancel every live pilot job, and report a failure rather than raise it."""
         # `close()` still has to close the client and the log after a failure here,
         # so each failure is reported and dropped.
         try:
@@ -1141,7 +1141,7 @@ class SlurmPilotExecutor:
             self.logger.exception("Failed to cancel slurm jobs")
 
     def _close_log_handler(self) -> None:
-        """Detach this executor's log handler and close its file. Idempotent."""
+        """Detach and close this executor's log handler, if it is still attached."""
         handler = self._log_handler
         if handler is None:
             return
@@ -1152,7 +1152,7 @@ class SlurmPilotExecutor:
         handler.close()
 
     def close(self) -> None:
-        """Cancel every pilot job and close the queue-server connection.
+        """Cancel every pilot job and close the connection to the server.
 
         The executor is spent afterward.
         Python calls this at the end of a `with` block.

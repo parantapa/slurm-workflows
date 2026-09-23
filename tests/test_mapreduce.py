@@ -1,19 +1,4 @@
-"""Tests for `SlurmPilotExecutor.mapreduce`.
-
-Slurm is mocked. The task queue is a real ds-service.
-`mapreduce` blocks as soon as it submits,
-so nothing can play the worker's part after the fact.
-Every test that needs a result therefore runs a real worker in a thread,
-the way `test_explore_space.py` does.
-
-The worker-side function `_mapreduce_task` reads two variables
-that `PilotWorker.__init__` sets,
-`DS_SERVER_ADDRESS` and `PILOT_WORKER_ID`.
-A test that runs a real worker therefore gets them from the worker.
-That makes those tests a check on the worker as well.
-A test that calls `_mapreduce_task` directly sets them itself,
-through the `mapreduce_env` fixture.
-"""
+"""Tests for `SlurmPilotExecutor.mapreduce`."""
 
 from __future__ import annotations
 
@@ -88,6 +73,10 @@ def count_hits(path, threshold):
 # --------------------------------------------------------------------------
 
 
+# `_mapreduce_task` reads `DS_SERVER_ADDRESS` and `PILOT_WORKER_ID`,
+# which a real worker sets,
+# so a test that runs a real worker checks the worker too.
+# See the developer notes, "A map task builds a client of its own".
 @pytest.fixture
 def mapreduce_env(monkeypatch: pytest.MonkeyPatch, ds_service_address: str) -> None:
     """What a worker puts in the environment, for a task driven without one."""
@@ -95,6 +84,10 @@ def mapreduce_env(monkeypatch: pytest.MonkeyPatch, ds_service_address: str) -> N
     monkeypatch.setenv("PILOT_WORKER_ID", "test-worker.42.testhost.4242")
 
 
+# `mapreduce` blocks as soon as it submits,
+# so nothing can play the worker's part after the fact.
+# Every test that needs a result runs a real worker in a thread,
+# the way `test_explore_space.py` does.
 @pytest.fixture
 def worker_thread(
     ds_service_address: str, tmp_path: Path
@@ -489,8 +482,7 @@ class TestMapreduceTask:
         for index in range(5):
             task_id = f"{queue}.item.{index}"
             assert ds_client.task_get_status(task_id) == TaskState.Finished
-            # The mapped value went home in the task's return value,
-            # so the item task stores nothing of its own.
+            # See the developer notes, "A map task marks its item task done".
             assert ds_client.task_get_output(task_id) == b""
 
     def test_an_empty_queue_returns_init(self, ds_service_address, mapreduce_env):

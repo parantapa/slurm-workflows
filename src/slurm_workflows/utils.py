@@ -90,7 +90,7 @@ def index_width(count: int) -> int:
 
 
 def format_param(value: Any) -> str:
-    """Render one value for a progress line, floats at a fixed precision."""
+    """Render one value for a progress line, floats to six significant digits."""
     return f"{value:.6g}" if isinstance(value, float) else str(value)
 
 

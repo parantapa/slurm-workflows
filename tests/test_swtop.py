@@ -5,12 +5,10 @@ so what the collector reports is what a live queue tells it.
 The tests mock Slurm, since a worker's identity comes from the store
 rather than from a running job.
 
-The collector is async and these tests are not.
-Each test gets a collector on an event loop that lasts the whole test
-(`LoopBound`), and calls `snapshot()` like an ordinary method.
-A test can therefore change the store between two polls,
-which is what the caching and staleness tests are about.
-No test has to be a coroutine.
+Each test that polls a collector directly does so through `LoopBound`,
+so no test has to be a coroutine,
+and a test can change the store between two polls.
+The caching and staleness tests rely on that.
 """
 
 from __future__ import annotations
@@ -42,20 +40,15 @@ def square(x: int) -> int:
 
 
 class LoopBound:
-    """A collector, and the one event loop its client belongs to.
-
-    `DsServiceClientAsync` binds its channel to the loop that runs
-    when the caller makes it.
-    A fresh `asyncio.run` per call therefore leaves the second poll
-    on a loop that closed.
-    The test keeps one loop instead.
-    """
+    """A collector, and the one event loop its client belongs to."""
 
     def __init__(
         self,
         address: str,
         wrap: Callable[[DsServiceClientAsync], Any] = lambda client: client,
     ) -> None:
+        # One loop for the whole test, because the client binds to it.
+        # See how-to-run-tests.md, under "Notes for future changes".
         self.loop = asyncio.new_event_loop()
         self.client = self.run(_make_client(address))
         self.collector = Collector(wrap(self.client), address)
@@ -84,16 +77,14 @@ def collector(ds_service_address: str) -> Iterator[LoopBound]:
 
 
 class CountingClient:
-    """Records key reads, so a test can check the identity cache.
-
-    Keyed by prefix, because a poll reads the progress display every time
-    on top of the identities it caches.
-    """
+    """Records key reads, so a test can check the identity cache."""
 
     def __init__(self, inner: DsServiceClientAsync) -> None:
         self._inner = inner
         self.keys_read: list[str] = []
 
+    # Counted by prefix, because a poll reads the progress display every time
+    # on top of the identities it caches.
     def reads(self, prefix: str) -> int:
         return sum(1 for key in self.keys_read if key.startswith(prefix))
 
@@ -427,7 +418,7 @@ class TestCollectWorkers:
         assert listed.name == "?"
 
     def test_an_unreadable_description_is_not_cached(self, collector, ds_client):
-        """It can be a writer this reader arrived in the middle of."""
+        """A later write can replace it with one that reads."""
         ds_client.map_set("worker_info:w", b"not json")
         collector.snapshot()
 

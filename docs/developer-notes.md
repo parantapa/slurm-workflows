@@ -102,7 +102,7 @@ Paths are relative to `src/slurm_workflows/`.
 | Module | Holds |
 | --- | --- |
 | `__init__.py` | The public API, the one place users import from. Loads the botorch module lazily. |
-| `slurm_pilot_executor.py` | The driver side, entry point `SlurmPilotExecutor`: job groups, submitting tasks, waiting on them, and `mapreduce`. Depends on `slurm_utils` and `templates/`. |
+| `slurm_pilot_executor.py` | The driver side, entry point `SlurmPilotExecutor`: job groups, submitting tasks, waiting on them, and `mapreduce`. Depends on `slurm_utils`, `templates/` and `utils`, and on `slurm_pilot_worker` for `current_actor`. |
 | `slurm_pilot_worker.py` | The worker side, entry point the `slurm-pilot-worker` command that generated scripts run on compute nodes. Starts the monitors. |
 | `slurm_utils.py` | Calls to the Slurm commands, and the environment `sbatch` runs in |
 | `search_space.py` | Search spaces and the mapping to and from the unit cube. Imports no torch. |
@@ -117,6 +117,8 @@ Paths are relative to `src/slurm_workflows/`.
 `tests/` holds the suite.
 [`how-to-run-tests.md`](how-to-run-tests.md#layout) maps its files.
 `examples/` holds the scripts the tutorials walk through.
+`extra/` holds the README's banner image
+and a FoxyProxy configuration for Rivanna.
 
 The driver and the workers never talk to each other directly.
 They talk only through the `ds-service` server,
@@ -128,7 +130,7 @@ for the reason given under Monitoring.
 `SlurmPilotExecutor` always takes the address as its `server_address` argument.
 
 The server and the client carry the same version.
-`pyproject.toml` records the client floor, `>=6.0.0`,
+`pyproject.toml` records the client floor, `>=7.0.0`,
 and not an exact version.
 Install the `ds-service` release
 with the same version as the installed client.
@@ -305,8 +307,8 @@ even when each executor has a server to itself.
 `SlurmPilotExecutor` validates the name
 (`[A-Za-z][A-Za-z0-9_-]*`, at least 3 characters).
 The characters that are safe in a Slurm job name,
-a directory name and a task id
-are the intersection of three sets, not one.
+a directory name, a logger name and a task id
+are the intersection of four sets, not one.
 
 **A run publishes itself in two halves, one key each.**
 `SlurmPilotExecutor._add_job` writes `pilot_job_info:<job-name>`
@@ -441,7 +443,7 @@ inherits whatever handlers the previous one left on it.
 
 `render_template` renders the sbatch and worker shell scripts
 from Jinja2 templates in a **custom multi-template-per-file format**.
-Each `.jinja` file holds several named templates,
+Each `.jinja` file holds one or more named templates,
 each one under a `{#- name: "..." -#}` JSON5 header.
 `templates/__init__.py` parses those headers.
 A template address is `"<file_prefix>:<name>"`,
@@ -569,14 +571,12 @@ each against its own `patience`, floor and ceiling.
   `max(patience - stalled, min_search_rounds - round_number)`.
   A bare `stalled`/`patience` ratio runs past its own denominator
   whenever the floor outlasts the streak, which the defaults do.
-- **One acquisition, one `optimize_acqf` call per round**,
+- **One acquisition, one `optimize_acqf` call per study per round**,
   for the whole batch.
   `qLogNoisyExpectedImprovement` takes `X_baseline`,
   every point measured so far, rather than a `best_f` scalar.
   That argument has to be the `train_x` from this round's fit,
   not a stale copy.
-- **Ranges clamp in `unstandardize`**,
-  because `optimize_acqf` can return a point slightly outside the bounds.
 - **Never import this module eagerly from the package `__init__.py`.**
   `OptimizeSpaceBotorch` and `OptimizationStudy` are importable
   from the package root, but through the `__getattr__` there.
@@ -614,9 +614,6 @@ A node briefly unreachable is the common case, and a gap beats a stop.
 The kernel reports CPU as microseconds that only rise,
 so `CgroupSampler` keeps the previous reading.
 The first sample of a run necessarily reports 0 cores.
-`CgroupSampler` prefers the cgroup's own accounting to a sum over processes,
-because the cgroup covers every process and thread Slurm put in the job.
-That includes ones the worker never started.
 
 **`swtop` can only show what an RPC can answer.**
 `task_get_count_by_state` covers every task,
@@ -655,7 +652,7 @@ The cache means `Collector` reads only what is new.
 
 **`sync_table` updates a table in place, and never rebuilds it.**
 `sync_table` adds, updates and removes rows by key,
-which is a worker id, a hostname or a task id.
+which is a job name, a worker id, a hostname, a job id or a task id.
 `DataTable.clear()` throws away the scroll position and the cursor,
 which a 3600-worker pool needs to keep.
 Those keys come from the row builders in `swtop.py`.

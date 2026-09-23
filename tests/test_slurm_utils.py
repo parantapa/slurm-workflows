@@ -108,10 +108,7 @@ class TestSubmitSbatchJob:
     def test_finds_the_job_id_after_a_banner(self, fake_slurm, tmp_path: Path):
         """Sites put warnings and banners on sbatch's stdout.
 
-        `submit_sbatch_job` searches the whole output for the job id line,
-        and does not require it at the start.
-        It therefore skips whatever a site printed ahead of that line,
-        instead of failing a submission that in fact succeeded.
+        See the developer notes, "Slurm interaction".
         """
         fake_slurm.sbatch_stdout_override = (
             "sbatch: WARNING: your account is nearly out of hours\n"

@@ -1,8 +1,4 @@
-"""The worker: the process that claims and runs tasks on a compute node.
-
-The generated worker script starts it inside a pilot job.
-User code never constructs it.
-"""
+"""The worker: the process that claims and runs tasks on a compute node."""
 
 import os
 import sys
@@ -82,7 +78,7 @@ class PilotWorker:
         Puts this worker's identity in the environment first,
         so the actor and every task it runs can read it.
         Publishes the worker's identity before it builds the actor.
-        Whatever the actor's constructor raises propagates.
+        Whatever importing or constructing the actor raises propagates.
         Before that, this worker closes its own monitors and client.
         """
         self.group = group
@@ -134,6 +130,8 @@ class PilotWorker:
         module = importlib.import_module(module_name)
         klass = getattr(module, class_name)
 
+        # These keys must match the ones `define_job_group` writes.
+        # See the developer notes, Task flow.
         args = self._get_actor_ctor_arg(f"actor_class_args:{self.group}", [])
         kwargs = self._get_actor_ctor_arg(f"actor_class_kwargs:{self.group}", {})
         return klass(*args, **kwargs)
@@ -210,6 +208,7 @@ class PilotWorker:
         """Stop the monitors, close the connection, and close the actor.
 
         Calls the actor's own `close()` if it has one.
+        Clears `current_actor()` if it holds this worker's actor.
         """
         # Before the client, whose channel they use.
         self._stop_monitors()
@@ -323,6 +322,8 @@ def slurm_pilot_worker(
     hostname = socket.gethostname()
     pid = os.getpid()
 
+    # Logs to the inherited stderr, which Slurm writes to a file.
+    # See the developer notes, Slurm interaction.
     logging.basicConfig(format=LOG_FORMAT, level=LOG_LEVEL)
 
     python_paths: list[str] = json.loads(python_paths_json)

@@ -1,8 +1,4 @@
-"""Jinja2 templates, several to a file.
-
-Each `.jinja` file holds several named templates.
-A `{#- name: "..." -#}` JSON5 header starts each one.
-"""
+"""Jinja2 templates, several to a file."""
 
 from pathlib import Path
 from typing import Any, cast, overload, Literal
@@ -48,6 +44,7 @@ def parse_file(prefix: str, path: Path) -> dict[str, TemplateText]:
     text = path.read_text()
     pos = 0
 
+    # The developer notes, under Templates, give the file format.
     while True:
         line, col = line_col_from_pos(text, pos)
         head_start = text.find("{#-", pos)
@@ -90,9 +87,10 @@ def load_template(name: str) -> tuple[str, str, None] | None:
     This is a `jinja2.FunctionLoader` callback.
     The callback returns the source, the filename it came from,
     and `None` for the up-to-date check.
-    That `None` makes a loaded template permanent.
     A missing template gives `None` in place of the tuple.
     """
+    # A `None` up-to-date check tells jinja2 never to reload a template,
+    # so a loaded template is permanent.
     if name in _TEMPLATES:
         tpl = _TEMPLATES[name]
         return tpl.source, tpl.filename, None
@@ -120,6 +118,8 @@ _ENVIRONMENT = jinja2.Environment(
 )
 
 
+# Keep each overload in step with the variables its template uses.
+# See the developer notes, Templates.
 @overload
 def render_template(
     template: Literal["slurm_utils:script_template"],
@@ -163,7 +163,8 @@ def render_template(template: str, **kwargs: Any) -> str:
     The overloads of this function give each template's
     required keyword arguments.
     The renderer raises `jinja2.UndefinedError`
-    for a variable the template uses and the caller did not pass.
+    for a variable the template uses and the caller did not pass,
+    and `jinja2.TemplateNotFound` for a name no template file holds.
     """
     tpl = _ENVIRONMENT.get_template(template)
     return tpl.render(**kwargs)

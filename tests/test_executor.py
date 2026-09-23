@@ -1,11 +1,4 @@
-"""Tests for SlurmPilotExecutor.
-
-Slurm is mocked. The task queue is a real ds-service.
-Where a test needs a task to finish,
-it plays the worker's part with `drain()`
-rather than launching one.
-The test then isolates executor behavior from worker behavior.
-"""
+"""Tests for SlurmPilotExecutor."""
 
 from __future__ import annotations
 
@@ -34,7 +27,7 @@ from slurm_workflows.utils import RemoteExecutionError
 
 
 def num_groups(ex: SlurmPilotExecutor) -> int:
-    """Groups defined on an executor, which no longer counts them itself."""
+    """The number of job groups defined on an executor."""
 
     return len(ex.groups)
 
@@ -47,6 +40,9 @@ def num_workers(ex: SlurmPilotExecutor, detail: bool = False) -> int | dict[str,
     return sum(len(g.jobs) for g in ex.groups.values())
 
 
+# Where a test needs a task to finish,
+# it plays the worker's part with `drain()` rather than launching one,
+# so it tests the executor apart from the worker.
 def drain(ds_client: DsServiceClient, queue: str, count: int) -> list[str]:
     """Act as a worker: pull `count` tasks and post their real results."""
 
@@ -351,7 +347,8 @@ class TestDefineWorker:
         executor.define_job_group(name="cpu", actor_class_args=[1], **common)
 
         # The arguments are not part of the group's identity,
-        # so this is not a conflict. Differing `sbatch_args` are one.
+        # so this is not a conflict.
+        # Differing `sbatch_args` are one.
         executor.define_job_group(name="cpu", actor_class_args=[2], **common)
 
         assert num_groups(executor) == 1
@@ -439,7 +436,7 @@ class TestScaleWorkers:
             executor.scale_jobs("nope", 1)
 
     def test_a_submitted_job_is_published(self, defined, ds_client, fake_slurm):
-        """`swtop` reads the jobs from the store. Nothing else announces them."""
+        """`swtop` reads the jobs from the store, and nothing else announces them."""
         defined.scale_jobs("cpu", 1)
 
         (job_name,) = defined.groups["cpu"].jobs
@@ -913,7 +910,7 @@ class TestRemoteErrors:
         pilot_jobs("cpu")
 
     def test_a_worker_exception_comes_back_as_the_output(self, executor, ds_client):
-        """The exception never leaves the worker. The policy decides the rest."""
+        """The exception never leaves the worker, and the policy decides the rest."""
         task = executor.submit("cpu", square, 1)
         fail_one(ds_client, "cpu", error_id="ERROR_abc")
 
@@ -1251,13 +1248,10 @@ class TestNoWorkerStarted:
 
 @pytest.fixture
 def check_immediately(monkeypatch):
-    """Collapse the liveness interval so one poll triggers a check.
+    """Collapse the liveness interval so one poll triggers a check."""
 
-    The real 60s gap exists
-    so that a submit before a scale_jobs call still works.
-    These tests are about what happens after the gap elapsed.
-    """
-
+    # The real interval lets a submit come before its `scale_jobs` call.
+    # These tests are about what happens after it has elapsed.
     monkeypatch.setattr(spe, "LIVE_QUEUE_CHECK_INTERVAL_S", 0.0)
 
 
@@ -1386,7 +1380,7 @@ class TestStrandedTasks:
     def test_squeue_failure_does_not_abort_the_wait(
         self, executor, fake_slurm, setup_script, ds_client, check_immediately
     ):
-        """Unknown liveness is not dead liveness: keep waiting."""
+        """Unknown liveness is not dead liveness, so the wait goes on."""
         executor.define_job_group("cpu", [], setup_script)
         executor.scale_jobs("cpu", 1)
         task = executor.submit("cpu", square, 5)
@@ -1507,13 +1501,10 @@ class TestLogging:
 
     @staticmethod
     def file_handlers(ex: SlurmPilotExecutor) -> list[logging.Handler]:
-        """The executor's own handlers.
-
-        This method filters the list,
-        because the logging module's registry is global.
-        While a test runs,
-        pytest's capture plugin puts handlers of its own on loggers.
-        """
+        """The executor's own file handlers."""
+        # The logging registry is global,
+        # and while a test runs, pytest's capture plugin
+        # puts handlers of its own on loggers.
         return [h for h in ex.logger.handlers if isinstance(h, logging.FileHandler)]
 
     def test_two_executors_do_not_share_a_log_file(
@@ -1526,7 +1517,8 @@ class TestLogging:
             "sharedB", ds_service_address, work_dir=tmp_path / "second"
         )
 
-        # scale_jobs is what logs. Anything that writes a record will do.
+        # scale_jobs is what logs.
+        # Anything that writes a record will do.
         second.define_job_group("cpu", [], setup_script)
         second.scale_jobs("cpu", 1)
 

@@ -1,19 +1,8 @@
 """Tests for the `swtop` terminal UI.
 
-Textual is async and the tests around it are not:
-each drives the app inside `asyncio.run`.
-That keeps this file the same shape as the rest of the suite,
-and needs no pytest plugin.
-
-Each test drives the app headlessly through `run_test`,
-and asserts on the state of the widgets rather than on pixels.
-The poll runs in a Textual worker, so anything that waits for a poll
-waits on `app.workers`, never on a sleep.
-
-The scenario builds a collector against the real server,
-rather than a fixture.
-Its client belongs to the event loop that made it,
-and `run_test` runs that loop.
+The tests assert on the state of the widgets rather than on pixels.
+How they drive the app headlessly, and why they wait on `app.workers`,
+is in how-to-run-tests.md, under "Notes for future changes".
 """
 
 from __future__ import annotations

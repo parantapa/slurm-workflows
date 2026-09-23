@@ -38,7 +38,7 @@ so they are worth stating before the tables:
   because `PilotWorker` passes its own `worker_id`.
   A worker is therefore a process, and nothing else is a worker.
 * `task_add` is documented as
-  "Register a task and enqueue it on each of its queues".
+  "Register a task, and enqueue it on each of its queues once it is Ready".
   A **task** is the `ds-service` unit of work.
   Slurm also calls a process inside a job step a task.
   That second sense always carries the word Slurm in front of it.
@@ -147,7 +147,7 @@ Name all three.
 | **item** | One element of `iterable`. | task, unit, record |
 | **item task** | The task that carries one item, `<queue>.item.<i>`. It holds no function. | item alone, mapreduce task |
 | **item queue** | `<executor-name>.mapreduce.<n>.<token>`. No job group serves it. | mapreduce queue, the private queue |
-| **map task** | The task that claims item tasks and folds them, `<item-queue>.task.<i>`. | mapreduce task, folding task, worker task |
+| **map task** | The task that claims item tasks and folds them, with the task name `<item-queue>.task.<i>`. | mapreduce task, folding task, worker task |
 | **partial result** | What one map task returns. | partial, shard, chunk result |
 | **chunk** | Several items batched into one item, to amortize the round trip. | group, batch, block |
 | **fold** | Applying `reduce_fn`. One verb for the worker-side and the driver-side fold alike. | reduce, accumulate, combine |

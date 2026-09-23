@@ -1,18 +1,7 @@
-"""Shared test fixtures.
+"""Shared test fixtures."""
 
-Two deliberate choices here:
-
-* **ds-service is real.** Each test gets its own server process.
-    The test exercises task-queue semantics
-    (states, batched status, output retrieval)
-    against the actual implementation,
-    rather than against a stand-in that can drift from it.
-* **Slurm is mocked.** The `fake_slurm` fixture intercepts three commands,
-    `sbatch`, `squeue` and `scancel`,
-    at the `subprocess` boundary inside `slurm_utils`.
-    Everything above that boundary is the real code path.
-    That covers script rendering, job-id parsing and environment scrubbing.
-"""
+# ds-service is real and Slurm is mocked.
+# See docs/how-to-run-tests.md, "What is real and what is mocked".
 
 from __future__ import annotations
 
@@ -42,11 +31,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 # Hang guards
 # --------------------------------------------------------------------------
 #
-# Both the executor's result polling and the worker's main loop
-# run until a condition holds.
-# A regression in either turns a failing test into a hanging one,
-# which is far worse.
-# For this reason, a wall-clock alarm bounds every test.
+# Why a wall-clock alarm bounds every test:
+# see docs/how-to-run-tests.md, "Notes for future changes".
 
 
 @contextmanager
@@ -80,17 +66,12 @@ def _hang_guard() -> Generator[None]:
 
 @pytest.fixture(autouse=True)
 def _restore_environ() -> Generator[None]:
-    """Put `os.environ` back after each test.
+    """Put `os.environ` back after each test."""
 
-    `PilotWorker.__init__` writes `DS_SERVER_ADDRESS`, `PILOT_WORKER_ID`
-    and the `PILOT_JOB_*` variables, and undoes none of them.
-    In a worker the process is the worker, so nothing there has to.
-    Without this fixture, one test leaves a dead server's address behind
-    for every later test.
-    That is exactly the value `DsServiceClient()` falls back to
-    when the caller gives it no address.
-    """
-
+    # `PilotWorker.__init__` writes `DS_SERVER_ADDRESS`, `PILOT_WORKER_ID`
+    # and the `PILOT_JOB_*` variables, and undoes none of them.
+    # Left in place, a dead server's address becomes the address
+    # that `DsServiceClient()` falls back to in every later test.
     env = dict(os.environ)
     yield
     os.environ.clear()
@@ -103,15 +84,13 @@ def _restore_environ() -> Generator[None]:
 
 
 def _srun_lines(script: str) -> list[str]:
-    """The `srun` command lines in a generated script, in the order rendered.
+    """The `srun` command lines in a generated script, in the order rendered."""
 
-    This function strips each line before the match,
-    because the non-batch worker script indents its `srun` calls
-    inside the shell `if` that chooses between them.
-    It tests each line on its own rather than the whole text,
-    since a path baked into the script can itself contain "srun".
-    """
-
+    # Strip before the match,
+    # because the non-batch worker script indents its `srun` calls
+    # inside the shell `if` that chooses between them.
+    # Test each line rather than the whole text,
+    # since a path baked into the script can itself contain "srun".
     return [ln.strip() for ln in script.splitlines() if ln.strip().startswith("srun")]
 
 
@@ -129,18 +108,10 @@ def srun_lines() -> Callable[[str], list[str]]:
 
 @pytest.fixture
 def ds_service_address() -> Generator[str]:
-    """Run a private ds-service for one test and yield its address.
-
-    The server is in-memory,
-    so a fresh process per test means no state leaks between tests.
-    Startup is ~10ms.
-
-    `DsServiceServer` finds the binary, picks a free port,
-    waits for the socket and shuts the process down.
-    This fixture does none of that itself.
-    The server binds to the loopback interface rather than a routable one,
-    so nothing outside this machine can reach a test's queue.
-    """
+    """Run a private ds-service for one test and yield its address."""
+    # A fresh in-memory server per test starts in about 10ms.
+    # Why `DsServiceServer` owns the lifecycle and why it binds `lo`:
+    # see docs/how-to-run-tests.md, "Notes for future changes".
     try:
         server = DsServiceServer(interface="lo")
     except FileNotFoundError:
@@ -200,12 +171,7 @@ class Submission:
 
 
 class FakeSlurm:
-    """Stands in for the `subprocess` module inside `slurm_utils`.
-
-    This class implements `run()` for the three Slurm commands.
-    For every other attribute, such as an exception type,
-    it uses the real `subprocess`.
-    """
+    """Stands in for the `subprocess` module inside `slurm_utils`."""
 
     def __init__(self) -> None:
         self.submissions: list[Submission] = []
@@ -241,6 +207,9 @@ class FakeSlurm:
 
         raise AssertionError(f"unexpected command in test: {cmd!r}")
 
+    # `run` covers only the three Slurm commands.
+    # Every other attribute, such as an exception type,
+    # comes from the real `subprocess`.
     def __getattr__(self, name: str) -> Any:
         return getattr(subprocess, name)
 
@@ -313,17 +282,12 @@ def executor(
 
 @pytest.fixture
 def pilot_jobs(executor: SlurmPilotExecutor) -> Callable[..., None]:
-    """Declare that pilot jobs exist for the named groups.
+    """Declare a pilot job for each named group, as any test that waits needs."""
 
-    `as_completed` refuses to wait on a queue
-    this executor never started a worker for.
-    Any test that waits must therefore declare a pilot job,
-    even where `drain()` or an in-process worker is what drains the queue.
-    The Slurm job stands in for the allocation.
-    `drain()` and the in-process worker stand in for the process inside it.
-
-    Use as `pilot_jobs("cpu")` in a test, or once in an autouse fixture.
-    """
+    # `as_completed` refuses a queue this executor never started a worker for,
+    # even where `drain()` or an in-process worker drains it.
+    # The Slurm job stands in for the allocation,
+    # and `drain()` or the in-process worker for the process inside it.
 
     def declare(*names: str) -> None:
         for name in names:

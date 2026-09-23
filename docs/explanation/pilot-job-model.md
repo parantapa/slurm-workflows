@@ -17,8 +17,8 @@ and each job starts workers that stay alive.
 The executor then dispatches the actual work to those workers over a queue.
 You pay Slurm's latency once per worker instead of once per task.
 The cluster sees a handful of ordinary jobs.
-The program sees something close to
-[`concurrent.futures`](https://docs.python.org/3/library/concurrent.futures.html).
+The program sees something
+close to [`concurrent.futures`](https://docs.python.org/3/library/concurrent.futures.html).
 
 ## Why a queue is a job group's name
 
@@ -102,11 +102,13 @@ until somebody waits on the task.
 A `ds-service` server holds one run's tasks,
 worker registrations and actor arguments
 in a single flat namespace with no executor name in it.
-Point two executors at one server, and they share that namespace.
+Point two executors at one server,
+and they share that namespace.
 Same-named job groups serve each other's tasks,
 and they overwrite each other's actor arguments.
 
-Nothing enforces the rule, because an executor cannot see another one.
+Nothing enforces the rule,
+because an executor cannot see another one.
 That is also why the liveness checks behind
 [a wait that cannot finish](../reference/executor.md#errors-that-end-a-wait)
 refuse a queue served by pilot jobs the executor did not start.

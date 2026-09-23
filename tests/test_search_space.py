@@ -1,10 +1,4 @@
-"""Tests for search spaces and their ranges.
-
-These need neither botorch nor a queue:
-a range is arithmetic on one value.
-For this reason it lives in a module of its own,
-and this file has no `importorskip` at the top of it.
-"""
+"""Tests for search spaces and their ranges."""
 
 from __future__ import annotations
 
@@ -12,6 +6,8 @@ import math
 
 import pytest
 
+# No importorskip for botorch here, on purpose.
+# See the developer notes, Search spaces.
 from slurm_workflows.search_space import (
     CategoricalRange,
     FloatRange,
@@ -74,8 +70,8 @@ class TestFloatRange:
 
     def test_log_range_midpoint_is_the_geometric_mean(self):
         # The point of log_range:
-        # half the budget goes to each decade,
-        # not to each half of the interval.
+        # each decade gets an equal share of the budget,
+        # rather than each equal-width stretch of the interval.
         r = FloatRange(1e-4, 1e-1, log_range=True)
         assert math.isclose(r.unstandardize(0.5), math.sqrt(1e-4 * 1e-1))
         assert math.isclose(r.unstandardize(1 / 3), 1e-3)
@@ -190,12 +186,9 @@ class TestConversions:
         assert params["optimizer"] == 1
 
     def test_a_rounded_parameter_does_not_round_trip_to_its_proposal(self):
-        """Why the optimizer records `to_unit` of the point it evaluated.
-
-        A continuous proposal lands between two integers.
-        What ran is the rounded one,
-        and that is what the optimizer tells the model.
-        """
+        # Why the optimizer records the unit point it evaluated,
+        # rather than the candidate.
+        # See the developer notes, Batch Bayesian optimization.
         proposal = [0.5, 0.51, 0.5]
 
         params = to_params(SPACE, proposal)

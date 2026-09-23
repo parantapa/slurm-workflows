@@ -35,9 +35,11 @@ from .swtop import (
 def sync_table(table: DataTable, rows: list[tuple[str, list[str]]]) -> None:
     """Bring one table to `rows`, and change only what differs.
 
-    Each row keeps the key the builders hand out.
+    Each row keeps the key it carries in `rows`.
     So a row that is still there keeps its place,
     its scroll position and the cursor on it.
+    A new row goes at the bottom,
+    so the order of the table can drift from the order of `rows`.
     """
     wanted = {key: cells for key, cells in rows}
     columns = list(table.columns)
@@ -192,8 +194,7 @@ class SwtopApp(App):
         try:
             snapshot = await self.collector.snapshot()
         except Exception as e:
-            # A server that is down, or not up yet, is worth waiting out.
-            # See "Monitoring" in the developer notes.
+            # See "`swtop` draws a failed poll" in the developer notes.
             snapshot = Snapshot(
                 address=self.collector.address,
                 when=datetime.now(),
@@ -205,6 +206,8 @@ class SwtopApp(App):
     def apply(self, snapshot: Snapshot) -> None:
         """Draw one snapshot.
 
+        A snapshot with an `error` shows the error,
+        and leaves the tables showing the last reading.
         Runs on the event loop, like every update.
         """
         self.snapshot = snapshot
@@ -213,7 +216,6 @@ class SwtopApp(App):
         error.display = snapshot.error is not None
         if snapshot.error is not None:
             error.update(f"cannot read the server: {snapshot.error}")
-            # The tables still show the last reading.
             return
 
         when = snapshot.when.strftime("%H:%M:%S")

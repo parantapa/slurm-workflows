@@ -1,11 +1,9 @@
-"""Tests for the Sobol' QMC exploration.
-
-Needs neither botorch nor torch, which is the point of the module:
-scipy draws the designs, and a stand-in executor runs the objectives inline.
-`TestRealExecutor` is what keeps that stand-in honest.
-"""
+"""Tests for the Sobol' QMC exploration."""
 
 from __future__ import annotations
+
+# No importorskip for botorch here, on purpose.
+# See the developer notes, Sobol' exploration.
 
 import gzip
 import math
@@ -122,7 +120,7 @@ def as_executor(executor: LocalExecutor) -> SlurmPilotExecutor:
 def study(
     name: str = "demo",
     space: SearchSpace = BOX_2D,
-    objective=sphere,
+    objective: Callable[..., Any] = sphere,
     queue: str | list[str] = "cpu",
     points: int | None = 8,
     seed: int | None = SEED,
@@ -205,10 +203,6 @@ class TestConstruction:
         assert str(exploration.studies[0].seed) in capsys.readouterr().out
 
     def test_the_callers_task_is_left_alone(self):
-        """`studies` says what will run.
-
-        The exploration does not touch the caller's own object.
-        """
         original = study(points=100, seed=None)
 
         exploration = explorer(original)
@@ -273,7 +267,7 @@ class TestDesign:
         assert isinstance(params["kind"], int)
 
     def test_the_design_covers_the_space_more_evenly_than_it_clumps(self):
-        """What Sobol' buys over a uniform draw: no half stays empty."""
+        """Unlike a uniform draw, Sobol' puts exactly half the points in each half."""
         design = explorer(study(points=64)).design("demo")
 
         assert sum(1 for p in design if p["x"] < 0.0) == 32
@@ -524,7 +518,7 @@ class TestPartialFailure:
 
     @staticmethod
     def fails_at(threshold: float) -> Callable[..., dict[str, float]]:
-        """An objective that raises on the points past `threshold`."""
+        """An objective that raises at every point whose `x` exceeds `threshold`."""
 
         def objective(x, y):
             if x > threshold:
@@ -744,7 +738,7 @@ class TestRealExecutor:
     def test_the_names_it_gives_are_on_the_queue_server(
         self, executor, ds_service_address, ds_client, tmp_path
     ):
-        """What `swtop` reads: the names, keyed by task id, in the store."""
+        """What `swtop` reads: the names, keyed by task id, in the map."""
         points = 4
         exploration = ExploreSpaceSobolQMC(
             [

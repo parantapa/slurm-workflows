@@ -10,7 +10,7 @@ and [what a run publishes](what-a-run-publishes.md)
 have pages of their own.
 The driver runs on a login node, or inside a Slurm job.
 
-Everything public is importable from the package root,
+Every name these reference pages use is importable from the package root,
 except `NoOutput`:
 
 ```python
@@ -51,8 +51,8 @@ Two executors pointed at one server share a queue namespace.
 Same-named job groups serve each other's tasks,
 and they overwrite each other's actor arguments.
 
-`work_dir` defaults to a timestamped directory under
-`<platform cache dir>/slurm-workflows/<name>`
+`work_dir` defaults to a timestamped directory
+under `<platform cache dir>/slurm-workflows/<name>`
 (`XDG_CACHE_HOME`-driven on Linux),
 so one executor's runs sit together.
 Generated scripts and all logs land there.
@@ -187,7 +187,7 @@ they require a `scale_jobs` call
 for at least one of each pending task's queues.
 `submit` does not check queue names,
 so this check is where a mistyped queue name appears.
-They raise the error before they yield any result.
+Under `RAISE_ON_FIRST_ERROR`, they raise the error before they yield any result.
 
 **Then once a minute while blocked**,
 they ask `squeue` whether each pending task's queues
@@ -258,6 +258,7 @@ Whoever looks at the queue reads it,
 which in practice means [`swtop`](swtop.md).
 `ExploreSpaceSobolQMC` and `OptimizeSpaceBotorch` call it themselves
 for every task they submit.
+[`mapreduce`](mapreduce.md) calls it for every map task it submits.
 
 ## `RaiseOnError`
 

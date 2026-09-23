@@ -1,8 +1,4 @@
-"""Tests for the shared helpers.
-
-Plain functions with no dependencies of their own,
-which is why they live outside the modules that use them.
-"""
+"""Tests for the shared helpers."""
 
 from __future__ import annotations
 

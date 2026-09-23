@@ -15,8 +15,8 @@ evaluates that batch across the pool of workers, and refits.
 The batch is what keeps the pool busy:
 a one-point-at-a-time optimizer leaves all but one worker idle.
 
-That takes two phases, because a model needs something to fit
-before it can choose anything.
+That takes two phases,
+because a model needs something to fit before it can choose anything.
 First, an `ExploreSpaceSobolQMC` exploration measures a first design and saves it.
 Then `OptimizeSpaceBotorch` reads that file and searches on from it.
 The optimizer never explores,
@@ -63,7 +63,8 @@ An evaluation is a cheap single call, `search_parallelism` at a time.
 The fit is a single task that threads across cores
 and grows superlinearly with the number of observations.
 The two want different nodes:
-an evaluation wants many workers, and a fit wants a whole node to itself.
+an evaluation wants many workers,
+and a fit wants a whole node to itself.
 
 Both arguments can point at one queue without risking deadlock,
 because a round never has both kinds of task in flight at once.
@@ -117,7 +118,7 @@ The search space rounds a continuous candidate
 back to an integer or a categorical level.
 
 On a mostly-discrete space with few levels,
-expect a search to re-propose points it already evaluated.
+a search re-proposes points it already evaluated.
 Several distinct continuous candidates round to the same grid point.
 The search records where the objective actually ran, after rounding,
 never the continuous candidate.
@@ -135,7 +136,8 @@ covers what the two space classes do with the mapping.
 
 The search **minimizes** the entry under `objective_key`,
 so a quantity to be maximized enters the search negated.
-Internally the search fits the model to `-f`, because botorch maximizes,
+Internally the search fits the model to `-f`,
+because botorch maximizes,
 and every acquisition value lives in that negated space too.
 
 ## Related

@@ -1,9 +1,7 @@
 """Tests for the worker.
 
-The worker runs for real against a real ds-service.
-The tests mock Slurm alone.
-`run_worker` stops the otherwise-infinite main loop
-once the worker reports the expected number of tasks done.
+How these tests run a real worker and stop it
+is in how-to-run-tests.md, under "Notes for future changes".
 """
 
 from __future__ import annotations
@@ -64,14 +62,7 @@ class TestTaskExecution:
     def test_idles_quietly_on_an_empty_queue(
         self, ds_service_address, tmp_path, caplog
     ):
-        """An empty queue is the normal idle case, not an error.
-
-        `task_get` answers `NoTaskAvailable` at once when nothing is ready,
-        and the worker sleeps and asks again.
-        Left to the catch-all handler instead,
-        the loop still polls, but logs a traceback every time round.
-        For this reason the absence of that log tells the two apart.
-        """
+        """An empty queue is the normal idle case, not an error."""
         worker = make_worker(ds_service_address, tmp_path)
 
         with caplog.at_level(logging.ERROR, logger="worker_process"):
@@ -79,6 +70,9 @@ class TestTaskExecution:
 
         worker.close()
         assert polls == 3, "the worker stopped polling an empty queue"
+        # `NoTaskAvailable` left to the catch-all handler still polls,
+        # but logs a traceback every time round.
+        # Only the absence of that log tells the two apart.
         assert "Unexpected exception" not in caplog.text
 
     def test_runs_many_tasks_in_sequence(self, executor, ds_service_address, tmp_path):
@@ -167,7 +161,6 @@ class TestRemoteErrors:
     def test_worker_survives_a_failing_task(
         self, executor, ds_service_address, tmp_path
     ):
-        """One bad task must not take the worker down."""
         bad = executor.submit("cpu", boom)
         good = executor.submit("cpu", square, 4)
 
@@ -609,17 +602,14 @@ class TestMonitors:
 
 
 class TestCli:
-    """The console entry point: env vars, sys.path, and leaving output alone."""
+    """The console entry point: its options, sys.path, and leaving output alone."""
 
     @pytest.fixture(autouse=True)
     def _restore_process_state(self):
-        """Put `sys.path` back after each case.
-
-        The command prepends to it directly and undoes nothing.
-        It is a process entry point, and the process is the worker.
-        The environment is the same story,
-        and the autouse fixture in `conftest.py` restores that for every test.
-        """
+        """Put `sys.path` and the environment back after each case."""
+        # The command prepends to `sys.path` and undoes nothing,
+        # because in production the process is the worker.
+        # The autouse fixture in `conftest.py` also restores the environment.
         env = dict(os.environ)
         path = list(sys.path)
         yield
@@ -647,12 +637,7 @@ class TestCli:
         return seen
 
     def invoke(self, tmp_path: Path, **overrides: str) -> int:
-        """Run the CLI and return its exit code.
-
-        This helper invokes the CLI directly, not through click's CliRunner.
-        CliRunner swaps the process streams for buffers of its own,
-        and these tests assert on what the command does to those streams.
-        """
+        """Run the CLI and return its exit code."""
         args = {
             "--group": "cpu",
             "--name": "worker-0",
@@ -664,6 +649,8 @@ class TestCli:
         args.update(overrides)
         argv = [item for pair in args.items() for item in pair]
 
+        # Not click's CliRunner: it swaps the process streams for buffers,
+        # and these tests assert on what the command does to those streams.
         try:
             slurm_pilot_worker.main(
                 args=argv, prog_name="slurm-pilot-worker", standalone_mode=False

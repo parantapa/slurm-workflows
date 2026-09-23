@@ -9,14 +9,10 @@ from ds_service_client import DsServiceClient
 from slurm_workflows.slurm_pilot_worker import PilotWorker
 
 
+# A BaseException, not an Exception, because `main()` catches every Exception.
+# See docs/how-to-run-tests.md, "Notes for future changes".
 class StopWorker(BaseException):
-    """Breaks the worker's otherwise-infinite main loop.
-
-    Deliberately a BaseException, not an Exception:
-    `main()` catches every Exception, so a worker survives bad tasks.
-    For this reason, only a BaseException can end the loop
-    from inside a client call.
-    """
+    """Breaks the worker's otherwise-infinite main loop."""
 
 
 class _StoppingClient:
@@ -41,12 +37,7 @@ class _StoppingClient:
 
 
 class _IdlingClient:
-    """Wraps a real client, and raises StopWorker after N `task_get` calls.
-
-    The `task_get` calls themselves are the real ones,
-    so an empty queue answers with the server's own `NoTaskAvailable`
-    rather than one this double invented.
-    """
+    """Wraps a real client, and raises StopWorker after N `task_get` calls."""
 
     def __init__(self, inner: DsServiceClient, limit: int) -> None:
         self._inner = inner
@@ -57,6 +48,9 @@ class _IdlingClient:
         self.polls += 1
         if self.polls > self._limit:
             raise StopWorker
+        # The real call,
+        # so an empty queue answers with the server's own `NoTaskAvailable`
+        # rather than one this double invented.
         return self._inner.task_get(worker_id, queue)
 
     def __getattr__(self, name: str) -> Any:
@@ -71,15 +65,12 @@ def make_worker(
     actor_class_name: str = "",
     slurm_job_id: int = 42,
     hostname: str = "testhost",
+    # Long, so the only sample is the one taken at startup
+    # by the first worker on a host,
+    # which is what the tests look at.
     monitor_interval: float = 60.0,
 ) -> PilotWorker:
-    """A real worker against a real server.
-
-    The monitor interval is long by default.
-    The first worker on a host samples once as it starts,
-    which is what the tests look at.
-    Nothing here wants a second sample mid-test.
-    """
+    """A real worker against a real server."""
     return PilotWorker(
         group=group,
         name=name,
@@ -94,17 +85,14 @@ def make_worker(
 
 
 def run_worker(worker: PilotWorker, expect_tasks: int) -> None:
-    """Run the worker's real main loop until it completes `expect_tasks` tasks.
-
-    The tasks must arrive, before the call or from another thread:
-    `task_get` on an empty queue raises `NoTaskAvailable` at once,
-    which the worker answers with a sleep and another request.
-    For this reason, a worker that never gets `expect_tasks` tasks
-    spins until the hang guard fires.
-    """
+    """Run the worker's real main loop until it completes `expect_tasks` tasks."""
     # `_StoppingClient` forwards everything it does not override,
     # so it satisfies the worker's use of the client without subclassing it.
     worker.client = cast(DsServiceClient, _StoppingClient(worker.client, expect_tasks))
+    # The tasks must arrive, before the call or from another thread.
+    # The worker answers an empty queue with a sleep and another request,
+    # so a worker that never gets `expect_tasks` tasks
+    # spins until the hang guard fires.
     try:
         worker.main()
     except StopWorker:
@@ -112,14 +100,10 @@ def run_worker(worker: PilotWorker, expect_tasks: int) -> None:
 
 
 def poll_worker(worker: PilotWorker, polls: int) -> int:
-    """Run the worker's real main loop for `polls` fetches, and count them.
-
-    Use this for the empty-queue case.
-    The worker completes no task there, so `run_worker` never stops.
-    Returns the number of fetches the worker made,
-    so a loop that gave up early is distinguishable
-    from one that kept polling.
-    """
+    """Run the worker's real main loop for `polls` fetches, and count them."""
+    # For the empty-queue case, where `run_worker` never stops.
+    # See docs/how-to-run-tests.md, "Notes for future changes".
+    # The count tells a loop that gave up early from one that kept polling.
     client = _IdlingClient(worker.client, polls)
     worker.client = cast(DsServiceClient, client)
     try:

@@ -1,9 +1,8 @@
-"""Actor classes for the actor tests.
+"""Actor classes for the actor tests."""
 
-Workers resolve actors with `importlib`,
-so these must be importable by name (`support_actor.CounterActor`).
-conftest puts this directory on `sys.path`.
-"""
+# Workers resolve actors with `importlib`,
+# so these classes must stay importable by name (`support_actor.CounterActor`).
+# conftest puts this directory on `sys.path`.
 
 from __future__ import annotations
 
@@ -46,7 +45,7 @@ class ConfiguredActor:
         self.args = args
         self.kwargs = kwargs
 
-    def config(self) -> tuple[tuple, dict]:
+    def config(self) -> tuple[tuple[object, ...], dict[str, object]]:
         return self.args, self.kwargs
 
 

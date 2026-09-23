@@ -37,8 +37,8 @@ to get back an integer or a categorical parameter.
 Both classes record where the objective actually ran, after rounding,
 not the continuous candidate.
 
-What that rounding costs a search on a mostly-discrete space is in
-[Batch Bayesian optimization](../explanation/batch-bayesian-optimization.md).
+What that rounding costs a search on a mostly-discrete space
+is in [Batch Bayesian optimization](../explanation/batch-bayesian-optimization.md).
 
 ## The objective
 
@@ -73,8 +73,8 @@ A shadowed key raises `ValueError` at construction.
 
 Both classes block until every pending point comes back.
 A worker that raises does not raise on the driver,
-so both classes wait with
-[`RaiseOnError.RAISE_AFTER_COMPLETED`](executor.md#raiseonerror).
+so both classes wait
+with [`RaiseOnError.RAISE_AFTER_COMPLETED`](executor.md#raiseonerror).
 They turn what came back into a `RuntimeError` that names the studies that failed,
 rather than feed a `RemoteExecutionError` into a model.
 

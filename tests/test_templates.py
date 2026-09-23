@@ -18,20 +18,12 @@ def run_sbatch_script(
 ) -> subprocess.CompletedProcess[str]:
     """Run a rendered sbatch body against a stub `srun`.
 
-    The shell decides which of the two `srun` invocations runs,
-    not anything Python can see in the rendered text.
-    The only test that can be right about it is one that runs the shell.
-
     Both streams come back, because the script uses both.
     The stub echoes its command line to stdout,
     among whatever the script itself echoed on the way there.
     For this reason callers pick that line back out with `srun_lines`
     rather than reading stdout whole.
     `set -x` traces to stderr.
-
-    The test builds the environment from scratch rather than inheriting it.
-    That pins the SLURM variables to exactly what a case sets,
-    even when the suite itself runs from inside a Slurm job.
     """
 
     bin_dir = tmp_path / "bin"
@@ -43,6 +35,11 @@ def run_sbatch_script(
     script_path = tmp_path / "job.sbatch"
     script_path.write_text(script)
 
+    # Only the shell knows which `srun` runs.
+    # See the developer notes, "Slurm interaction".
+    # The environment is built from scratch rather than inherited,
+    # so the SLURM variables are exactly what a case sets,
+    # even when the suite itself runs from inside a Slurm job.
     proc = subprocess.run(
         ["bash", str(script_path)],
         capture_output=True,
@@ -152,10 +149,7 @@ class TestParseFile:
     def test_a_jinja_comment_in_a_body_is_read_as_the_next_header(self, tmp_path: Path):
         """A limit of the format, not a bug to correct by accident.
 
-        `{#-` is how a template body ends,
-        so a body cannot also contain a whitespace-trimming Jinja comment.
-        The parser takes that comment for the header of the next template.
-        Use `{#` without the dash for a comment inside a body.
+        See the developer notes, "Templates".
         """
         path = self.write(
             tmp_path,
@@ -273,11 +267,8 @@ class TestWorkerSbatchScript:
 class TestOutputRedirectByTaskCount:
     """Which `srun` a job runs. These cases run the shell to find out.
 
-    A job of exactly one task writes to the batch job's own output file.
-    It has no second task to interleave with,
-    so a per-task file only duplicates what is already there.
-    Every other allocation keeps the per-task files,
-    and so does anything that is not a Slurm job at all.
+    The rule they pin is in the developer notes, "Slurm interaction".
+    Anything that is not a Slurm job at all keeps the per-task files.
 
     Each case names the `sbatch` options it stands for,
     and sets the variables Slurm sets for them.
@@ -313,8 +304,7 @@ class TestOutputRedirectByTaskCount:
         self, tmp_path: Path, env: dict[str, str], srun_lines
     ):
         # The last case names no task count, so SLURM_NTASKS is unset.
-        # One task per node is then the default,
-        # which makes the one node one task.
+        # See the developer notes, "Slurm interaction".
         out = run_sbatch_script(self.render(), tmp_path, **env).stdout
 
         # One line, because only one of the two branches can run.
@@ -345,9 +335,8 @@ class TestOutputRedirectByTaskCount:
     def test_every_other_job_keeps_its_per_task_files(
         self, tmp_path: Path, env: dict[str, str], srun_lines
     ):
-        # One task *per node* is not one task:
-        # `--nodes=4 --ntasks-per-node=1` is four workers on four nodes,
-        # and without --output they interleave into the single batch file.
+        # One task *per node* is not one task.
+        # See the developer notes, "Slurm interaction".
         out = run_sbatch_script(self.render(), tmp_path, **env).stdout
 
         assert srun_lines(out) == [
@@ -360,9 +349,7 @@ class TestOutputRedirectByTaskCount:
     ):
         """SLURM_NTASKS is the job's task count, so nothing else gets a vote.
 
-        Slurm sets it for `--ntasks` *and* for any `--ntasks-per-*` option,
-        which is what makes it the whole answer whenever it is there.
-        The node count only stands in when it is absent.
+        See the developer notes, "Slurm interaction".
         """
         out = run_sbatch_script(
             self.render(),
@@ -377,9 +364,8 @@ class TestOutputRedirectByTaskCount:
     def test_the_count_it_decided_on_is_echoed(self, tmp_path: Path):
         """The batch output file must say why the shell took that branch.
 
-        Which file a worker's log went to is otherwise something
-        you can only work out by re-reading the sbatch script
-        and guessing what Slurm set.
+        Otherwise the only way to tell which file a worker's log went to
+        is to re-read the sbatch script and guess what Slurm set.
         """
         proc = run_sbatch_script(
             self.render(),

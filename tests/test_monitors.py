@@ -138,7 +138,6 @@ class TestCgroupSampler:
         assert values["memory"] > 0, "the sum falls back to this process's tree"
 
     def test_the_real_cgroup_is_readable_or_falls_back(self):
-        """Whatever this machine is, a sample comes back."""
         values = CgroupSampler().sample()
 
         assert values["memory"] > 0

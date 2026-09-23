@@ -1,8 +1,5 @@
 """`swtop`: a live view of a `ds-service` task queue.
 
-Polls the server and redraws a summary of its tasks.
-The summary also holds the pilot jobs the executor submitted,
-and the workers that run in them.
 See `docs/reference/swtop.md` for the blocks and what fills them.
 """
 
@@ -65,7 +62,7 @@ STALE_AFTER_S = 60.0
 # The tables show this in place of a value the collector cannot read:
 # a field of a worker or a pilot job whose key is in the map,
 # or the name of a task.
-# A worker caught mid-startup looks like this.
+# A value that is not the JSON its writer publishes looks like this.
 UNKNOWN = "?"
 
 # The order the tables list tasks in: what runs now comes first.
@@ -158,13 +155,19 @@ class ProgressInfo:
 
     @property
     def fraction(self) -> float:
-        """How far along the wait is, in `[0, 1]`. Empty waits are done."""
+        """How far along the wait is, in `[0, 1]`.
+
+        An empty wait counts as done.
+        """
         return self.completed / self.total if self.total else 1.0
 
 
 @dataclass
 class Snapshot:
-    """One poll's worth of server state."""
+    """One poll's worth of server state.
+
+    A poll that failed sets `error` and leaves every other reading empty.
+    """
 
     address: str
     when: datetime
@@ -181,21 +184,20 @@ class Snapshot:
 class Collector:
     """Turns the server's RPCs into a `Snapshot`.
 
-    Keep one instance for every poll of a server.
+    One instance is meant to serve every poll of one server.
     It reads each worker, pilot job and task name once, and caches them.
     """
 
     def __init__(self, client: DsServiceClientAsync, address: str) -> None:
         self.client = client
         self.address = address
-        # An identity never changes after its first write,
-        # so `Collector` reads it once.
-        # A steady state re-reads only what is new.
+        # See "`Collector` reads an identity once" in the developer notes.
         self._pilot_jobs: dict[str, PilotJobInfo] = {}
         self._workers: dict[str, WorkerInfo] = {}
         # The last count read for a progress id,
         # so a display that no longer moves still shows where it stopped.
         self._progress_seen: dict[str, int] = {}
+        # Cached like the identities above.
         self._task_names: dict[str, str] = {}
 
     async def snapshot(self) -> Snapshot:
@@ -315,8 +317,8 @@ class Collector:
         missing = [w for w in worker_ids if w not in self._workers]
         read = await asyncio.gather(*(self._worker_info(w) for w in missing))
         for worker_id, info in zip(missing, read):
-            # An unreadable description does not go in the cache:
-            # the read can land in the middle of the write.
+            # An unreadable description does not go in the cache,
+            # so the next poll reads the key again.
             if info is not None:
                 self._workers[worker_id] = info
 
@@ -348,8 +350,8 @@ class Collector:
         if not task_ids:
             return []
 
-        # The cache holds only the names that were there.
-        # A task seen before `set_task_name` ran can have a name now.
+        # Only names already written go in the cache.
+        # See "`Collector` reads an identity once" in the developer notes.
         named = {key[len(TASK_NAME_PREFIX) :] for key in name_keys}
         missing = sorted(named - self._task_names.keys())
         names = await asyncio.gather(
@@ -429,6 +431,7 @@ class Collector:
         try:
             worker_id = await self.client.task_get_worker_id(task_id)
         except (KeyError, TaskStateError):
+            # The task can leave Running between the status call and this read.
             return ""
         return worker_names.get(worker_id, worker_id)
 
@@ -437,7 +440,8 @@ class Collector:
 async def open_collector(address: str) -> AsyncIterator[Collector]:
     """A collector on a client of its own, closed on the way out.
 
-    Enter this on the event loop the client belongs to.
+    The client belongs to the event loop that enters this,
+    so use the collector only on that loop.
     """
     async with DsServiceClientAsync(address) as client:
         yield Collector(client, address)
@@ -458,7 +462,7 @@ def _unknown_pilot_job(name: str) -> PilotJobInfo:
 
 
 def _state_rank(state: str) -> int:
-    """Where a state sorts. A state `STATE_ORDER` omits comes last."""
+    """Where a state sorts, with a state `STATE_ORDER` omits sorting last."""
     try:
         return STATE_ORDER.index(state)
     except ValueError:
@@ -495,7 +499,10 @@ TASK_COLUMNS = ["NAME", "TASK ID", "STATE", "WORKER"]
 
 
 def progress_line(snapshot: Snapshot, width: int = 24) -> str:
-    """The progress display as one line, or "" when nothing published one."""
+    """The progress display as one line, or "" when nothing published one.
+
+    `width` is the width of the bar in characters, not of the whole line.
+    """
     progress = snapshot.progress
     if progress is None:
         return ""
@@ -633,7 +640,7 @@ def render(snapshot: Snapshot) -> str:
 def draw(text: str) -> None:
     """Put `text` on the screen, in place of what was there.
 
-    This appends to redirected output instead, without escape codes.
+    Append it instead, without escape codes, when stdout is not a terminal.
     """
     if sys.stdout.isatty():
         # Home, then clear.
@@ -652,7 +659,7 @@ async def run_plain(collector: Collector, interval: float) -> None:
             try:
                 snapshot = await collector.snapshot()
             except Exception as e:
-                # A server that is down, or not up yet, is worth waiting out.
+                # See "`swtop` draws a failed poll" in the developer notes.
                 snapshot = Snapshot(
                     address=collector.address,
                     when=datetime.now(),
@@ -667,7 +674,11 @@ async def run_plain(collector: Collector, interval: float) -> None:
 
 
 async def watch(server_address: str, interval: float, plain: bool) -> None:
-    """Open a client on this loop and run the display the caller asked for."""
+    """Open a client on the running loop, and run a display on it.
+
+    The display is the text frames when `plain` is set or stdout is not a terminal,
+    and the terminal UI otherwise.
+    """
     async with open_collector(server_address) as collector:
         if plain or not sys.stdout.isatty():
             await run_plain(collector, interval)
