@@ -504,6 +504,109 @@ class TestLayout:
 
 
 # --------------------------------------------------------------------------
+# A poll slower than the interval
+# --------------------------------------------------------------------------
+
+
+class SlowCollector:
+    """Takes `seconds` over every poll, and counts the polls it runs."""
+
+    def __init__(self, seconds: float) -> None:
+        self.address = "host:1"
+        self.seconds = seconds
+        self.started = 0
+        self.finished = 0
+        self.in_flight = 0
+        self.most_in_flight = 0
+
+    async def snapshot(self) -> Snapshot:
+        self.started += 1
+        self.in_flight += 1
+        self.most_in_flight = max(self.most_in_flight, self.in_flight)
+        try:
+            await asyncio.sleep(self.seconds)
+        finally:
+            self.in_flight -= 1
+        self.finished += 1
+        return snapshot()
+
+
+class PollingApp(App):
+    """A summary line on a poller of a given interval, and the polls it heard."""
+
+    def __init__(self, collector: SlowCollector, interval: float) -> None:
+        super().__init__()
+        # `SlowCollector` provides the `snapshot()` and `address` a poller uses.
+        self.collector = cast(Collector, collector)
+        self.interval = interval
+        self.polled: list[Snapshot] = []
+
+    def compose(self) -> ComposeResult:
+        yield SummaryLine()
+        yield SnapshotPoller(collector=self.collector, interval=self.interval)
+
+    def on_mount(self) -> None:
+        self.query_one(SnapshotPoller).attach(self.query_one(SummaryLine))
+
+    def on_snapshot_poller_polled(self, event: SnapshotPoller.Polled) -> None:
+        self.polled.append(event.snapshot)
+
+
+class TestSlowPoll:
+    # A poll of 0.3 s against an interval of 0.05 s,
+    # which is a large pool read through a tunnel, scaled down.
+
+    def test_a_poll_slower_than_the_interval_still_lands(self):
+        """The next tick does not cut it short, so the screen moves on."""
+        slow = SlowCollector(0.3)
+
+        async def scenario():
+            app = PollingApp(slow, interval=0.05)
+            async with app.run_test() as pilot:
+                await pilot.pause(1.0)
+
+                assert slow.finished >= 2
+                assert len(app.polled) == slow.finished
+                assert "total 6" in text_of(app.query_one(SummaryLine))
+
+        drive(scenario)
+
+    def test_one_poll_is_in_flight_at_a_time(self):
+        """A tick during a poll is dropped rather than queued."""
+        slow = SlowCollector(0.3)
+
+        async def scenario():
+            app = PollingApp(slow, interval=0.05)
+            async with app.run_test() as pilot:
+                await pilot.pause(1.0)
+
+                assert slow.most_in_flight == 1
+                # About 1.0 / 0.3 polls, where queued ticks would make it 20.
+                assert slow.started <= 5
+
+        drive(scenario)
+
+    def test_a_refresh_asked_for_during_a_poll_runs_after_it(self):
+        slow = SlowCollector(0.3)
+
+        async def scenario():
+            app = PollingApp(slow, interval=3600.0)
+            async with app.run_test() as pilot:
+                await pilot.pause(0.1)
+                assert slow.started == 1
+
+                app.query_one(SnapshotPoller).poll_now()
+                await pilot.pause(0.1)
+                assert slow.started == 1, "the first poll is not cut short"
+
+                await pilot.pause(0.6)
+                assert slow.started == 2
+                assert slow.finished == 2
+
+        drive(scenario)
+
+
+# --------------------------------------------------------------------------
 # Embedded in another app
 # --------------------------------------------------------------------------
 

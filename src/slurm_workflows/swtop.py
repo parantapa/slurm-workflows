@@ -287,26 +287,25 @@ class Collector:
         ]
 
         missing = [n for n in names if n not in self._pilot_jobs]
-        read = await asyncio.gather(*(self._pilot_job_info(n) for n in missing))
-        for name, info in zip(missing, read):
-            if info is not None:
-                self._pilot_jobs[name] = info
+        await asyncio.gather(*(self._pilot_job_info(n) for n in missing))
 
         listed = [
             self._pilot_jobs.get(name) or _unknown_pilot_job(name) for name in names
         ]
         return sorted(listed, key=lambda j: (j.group, j.name))
 
-    async def _pilot_job_info(self, name: str) -> PilotJobInfo | None:
-        """One job's published description, or None if it is not readable."""
+    async def _pilot_job_info(self, name: str) -> None:
+        """Cache one job's published description, if it is readable."""
         text = await self._text(f"{PILOT_JOB_INFO_PREFIX}{name}")
         try:
             published = json.loads(text)
             fields = {field: str(published[field]) for field in PILOT_JOB_FIELDS}
         except (ValueError, TypeError, KeyError):
-            return None
+            return
 
-        return PilotJobInfo(**fields)
+        # Cached as soon as it is read, so a poll cut short keeps it.
+        # See "`Collector` reads an identity once" in the developer notes.
+        self._pilot_jobs[name] = PilotJobInfo(**fields)
 
     async def _collect_workers(self) -> list[WorkerInfo]:
         """Every worker that registered, cached like the rest."""
@@ -317,12 +316,7 @@ class Collector:
 
         # Every description the cache is short of, read in one go.
         missing = [w for w in worker_ids if w not in self._workers]
-        read = await asyncio.gather(*(self._worker_info(w) for w in missing))
-        for worker_id, info in zip(missing, read):
-            # An unreadable description does not go in the cache,
-            # so the next poll reads the key again.
-            if info is not None:
-                self._workers[worker_id] = info
+        await asyncio.gather(*(self._worker_info(w) for w in missing))
 
         listed = [
             self._workers.get(worker_id) or _unknown_worker(worker_id)
@@ -330,16 +324,19 @@ class Collector:
         ]
         return sorted(listed, key=lambda w: (w.group, w.name))
 
-    async def _worker_info(self, worker_id: str) -> WorkerInfo | None:
-        """One worker's published description, or None if it is not readable."""
+    async def _worker_info(self, worker_id: str) -> None:
+        """Cache one worker's published description, if it is readable."""
         text = await self._text(f"{WORKER_INFO_PREFIX}{worker_id}")
         try:
             published = json.loads(text)
             fields = {name: str(published[name]) for name in WORKER_INFO_FIELDS}
         except (ValueError, TypeError, KeyError):
-            return None
+            # An unreadable description does not go in the cache,
+            # so the next poll reads the key again.
+            return
 
-        return WorkerInfo(worker_id=worker_id, **fields)
+        # Cached as soon as it is read, so a poll cut short keeps it.
+        self._workers[worker_id] = WorkerInfo(worker_id=worker_id, **fields)
 
     async def _collect_tasks(self, workers: list[WorkerInfo]) -> list[TaskInfo]:
         """Every task on the server, in the order the tasks block lists them."""
@@ -356,10 +353,7 @@ class Collector:
         # See "`Collector` reads an identity once" in the developer notes.
         named = {key[len(TASK_NAME_PREFIX) :] for key in name_keys}
         missing = sorted(named - self._task_names.keys())
-        names = await asyncio.gather(
-            *(self._text(f"{TASK_NAME_PREFIX}{task_id}") for task_id in missing)
-        )
-        self._task_names.update(zip(missing, names))
+        await asyncio.gather(*(self._task_name(task_id) for task_id in missing))
 
         # One batched call for every task,
         # rather than a status RPC apiece.
@@ -391,6 +385,10 @@ class Collector:
             tasks,
             key=lambda t: (_state_rank(t.state), t.name == UNNAMED, t.name, t.task_id),
         )
+
+    async def _task_name(self, task_id: str) -> None:
+        """Cache one task's name as soon as it is read, so a poll cut short keeps it."""
+        self._task_names[task_id] = await self._text(f"{TASK_NAME_PREFIX}{task_id}")
 
     async def _collect_subjects(self, prefixes: dict[str, str]) -> list[SubjectInfo]:
         """The latest reading of every subject one monitor writes about."""

@@ -612,6 +612,10 @@ plus one for every named task.
 `set_task_name` runs just after `submit`,
 so a task polled between the two
 otherwise stays `-` for the rest of the run.
+Each read goes into the cache as soon as it returns,
+rather than once the whole poll is done.
+A poll cut short, by an unmount or by a caller's timeout,
+then still leaves the next one less to read.
 
 **`swtop` draws a failed poll, and does not raise it.**
 A display that exits when the server blinks
@@ -628,6 +632,22 @@ and a few hundred workers do not fit in a two-second interval.
 `Collector` issues each set of reads with `asyncio.gather`,
 so a poll costs about one round trip however wide the pool is.
 The cache means `Collector` reads only what is new.
+That holds on a fast network.
+Through an ssh tunnel, the first poll of a pool of 2500 workers
+and 2500 named tasks took 4.4 s,
+and every later poll about 0.8 s.
+
+**`SnapshotPoller` lets a slow poll finish.**
+A poll in flight is never cut short.
+A tick of the interval which comes while one is in flight is dropped,
+and `poll_now` called then polls once more when it ends.
+The earlier poller cancelled the poll in flight at every tick.
+A poll slower than the interval then never finished,
+and since the cache filled only at the end of a poll,
+every poll started as cold as the first.
+The screen kept its first reading, with no error to say why.
+Dropping the tick means a slow server is polled as often as it answers,
+and no more.
 
 **`sync_table` updates a table in place, and never rebuilds it.**
 `sync_table` adds, updates and removes rows by key,

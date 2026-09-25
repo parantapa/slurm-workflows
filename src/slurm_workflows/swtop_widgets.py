@@ -292,6 +292,10 @@ class SnapshotPoller(Widget):
         # The last snapshot, which a view attached later starts from.
         self.snapshot: Snapshot | None = None
         self._stack = AsyncExitStack() if collector is None else None
+        # Whether a poll is in flight, and whether `poll_now` asked for
+        # another while it was.
+        self._polling = False
+        self._again = False
 
     def attach(self, *views: SnapshotView) -> None:
         """Show every later snapshot on `views` too.
@@ -317,7 +321,7 @@ class SnapshotPoller(Widget):
                 open_collector(self.address)
             )
         self.poll_now()
-        self.set_interval(self.interval, self.poll_now)
+        self.set_interval(self.interval, self._tick)
 
     async def on_unmount(self) -> None:
         # Cancel a poll in flight before closing the client it reads through.
@@ -326,21 +330,28 @@ class SnapshotPoller(Widget):
             await self._stack.aclose()
 
     def poll_now(self) -> None:
-        """Poll now rather than at the next interval, without blocking."""
-        self.run_worker(
-            self._poll,
-            # One poll at a time.
-            # Textual cancels the poll in flight when the next one starts,
-            # so a slow server cannot pile up one poll per interval.
-            # An RPC already sent runs on
-            # until it completes or its deadline passes.
-            # The interval starts a poll every time,
-            # so a poll slower than the interval never finishes,
-            # and the screen keeps its last reading with no error.
-            # The group is per poller, so two pollers leave each other alone.
-            exclusive=True,
-            group=f"swtop-poll-{id(self)}",
-        )
+        """Poll now rather than at the next interval, without blocking.
+
+        A poll in flight is never cut short.
+        A call while one is in flight polls once more when it ends,
+        so what was asked for still reads the server afresh.
+        """
+        if self._polling:
+            self._again = True
+            return
+
+        # One poll at a time, and each one runs to its end.
+        # See "`SnapshotPoller` lets a slow poll finish" in the developer notes.
+        self._polling = True
+        # The group is per poller, so two pollers leave each other alone.
+        self.run_worker(self._poll, group=f"swtop-poll-{id(self)}")
+
+    def _tick(self) -> None:
+        """Poll on the interval, unless a poll is still in flight."""
+        # A tick during a slow poll is dropped rather than queued,
+        # so a slow server is polled as often as it answers and no more.
+        if not self._polling:
+            self.poll_now()
 
     def deliver(self, snapshot: Snapshot) -> None:
         """Show `snapshot` on every view, and post `Polled`.
@@ -356,13 +367,22 @@ class SnapshotPoller(Widget):
         """One poll, awaited in a worker so the interface does not block."""
         assert self.collector is not None
         try:
-            snapshot = await self.collector.snapshot()
-        except Exception as e:
-            # See "`swtop` draws a failed poll" in the developer notes.
-            snapshot = Snapshot(
-                address=self.collector.address,
-                when=datetime.now(),
-                error=f"{type(e).__name__}: {e}",
-            )
+            try:
+                snapshot = await self.collector.snapshot()
+            except Exception as e:
+                # See "`swtop` draws a failed poll" in the developer notes.
+                snapshot = Snapshot(
+                    address=self.collector.address,
+                    when=datetime.now(),
+                    error=f"{type(e).__name__}: {e}",
+                )
 
-        self.deliver(snapshot)
+            self.deliver(snapshot)
+        finally:
+            self._polling = False
+
+        # Not reached when unmounting cancels the poll,
+        # so a poller on its way out starts nothing new.
+        if self._again:
+            self._again = False
+            self.poll_now()

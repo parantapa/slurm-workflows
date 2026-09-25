@@ -99,6 +99,18 @@ class CountingClient:
         return getattr(self._inner, name)
 
 
+class StallingClient(CountingClient):
+    """Counts key reads, and never answers a read of `stall_on`."""
+
+    stall_on: str | None = None
+
+    async def map_get(self, key: str) -> bytes:
+        if key == self.stall_on:
+            self.keys_read.append(key)
+            await asyncio.Event().wait()
+        return await super().map_get(key)
+
+
 # --------------------------------------------------------------------------
 # collecting
 # --------------------------------------------------------------------------
@@ -405,6 +417,36 @@ class TestCollectWorkers:
         assert after_first == 1, "the whole description is one key"
         assert counting.reads("worker_info:") == after_first
         worker.close()
+        bound.close()
+
+    def test_a_poll_cut_short_keeps_what_it_read(self, ds_service_address, ds_client):
+        """A slow poll that is cancelled still leaves the next one less to read."""
+        for name in ("w-1", "w-2", "w-3"):
+            ds_client.map_set(
+                f"worker_info:{name}",
+                json.dumps(
+                    {
+                        "group": "cpu",
+                        "name": name,
+                        "slurm_job_id": 42,
+                        "hostname": "testhost",
+                        "pid": 1,
+                    }
+                ).encode(),
+            )
+        bound = LoopBound(ds_service_address, wrap=StallingClient)
+        stalling = cast(StallingClient, bound.collector.client)
+        stalling.stall_on = "worker_info:w-3"
+
+        with pytest.raises(TimeoutError):
+            bound.run(asyncio.wait_for(bound.collector.snapshot(), timeout=0.5))
+
+        stalling.stall_on = None
+        before = stalling.reads("worker_info:")
+        workers = bound.snapshot().workers
+
+        assert [w.name for w in workers] == ["w-1", "w-2", "w-3"]
+        assert stalling.reads("worker_info:") == before + 1, "only w-3 is read again"
         bound.close()
 
     def test_a_description_that_cannot_be_read_is_shown_as_unknown(
