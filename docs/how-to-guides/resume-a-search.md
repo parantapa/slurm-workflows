@@ -33,20 +33,6 @@ with SlurmPilotExecutor("search", address) as executor:
     opt.save(SEARCH_RESULTS)
 ```
 
-## Start the next run from every file so far
-
-```python
-opt = OptimizeSpaceBotorch(
-    optimization_studies, executor, [EXPLORE_RESULTS, *earlier_search_results]
-)
-opt.run()
-opt.save(SEARCH_RESULTS)
-```
-
-Each `save` writes only its own run's points.
-For this reason, the full list of files counts every point once.
-A third run passes three files, and so on.
-
 ## Keep the study name the same
 
 Give the `OptimizationStudy` the `name`
@@ -65,6 +51,20 @@ A mismatch raises `RuntimeError`.
     Do not narrow one past a point you already measured.
 - Do not make a range a log range
     if a saved point in it is at or below zero.
+
+## Start the next run from every file so far
+
+```python
+opt = OptimizeSpaceBotorch(
+    optimization_studies, executor, [EXPLORE_RESULTS, *earlier_search_results]
+)
+opt.run()
+opt.save(SEARCH_RESULTS)
+```
+
+Because each `save` writes only its own run's points,
+the full list of files counts every point once.
+A third run passes three files, and so on.
 
 ## Related
 

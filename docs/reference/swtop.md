@@ -2,7 +2,8 @@
 
 [<- back to the main README](../../README.md)
 
-`slurm_workflows.swtop` and `slurm_workflows.swtop_tui`:
+`slurm_workflows.swtop`, `slurm_workflows.swtop_widgets`
+and `slurm_workflows.swtop_tui`:
 the live view of a `slurm-workflows` run.
 It shows the tasks, the pilot jobs and the workers,
 and the compute nodes they run on.
@@ -25,19 +26,34 @@ swtop 10.0.0.1:5051 --plain  # frames of text, no UI
 | `-i`, `--interval` | Seconds between polls, `2.0` by default. Must be greater than 0. |
 | `--plain` | Print frames of text instead of running the terminal UI. |
 
-| Key | Does |
+| Key | Effect |
 | --- | --- |
 | `q` | Quit |
 | `r` | Poll now, rather than waiting for the next interval |
+| `p` | Show the pilot jobs tab |
+| `w` | Show the workers tab |
+| `h` | Show the hosts tab |
+| `j` | Show the slurm jobs tab |
+| `t` | Show the tasks tab |
 
-`swtop` runs until it is quit or interrupted with Ctrl-C.
+The terminal UI runs until it is quit with `q`.
+The text frames run until they are interrupted with Ctrl-C.
 Nothing has to be started for it on the cluster side.
 The executor and the workers publish what it reads as they go.
 
 ## What the screen shows
 
-A summary line of task counts, the progress of the wait the driver is in,
-and then five blocks:
+The terminal UI shows these areas, from top to bottom:
+
+1. A header with the server address and a clock.
+2. A summary line of task counts, and the time of the last reading.
+3. Five tabs, one for each block.
+   Each tab label carries the block's row count, such as `workers (40)`.
+4. The progress of the wait the driver is in.
+5. The error line, shown only when the last poll failed.
+6. A footer that lists the keys.
+
+The text frames show the same blocks one after another:
 
 ```
 tasks  waiting 0  ready 118  running 40  finished 240  failed 2  canceled 0  total 400
@@ -52,6 +68,7 @@ workers (40)
 NAME              GROUP  HOST      JOB      PID
 my-run.job.cpu.0  cpu    udc-an28  1846231  31402
 my-run.job.cpu.0  cpu    udc-an28  1846231  31403
+...
 
 hosts (2)
 HOST      FREE MEM  LOAD   /dev/shm  /tmp
@@ -67,6 +84,7 @@ NAME     TASK ID         STATE    WORKER
 train-7  my-run.task.7   Running  my-run.job.cpu.0
 eval-2   my-run.task.12  Ready
 -        my-run.task.13  Ready
+...
 ```
 
 `swtop` lists tasks running first, then ready and waiting,
@@ -109,6 +127,36 @@ The blocks come from different places:
 Every block says why it is empty, and never shows a bare header.
 A pilot job or a worker whose description the collector
 cannot read yet shows `?` in those fields.
+
+## Frames of text instead of a UI
+
+Output that is not a terminal (a pipe, a file, `--plain`)
+gets frames of text instead, one per poll.
+A header line names the server and the time of the reading:
+
+```
+swtop  10.0.0.1:5051  2026-01-30 11:04:57
+
+tasks  waiting 0  ready 118  running 40  finished 240  failed 2  canceled 0  total 400
+
+explore  [###############---------]  242/400 point  60%  working
+...
+```
+
+On a terminal the frames replace each other.
+Redirected output gets them appended instead.
+The blocks and columns are the same either way.
+
+## When the server cannot be read
+
+If the server is unreachable, `swtop` says so.
+In the terminal UI the error line appears below the tabs.
+It continues to poll rather than exit.
+In the terminal UI the last good reading stays on the screen,
+so a server restart does not blank the display.
+A text frame carries the message in place of the blocks.
+`swtop` also looks like this when it starts before the server:
+it waits, and fills in once there is something to read.
 
 ## Task names
 
@@ -168,31 +216,53 @@ How the workers elect the sampling worker,
 and why nothing re-elects it,
 is in [The trail a run leaves](../explanation/the-trail-a-run-leaves.md).
 
-## Frames of text instead of a UI
+## `slurm_workflows.swtop_widgets`
 
-Output that is not a terminal (a pipe, a file, `--plain`)
-gets frames of text instead, one per poll.
-A header line names the server and the time of the reading:
+`slurm_workflows.swtop_widgets` holds the widgets the terminal UI is built from.
+Another Textual app can lay them out in its own screen.
+To do that, see
+[How to embed `swtop` in a Textual app](../how-to-guides/embed-swtop-in-a-textual-app.md).
 
-```
-swtop  10.0.0.1:5051  2026-01-30 11:04:57
+| Name | What it is |
+| --- | --- |
+| `SnapshotPoller` | Polls one server, and calls `show` on each view attached to it. It draws nothing. |
+| `SummaryLine` | The summary line. |
+| `ProgressDisplay` | The progress bar. Hidden until a driver waits on something. |
+| `ErrorLine` | The error line. Hidden while polls succeed. |
+| `BlockTable` | The table of one block, or why the block is empty. It has no title. |
+| `block_pane(spec, *, id=None)` | A `TabPane` that holds a `BlockTable`, and keeps its count in the tab label. The id is `swtop-<key>` by default. |
+| `SwtopTabs` | A `TabbedContent` with one `block_pane` for each block. |
+| `BLOCKS` | In `slurm_workflows.swtop`: one `BlockSpec` for each block, in screen order. Its `key` is `pilot-jobs`, `workers`, `hosts`, `jobs` or `tasks`. |
 
-tasks  waiting 0  ready 118  running 40  finished 240  failed 2  canceled 0  total 400
+`SnapshotPoller` takes exactly one of these:
 
-explore  [###############---------]  242/400 point  60%  working
-...
-```
+- `address`: the poller opens a client of its own when it mounts,
+  and closes it when it unmounts.
+- `collector`: a `Collector` that the caller owns.
+  Its client must belong to the app's event loop.
 
-On a terminal the frames replace each other.
-Redirected output gets them appended instead.
-The blocks and columns are the same either way.
+Its other arguments are `interval`, in seconds, `2.0` by default,
+and `views`, the views to attach from the start.
 
-## When the server cannot be read
+| Member | What it does |
+| --- | --- |
+| `attach(*views)` | Shows each later poll on `views`. A view attached after a poll shows that poll at once. A widget must be mounted before it is attached. |
+| `detach(*views)` | Stops showing polls on `views`. |
+| `poll_now()` | Polls now, rather than at the next interval. |
+| `snapshot` | The last `Snapshot`, or `None` before the first poll ends. |
+| `Polled` | The message posted after each poll. `event.snapshot` is the `Snapshot`, with `error` set if the poll failed. |
 
-If the server is unreachable, `swtop` says so above the tables.
-It continues to poll rather than exit.
-In the terminal UI the last good reading stays on the screen,
-so a server restart does not blank the display.
-A text frame carries the message in place of the blocks.
-`swtop` also looks like this when it starts before the server:
-it waits, and fills in once there is something to read.
+`BlockTable` posts `BlockTable.CountChanged` when its row count changes.
+`event.spec` is its block, and `event.count` is the new count.
+
+A failed poll changes only the error line.
+The other widgets keep the last good reading.
+
+The widgets add no key bindings of their own.
+The tabs and the tables inside them keep the usual Textual keys,
+such as the arrow keys, while they have focus.
+The only ids the widgets set are the `swtop-<key>` ids of the block panes.
+The app that lays them out picks the other keys and every other id,
+for example a key for each tab and a key for `poll_now`.
+Each widget carries its own styles,
+so it needs no CSS from the app.

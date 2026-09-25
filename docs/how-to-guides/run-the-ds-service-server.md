@@ -31,14 +31,17 @@ Omit `port` to get an arbitrary free one.
 ## Choose an interface the compute nodes can reach
 
 Name an `interface` that the compute nodes can reach.
-`DsServiceServer` binds it to the IPv4 address of the `interface` you name.
-The example uses `ib0`, the Infiniband interface of the node the driver runs on.
-That node is a login node, or the compute node of the driver's own Slurm job.
-`ds.address` is then the `host:port` the workers connect to.
+`DsServiceServer` binds to the IPv4 address of that interface,
+and `ds.address` is then the `host:port` the workers connect to.
+
+The example uses `ib0`,
+the Infiniband interface of the node the driver runs on.
+That node is a login node,
+or the compute node of the driver's own Slurm job.
 
 If you name an interface that the node does not have,
+or one with no IPv4 address,
 the constructor raises `ValueError`.
-An interface with no IPv4 address raises the same error.
 Run `ip -br addr` on that node,
 and name an interface the compute nodes can route to.
 

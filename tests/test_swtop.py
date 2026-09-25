@@ -92,6 +92,9 @@ class CountingClient:
         self.keys_read.append(key)
         return await self._inner.map_get(key)
 
+    # Forwards everything it does not count,
+    # as the worker harness's doubles do,
+    # so it stands in for a client without subclassing one.
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
 
@@ -392,9 +395,6 @@ class TestCollectWorkers:
     ):
         """The published description never changes, so re-reading it is waste."""
         worker = make_worker(ds_service_address, tmp_path, group="cpu", name="w-1")
-        # `CountingClient` forwards everything it does not count,
-        # as the worker harness's doubles do,
-        # so it stands in for a client without subclassing one.
         bound = LoopBound(ds_service_address, wrap=CountingClient)
         counting = cast(CountingClient, bound.collector.client)
 

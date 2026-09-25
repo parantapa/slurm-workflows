@@ -148,7 +148,7 @@ carries the address after `--server-address`.
 We watch the `ready` count fall from 4096 toward zero,
 as the workers claim the points and post what the objective returned.
 
-What to watch for while it runs, in order:
+Behind that count, this happens, in order:
 
 * The `ds-service` server starts on the login node.
 * The executor submits one pilot job across `NUM_NODES` nodes.
@@ -177,8 +177,6 @@ ls -lh compute-pi-qmc.pkl.gz
 
 That results file holds every point of the design,
 with the whole mapping the objective returned for it.
-[Optimizing Himmelblau's function](optimizing-himmelblau.md)
-searches on from a file of that kind.
 
 An estimate of the same number came back,
 and we wrote no `submit` or `wait` call to get it.

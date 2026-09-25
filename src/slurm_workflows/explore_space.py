@@ -1,11 +1,7 @@
 """Sobol' QMC exploration of search spaces.
 
-Draws a low-discrepancy design over each `SearchSpace`,
-evaluates every point of every design across a pilot pool,
-and keeps what came back.
-Needs neither torch nor botorch.
-
-See `docs/reference/explore-space.md` for what an exploration is for and how it behaves.
+See `docs/reference/explore-space.md`
+for what an exploration is for and how it behaves.
 """
 
 from __future__ import annotations
@@ -82,10 +78,8 @@ def load_results(paths: Iterable[Path | str]) -> dict[str, SavedResults]:
     """Read back results files, merged by study name in the order given.
 
     Reads what `ExploreSpaceSobolQMC.save` and `OptimizeSpaceBotorch.save` write.
-    That file is a gzipped pickle of one dict keyed by study name.
-    Each entry holds `points`, `values` and `outputs`.
     The lists of one study join end to end, in the order of the paths.
-    Raises `ValueError` if a file does not hold that shape,
+    Raises `ValueError` if a file does not hold the results shape,
     or if one study's lists differ in length.
     """
     merged: dict[str, SavedResults] = {}
@@ -261,8 +255,7 @@ class ExploreSpaceSobolQMC:
         If any evaluation fails,
         it records every result that came back, then raises `RuntimeError`.
         """
-        # Every submit comes before the one wait,
-        # so the pool does not sit idle while one study waits out its last points.
+        # Every submit comes before the one wait.
         # See the developer notes, Sobol' exploration.
         submitted: list[tuple[ExplorationStudy, dict[str, Any], Task]] = []
         for study in self.studies:

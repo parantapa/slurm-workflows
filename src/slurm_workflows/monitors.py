@@ -37,7 +37,8 @@ HOST_SERIES = {
     "tmp_used": "host_tmp_used:",  # percent of /tmp in use
 }
 JOB_SERIES = {
-    "memory": "slurm_job_memory:",  # bytes, the cgroup's own total
+    # The cgroup's own total, or summed RSS where that cannot be read.
+    "memory": "slurm_job_memory:",  # bytes
     "cpu": "slurm_job_cpu:",  # cores in use, averaged over the interval
 }
 
@@ -87,6 +88,7 @@ class CgroupSampler:
             reading = self._read_processes()
         memory, cpu_seconds = reading
 
+        # The kernel counts CPU time up from zero, so a rate needs the last reading.
         cores = 0.0
         if self._last is not None:
             last_now, last_cpu = self._last
@@ -155,7 +157,7 @@ class CgroupSampler:
         except (OSError, ValueError):
             return []
 
-        procs = []
+        procs: list[psutil.Process] = []
         for pid in pids:
             try:
                 procs.append(psutil.Process(pid))

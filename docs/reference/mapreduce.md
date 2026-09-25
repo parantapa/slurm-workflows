@@ -21,6 +21,29 @@ result = executor.mapreduce(
 )
 ```
 
+| Argument | Meaning |
+| --- | --- |
+| `desc` | Labels the progress `swtop` draws for this call |
+| `queue` | A job group name, or a list of them, as in `submit` |
+| `map_fn` | Runs once per item, on a worker. A callable, or the name of a method on the job group's actor |
+| `reduce_fn` | Folds one mapped value into the running result |
+| `iterable` | The items. Read out in full before any map task starts |
+| `init` | Where every fold starts. Must be the identity of `reduce_fn` |
+| `num_tasks` | How many map tasks drain the item queue, as an upper bound |
+| `map_extra_args`, `map_extra_kwargs` | Passed to `map_fn` after the item |
+| `reduce_extra_args`, `reduce_extra_kwargs` | Passed to `reduce_fn` after the two values |
+
+Everything here travels by cloudpickle,
+so `map_fn`, `reduce_fn`, `init`, every item
+and every extra argument must be picklable.
+
+Two things follow from `num_tasks` being an upper bound.
+A call with fewer items than map tasks submits one map task per item.
+An empty `iterable` returns a copy of `init`,
+creates no queue, submits nothing, and needs no worker.
+
+## What the call computes
+
 The call puts every item on an item queue of its own.
 Map tasks on `queue` drain that item queue.
 
@@ -44,27 +67,6 @@ and returns the value.
 Nothing divides the items up in advance.
 A map task claims the next item whenever it is free.
 A slow item therefore slows one map task rather than a fixed share of the work.
-
-| Argument | Meaning |
-| --- | --- |
-| `desc` | Labels the progress `swtop` draws for this call |
-| `queue` | A job group name, or a list of them, as in `submit` |
-| `map_fn` | Runs once per item, on a worker. A callable, or the name of a method on the job group's actor |
-| `reduce_fn` | Folds one mapped value into the running result |
-| `iterable` | The items. Read out in full before any map task starts |
-| `init` | Where every fold starts. Must be the identity of `reduce_fn` |
-| `num_tasks` | How many map tasks drain the item queue, as an upper bound |
-| `map_extra_args`, `map_extra_kwargs` | Passed to `map_fn` after the item |
-| `reduce_extra_args`, `reduce_extra_kwargs` | Passed to `reduce_fn` after the two values |
-
-Everything here travels by cloudpickle,
-so `map_fn`, `reduce_fn`, `init`, every item
-and every extra argument must be picklable.
-
-Two things follow from `num_tasks` being an upper bound.
-A call with fewer items than map tasks submits one map task per item.
-An empty `iterable` returns a copy of `init`,
-creates no queue, submits nothing, and needs no worker.
 
 ## What `reduce_fn` and `init` must satisfy
 

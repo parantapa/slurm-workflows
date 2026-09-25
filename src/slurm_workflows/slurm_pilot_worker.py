@@ -39,10 +39,9 @@ _CURRENT_ACTOR: Any | None = None
 
 
 def current_actor() -> Any | None:
-    """The actor of the worker in this process, or None.
+    """The actor of the worker in this process.
 
-    A worker is one process and builds one actor,
-    so a task that needs the actor reads it here.
+    None outside a worker, and in a worker whose job group has no actor.
     """
     return _CURRENT_ACTOR
 
@@ -77,9 +76,11 @@ class PilotWorker:
 
         Puts this worker's identity in the environment first,
         so the actor and every task it runs can read it.
-        Publishes the worker's identity before it builds the actor.
+        Publishes the worker's identity before it builds the actor,
+        and starts each monitor that no other worker has taken.
         Whatever importing or constructing the actor raises propagates.
         Before that, this worker closes its own monitors and client.
+        Otherwise `current_actor()` returns the new actor.
         """
         self.group = group
         self.name = name
@@ -184,7 +185,7 @@ class PilotWorker:
             value = self.client.map_get(key)
         except KeyError:
             # A missing key means the caller passed none.
-            # See the developer notes.
+            # See the developer notes, Task flow.
             return default
         return cloudpickle.loads(value)
 

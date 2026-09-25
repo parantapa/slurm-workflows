@@ -27,6 +27,9 @@ class Model:
         self.model.release()
 ```
 
+Slurm ends a pilot job, at its time limit or through `scancel`,
+without the worker calling `close()`.
+
 The class must be importable on the compute node.
 By default, each worker adds the executor's current working directory
 to its own `sys.path`.
@@ -88,11 +91,11 @@ exactly as for the actor class itself.
 
 ## If you change the arguments mid-run
 
-You can redefine a job group with different actor arguments.
-Different `sbatch_args` raise an `AssertionError` instead.
-Only the workers that start after that call read the new values.
-Scale the job group down and back up to rebuild the actors.
 Each worker creates its actor once, at startup.
+You can redefine a job group with different actor arguments,
+but only the workers that start after that call read the new values.
+Scale the job group down and back up to rebuild the actors.
+A redefinition with different `sbatch_args` raises an `AssertionError` instead.
 
 ## Related
 

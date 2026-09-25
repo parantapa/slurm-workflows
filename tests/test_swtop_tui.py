@@ -15,9 +15,18 @@ from typing import Any, cast
 
 import pytest
 from textual.app import App, ComposeResult
-from textual.widgets import DataTable, ProgressBar, Static
+from textual.widgets import (
+    DataTable,
+    Footer,
+    Header,
+    ProgressBar,
+    Static,
+    TabbedContent,
+    TabPane,
+)
 
 from slurm_workflows.swtop import (
+    BLOCKS,
     Collector,
     Snapshot,
     SubjectInfo,
@@ -27,7 +36,18 @@ from slurm_workflows.swtop import (
     PilotJobInfo,
     open_collector,
 )
-from slurm_workflows.swtop_tui import SwtopApp, sync_table
+from slurm_workflows.swtop_tui import TAB_KEYS, SwtopApp
+from slurm_workflows.swtop_widgets import (
+    BlockTable,
+    ErrorLine,
+    ProgressDisplay,
+    SnapshotPoller,
+    SummaryLine,
+    BlockPane,
+    SwtopTabs,
+    block_pane,
+    sync_table,
+)
 from worker_harness import make_worker
 
 
@@ -40,16 +60,22 @@ def text_of(widget: Static) -> str:
     return str(widget.content)
 
 
-def table_of(app: SwtopApp, block: str) -> DataTable:
-    return app.query_one(f"#{block}").query_one(DataTable)
+def table_of(app: App, block: str) -> DataTable:
+    """The table of the block with key `block`, found by its tab."""
+    return app.query_one(f"#swtop-{block}").query_one(DataTable)
 
 
-def rows_of(app: SwtopApp, block: str) -> list[list[str]]:
+def label_of(app: App, block: str) -> str:
+    """What the tab of the block with key `block` says."""
+    return app.query_one(TabbedContent).get_tab(f"swtop-{block}").label.plain
+
+
+def rows_of(app: App, block: str) -> list[list[str]]:
     table = table_of(app, block)
     return [table.get_row(key) for key in table.rows]
 
 
-def keys_of(app: SwtopApp, block: str) -> list[str]:
+def keys_of(app: App, block: str) -> list[str]:
     return [str(key.value) for key in table_of(app, block).rows]
 
 
@@ -95,6 +121,8 @@ class StubCollector:
 
 def as_collector(stub: StubCollector) -> Collector:
     """Type the stand-in as the collector it stands in for."""
+    # The app and `SnapshotPoller` use only `snapshot()` and `address`,
+    # and `StubCollector` provides both.
     return cast(Collector, stub)
 
 
@@ -175,7 +203,9 @@ class TestSyncTable:
 # --------------------------------------------------------------------------
 
 # The tests here start the app on a `StubCollector` with no snapshot,
-# so the startup poll fails, and each test then applies its own snapshot.
+# so the startup poll fails.
+# Each test waits for that poll to end before it delivers its own snapshot,
+# so the failure cannot land on top of it.
 # The 3600 s interval keeps a second poll from firing during a test.
 
 
@@ -186,7 +216,7 @@ class TestDisplay:
             async with app.run_test() as pilot:
                 await app.workers.wait_for_complete()
                 await pilot.pause()
-                app.apply(snapshot())
+                app.poller.deliver(snapshot())
 
                 assert rows_of(app, "pilot-jobs") == [
                     ["run.job.cpu.0", "cpu", "42", "2026-09-07T11:04:57-04:00"]
@@ -210,11 +240,13 @@ class TestDisplay:
             async with app.run_test() as pilot:
                 await app.workers.wait_for_complete()
                 await pilot.pause()
-                app.apply(snapshot(workers=[]))
+                app.poller.deliver(snapshot(workers=[]))
 
                 assert len(rows_of(app, "pilot-jobs")) == 1
                 assert rows_of(app, "workers") == []
-                empty = app.query_one("#workers").query_one(".block-empty", Static)
+                empty = app.query_one("#swtop-workers").query_one(
+                    ".swtop-block-empty", Static
+                )
                 assert "no workers have registered" in text_of(empty)
 
         drive(scenario)
@@ -225,11 +257,11 @@ class TestDisplay:
             async with app.run_test() as pilot:
                 await app.workers.wait_for_complete()
                 await pilot.pause()
-                app.apply(snapshot())
+                app.poller.deliver(snapshot())
 
                 block = app.query_one("#progress")
                 assert block.display
-                label = text_of(block.query_one(".progress-label", Static))
+                label = text_of(block.query_one(".swtop-progress-label", Static))
                 assert "explore" in label and "2/8 point" in label
                 bar = block.query_one(ProgressBar)
                 assert (bar.total, bar.progress) == (8, 2)
@@ -242,7 +274,7 @@ class TestDisplay:
             async with app.run_test() as pilot:
                 await app.workers.wait_for_complete()
                 await pilot.pause()
-                app.apply(snapshot(progress=None))
+                app.poller.deliver(snapshot(progress=None))
 
                 assert not app.query_one("#progress").display
 
@@ -254,7 +286,7 @@ class TestDisplay:
             async with app.run_test() as pilot:
                 await app.workers.wait_for_complete()
                 await pilot.pause()
-                app.apply(snapshot())
+                app.poller.deliver(snapshot())
 
                 summary = text_of(app.query_one("#summary", Static))
                 assert "ready 1" in summary
@@ -268,23 +300,23 @@ class TestDisplay:
             async with app.run_test() as pilot:
                 await app.workers.wait_for_complete()
                 await pilot.pause()
-                app.apply(snapshot(hosts=[], workers=[], jobs=[], tasks=[]))
+                app.poller.deliver(snapshot(hosts=[], workers=[], jobs=[], tasks=[]))
 
-                block = app.query_one("#hosts")
+                block = app.query_one("#swtop-hosts")
                 assert not block.query_one(DataTable).display
-                empty = block.query_one(".block-empty", Static)
+                empty = block.query_one(".swtop-block-empty", Static)
                 assert empty.display
                 assert "no host is being monitored" in text_of(empty)
 
         drive(scenario)
 
-    def test_a_block_counts_its_rows_in_its_title(self):
+    def test_a_tab_counts_its_rows_in_its_label(self):
         async def scenario():
             app = SwtopApp(as_collector(StubCollector()), 3600.0)
             async with app.run_test() as pilot:
                 await app.workers.wait_for_complete()
                 await pilot.pause()
-                app.apply(
+                app.poller.deliver(
                     snapshot(
                         workers=[
                             WorkerInfo(f"id-{i}", "cpu", f"w-{i}", "42", "node", "1")
@@ -293,8 +325,14 @@ class TestDisplay:
                     )
                 )
 
-                title = app.query_one("#workers").query_one(".block-title", Static)
-                assert text_of(title) == "workers (3)"
+                await pilot.pause()
+
+                assert label_of(app, "workers") == "workers (3)"
+
+                app.poller.deliver(snapshot(workers=[]))
+                await pilot.pause()
+
+                assert label_of(app, "workers") == "workers (0)"
 
         drive(scenario)
 
@@ -306,10 +344,10 @@ class TestDisplay:
             async with app.run_test() as pilot:
                 await app.workers.wait_for_complete()
                 await pilot.pause()
-                app.apply(snapshot())
+                app.poller.deliver(snapshot())
                 first = keys_of(app, "workers")
 
-                app.apply(snapshot())
+                app.poller.deliver(snapshot())
 
                 assert keys_of(app, "workers") == first
 
@@ -321,13 +359,13 @@ class TestDisplay:
             async with app.run_test() as pilot:
                 await app.workers.wait_for_complete()
                 await pilot.pause()
-                app.apply(snapshot())
+                app.poller.deliver(snapshot())
 
                 more = [
                     WorkerInfo("w-id", "cpu", "run.job.cpu.0", "42", "node-1", "17"),
                     WorkerInfo("w-id2", "cpu", "run.job.cpu.1", "42", "node-2", "18"),
                 ]
-                app.apply(snapshot(workers=more))
+                app.poller.deliver(snapshot(workers=more))
 
                 assert keys_of(app, "workers") == ["w-id", "w-id2"]
 
@@ -341,7 +379,7 @@ class TestFailedPoll:
             async with app.run_test() as pilot:
                 await app.workers.wait_for_complete()
                 await pilot.pause()
-                app.apply(snapshot(error="TimeoutError: server unreachable"))
+                app.poller.deliver(snapshot(error="TimeoutError: server unreachable"))
 
                 error = app.query_one("#error", Static)
                 assert error.display
@@ -357,9 +395,9 @@ class TestFailedPoll:
             async with app.run_test() as pilot:
                 await app.workers.wait_for_complete()
                 await pilot.pause()
-                app.apply(snapshot())
+                app.poller.deliver(snapshot())
 
-                app.apply(snapshot(error="TimeoutError: server unreachable"))
+                app.poller.deliver(snapshot(error="TimeoutError: server unreachable"))
 
                 assert rows_of(app, "workers") == [
                     ["run.job.cpu.0", "cpu", "node-1", "42", "17"]
@@ -373,13 +411,293 @@ class TestFailedPoll:
             async with app.run_test() as pilot:
                 await app.workers.wait_for_complete()
                 await pilot.pause()
-                app.apply(snapshot(error="TimeoutError: server unreachable"))
+                app.poller.deliver(snapshot(error="TimeoutError: server unreachable"))
 
-                app.apply(snapshot())
+                app.poller.deliver(snapshot())
 
                 assert not app.query_one("#error", Static).display
 
         drive(scenario)
+
+    def test_a_failed_poll_leaves_the_summary_and_the_progress(self):
+        async def scenario():
+            app = SwtopApp(as_collector(StubCollector()), 3600.0)
+            async with app.run_test() as pilot:
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                app.poller.deliver(snapshot())
+
+                app.poller.deliver(snapshot(error="TimeoutError: server unreachable"))
+
+                assert "total 6" in text_of(app.query_one("#summary", Static))
+                assert app.query_one("#progress").display
+
+        drive(scenario)
+
+
+# --------------------------------------------------------------------------
+# The layout and the keys of the app
+# --------------------------------------------------------------------------
+
+
+class TestLayout:
+    def test_the_areas_come_in_order(self):
+        async def scenario():
+            app = SwtopApp(as_collector(StubCollector()), 3600.0)
+            async with app.run_test():
+                areas = [
+                    type(w)
+                    for w in app.screen.children
+                    if not isinstance(w, SnapshotPoller)
+                ]
+                assert areas == [
+                    Header,
+                    SummaryLine,
+                    SwtopTabs,
+                    ProgressDisplay,
+                    ErrorLine,
+                    Footer,
+                ]
+
+        drive(scenario)
+
+    def test_there_is_one_tab_for_each_block_in_order(self):
+        async def scenario():
+            app = SwtopApp(as_collector(StubCollector()), 3600.0)
+            async with app.run_test():
+                panes = [pane.id for pane in app.query_one(SwtopTabs).query(TabPane)]
+                assert panes == [f"swtop-{spec.key}" for spec in BLOCKS]
+                assert label_of(app, "jobs") == "slurm jobs (0)"
+
+        drive(scenario)
+
+    def test_every_block_has_its_own_tab_key(self):
+        assert sorted(TAB_KEYS) == sorted(spec.key for spec in BLOCKS)
+        assert len(set(TAB_KEYS.values())) == len(TAB_KEYS)
+        # `q` and `r` are the app's own quit and refresh keys.
+        assert not {"q", "r"} & set(TAB_KEYS.values())
+
+    def test_each_tab_key_shows_its_tab(self):
+        async def scenario():
+            app = SwtopApp(as_collector(StubCollector()), 3600.0)
+            async with app.run_test() as pilot:
+                for block, key in TAB_KEYS.items():
+                    await pilot.press(key)
+                    await pilot.pause()
+
+                    assert app.query_one(SwtopTabs).active == f"swtop-{block}"
+
+        drive(scenario)
+
+    def test_no_embeddable_widget_binds_a_key(self):
+        """Keys belong to the app that lays the widgets out."""
+        for widget in [
+            SummaryLine,
+            ErrorLine,
+            ProgressDisplay,
+            BlockTable,
+            BlockPane,
+            SwtopTabs,
+            SnapshotPoller,
+        ]:
+            assert "BINDINGS" not in vars(widget), widget.__name__
+
+
+# --------------------------------------------------------------------------
+# Embedded in another app
+# --------------------------------------------------------------------------
+
+
+class HostApp(App):
+    """An app of someone else's, with two blocks among its own tabs."""
+
+    def __init__(self, collector: Collector) -> None:
+        super().__init__()
+        self.collector = collector
+        self.polled: list[Snapshot] = []
+
+    def compose(self) -> ComposeResult:
+        yield SummaryLine()
+        with TabbedContent():
+            with TabPane("mine", id="mine"):
+                yield Static("the host's own view")
+            for spec in BLOCKS:
+                if spec.key in {"workers", "tasks"}:
+                    yield block_pane(spec)
+        yield ProgressDisplay()
+        yield ErrorLine()
+        yield SnapshotPoller(collector=self.collector, interval=3600.0)
+
+    def on_mount(self) -> None:
+        self.query_one(SnapshotPoller).attach(
+            self.query_one(SummaryLine),
+            self.query_one(ProgressDisplay),
+            self.query_one(ErrorLine),
+            *self.query(BlockTable),
+        )
+
+    def on_snapshot_poller_polled(self, event: SnapshotPoller.Polled) -> None:
+        self.polled.append(event.snapshot)
+
+
+class StatusApp(App):
+    """An app that embeds the lines around the tabs, and no tabs."""
+
+    def __init__(self, collector: Collector) -> None:
+        super().__init__()
+        self.collector = collector
+
+    def compose(self) -> ComposeResult:
+        yield SummaryLine()
+        yield ProgressDisplay()
+        yield ErrorLine()
+        yield SnapshotPoller(collector=self.collector, interval=3600.0)
+
+    def on_mount(self) -> None:
+        self.query_one(SnapshotPoller).attach(
+            self.query_one(SummaryLine),
+            self.query_one(ProgressDisplay),
+            self.query_one(ErrorLine),
+        )
+
+
+class TwoServerApp(App):
+    """One app that watches two servers, each on a poller of its own."""
+
+    def __init__(self, first: Collector, second: Collector) -> None:
+        super().__init__()
+        self.first = first
+        self.second = second
+
+    def compose(self) -> ComposeResult:
+        workers = next(spec for spec in BLOCKS if spec.key == "workers")
+        yield BlockTable(workers, id="first-workers")
+        yield BlockTable(workers, id="second-workers")
+        yield SnapshotPoller(collector=self.first, interval=3600.0, id="first")
+        yield SnapshotPoller(collector=self.second, interval=3600.0, id="second")
+
+    def on_mount(self) -> None:
+        self.query_one("#first", SnapshotPoller).attach(
+            self.query_one("#first-workers", BlockTable)
+        )
+        self.query_one("#second", SnapshotPoller).attach(
+            self.query_one("#second-workers", BlockTable)
+        )
+
+
+class TestEmbedding:
+    def test_block_tabs_fill_in_among_the_hosts_own(self):
+        async def scenario():
+            app = HostApp(as_collector(StubCollector(snapshot())))
+            async with app.run_test() as pilot:
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+
+                panes = [pane.id for pane in app.query(TabPane)]
+                assert panes == ["mine", "swtop-workers", "swtop-tasks"]
+                assert rows_of(app, "workers") == [
+                    ["run.job.cpu.0", "cpu", "node-1", "42", "17"]
+                ]
+                assert label_of(app, "workers") == "workers (1)"
+                assert label_of(app, "tasks") == "tasks (1)"
+
+        drive(scenario)
+
+    def test_the_lines_fill_in_around_the_hosts_tabs(self):
+        async def scenario():
+            app = HostApp(as_collector(StubCollector(snapshot())))
+            async with app.run_test() as pilot:
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+
+                assert "total 6" in text_of(app.query_one(SummaryLine))
+                assert app.query_one(ProgressDisplay).display
+                assert not app.query_one(ErrorLine).display
+
+        drive(scenario)
+
+    def test_the_host_hears_of_each_poll(self):
+        async def scenario():
+            app = HostApp(as_collector(StubCollector(snapshot())))
+            async with app.run_test() as pilot:
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+
+                assert len(app.polled) == 1
+                assert app.polled[0].error is None
+
+        drive(scenario)
+
+    def test_the_host_gets_no_tab_keys(self):
+        async def scenario():
+            app = HostApp(as_collector(StubCollector(snapshot())))
+            async with app.run_test() as pilot:
+                for key in TAB_KEYS.values():
+                    await pilot.press(key)
+                await pilot.pause()
+
+                assert app.query_one(TabbedContent).active == "mine"
+
+        drive(scenario)
+
+    def test_the_lines_fill_in_without_any_tabs(self):
+        async def scenario():
+            app = StatusApp(as_collector(StubCollector()))
+            async with app.run_test() as pilot:
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+
+                error = app.query_one(ErrorLine)
+                assert error.display
+                assert "cannot read the server" in text_of(error)
+
+        drive(scenario)
+
+    def test_the_widgets_bring_their_own_styles(self):
+        """Hidden before the first poll, with no CSS from the app."""
+
+        class BareApp(App):
+            def compose(self) -> ComposeResult:
+                yield ErrorLine()
+                yield ProgressDisplay()
+                yield SnapshotPoller(
+                    collector=as_collector(StubCollector()), interval=3600.0
+                )
+
+        async def scenario():
+            app = BareApp()
+            async with app.run_test():
+                assert not app.query_one(ErrorLine).display
+                assert not app.query_one(ProgressDisplay).display
+                assert not app.query_one(SnapshotPoller).display
+
+        drive(scenario)
+
+    def test_two_pollers_keep_to_their_own_views(self):
+        async def scenario():
+            other = snapshot(
+                workers=[WorkerInfo("w-2", "gpu", "run.job.gpu.0", "43", "node-2", "9")]
+            )
+            app = TwoServerApp(
+                as_collector(StubCollector(snapshot())),
+                as_collector(StubCollector(other, address="host:2")),
+            )
+            async with app.run_test() as pilot:
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+
+                first = app.query_one("#first-workers").query_one(DataTable)
+                second = app.query_one("#second-workers").query_one(DataTable)
+                assert [str(k.value) for k in first.rows] == ["w-id"]
+                assert [str(k.value) for k in second.rows] == ["w-2"]
+
+        drive(scenario)
+
+    def test_a_poller_takes_one_source(self):
+        with pytest.raises(ValueError):
+            SnapshotPoller()
+        with pytest.raises(ValueError):
+            SnapshotPoller(address="host:1", collector=as_collector(StubCollector()))
 
 
 # --------------------------------------------------------------------------
@@ -452,6 +770,29 @@ class TestRealServer:
 
                     assert app.is_running
                     assert app.query_one("#error", Static).display
+
+        drive(scenario)
+
+    def test_a_poller_with_an_address_opens_its_own_collector(
+        self, executor, ds_service_address
+    ):
+        executor.submit("cpu", square, 5)
+
+        class AddressApp(App):
+            def compose(self) -> ComposeResult:
+                yield SummaryLine()
+                yield SnapshotPoller(address=ds_service_address, interval=3600.0)
+
+            def on_mount(self) -> None:
+                self.query_one(SnapshotPoller).attach(self.query_one(SummaryLine))
+
+        async def scenario():
+            app = AddressApp()
+            async with app.run_test() as pilot:
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+
+                assert "total 1" in text_of(app.query_one(SummaryLine))
 
         drive(scenario)
 

@@ -51,7 +51,7 @@ which is why a fit gets more expensive every round.
 ## Why the fit runs on a worker
 
 `OptimizeSpaceBotorch` submits the GP fit and the acquisition optimization
-as one task per round.
+as one task per study per round.
 The driver never runs them itself.
 A fitted GP costs more to ship back to the driver than it cost to fit.
 The driver is also usually a login node,
@@ -131,8 +131,10 @@ The objective returns a mapping rather than a number,
 so the value the search optimizes can travel
 alongside everything else the evaluation happened to learn.
 That extra can be a runtime, an intermediate metric or a checkpoint path.
-[The objective](../reference/search-space.md#the-objective)
+[The objective](../reference/objective.md)
 covers what the two space classes do with the mapping.
+
+## Minimizing on top of a maximizer
 
 The search **minimizes** the entry under `objective_key`,
 so a quantity to be maximized enters the search negated.
@@ -145,6 +147,8 @@ and every acquisition value lives in that negated space too.
 - [`OptimizeSpaceBotorch`](../reference/optimize-space.md)
 - [`ExploreSpaceSobolQMC`](../reference/explore-space.md)
 - [Search spaces](../reference/search-space.md),
-    for the range types and the objective contract
+    for the range types
+- [The objective](../reference/objective.md),
+    for the objective contract
 - [How to resume a search](../how-to-guides/resume-a-search.md)
 - [Optimizing Himmelblau's function](../tutorials/optimizing-himmelblau.md)

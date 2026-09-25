@@ -17,11 +17,6 @@ except `NoOutput`:
 from slurm_workflows import SlurmPilotExecutor, RaiseOnError, RemoteExecutionError
 ```
 
-The botorch names, `OptimizeSpaceBotorch` and `OptimizationStudy`,
-import from there too.
-The package resolves them on first use rather than at import time,
-so `import slurm_workflows` still works without botorch installed.
-
 ## `SlurmPilotExecutor(name, server_address, work_dir=None)`
 
 ```python
@@ -135,6 +130,18 @@ A worker constructs its actor once, when it starts.
 For the task-side view of actors, see
 [How to keep per-worker state with actors](../how-to-guides/keep-per-worker-state-with-actors.md).
 
+## The `slurm-pilot-worker` entry point
+
+`pyproject.toml` installs `slurm-pilot-worker`,
+which the generated worker script, `<job-name>.sh`, invokes on the compute node.
+It takes six required options: the server address, the pilot job's name,
+its job group, its actor class name, the work dir and the worker `sys.path`.
+It is what the `worker_exe` argument
+of [`define_job_group`](#define_job_group-options) names.
+A driver never calls it.
+A wrapper that sets an environment or a profiler around it
+is what `worker_exe` is for.
+
 ## One worker per pilot job, or one per Slurm task
 
 `is_batch_worker` controls how many workers each pilot job starts:
@@ -173,6 +180,41 @@ If the server does not know a parent, `submit` raises `KeyError`.
 
 `fn` cannot take keyword arguments named `task_parents` or `task_priority`,
 because `submit` keeps them.
+
+## `Task`
+
+`submit` returns a `Task` with `task_id`, `queue`, `priority`, `function`,
+`input`, `output`, and `parent_task_ids`.
+`output` is a sentinel until the task completes.
+After that it holds the return value,
+or a `RemoteExecutionError(error, error_id)` if the worker raised.
+`wait` and `as_completed` are what fill it in.
+If a parent task failed, the task does not run,
+and `output` is a `RemoteExecutionError` with an empty `error_id`.
+Its `error` is `Dependency failed (task_id=<id>)`,
+and `<id>` is the task that failed.
+`RemoteExecutionError` lives in `slurm_workflows.utils`,
+and imports from the package root like everything else.
+
+`priority` and `parent_task_ids` record what `submit` was given
+as `task_priority` and `task_parents`:
+see [`submit` options](#submit-options).
+A change to `priority` on the `Task` has no effect,
+because the server orders by the value that `submit` sent with the task.
+
+`task_name` is a read-only property, and it is `None`
+until `executor.set_task_name(task, name)` sets it.
+That call stores the name on the server, under `task_name:<task_id>`,
+as UTF-8 rather than a pickle.
+Anything that reads the map can therefore read it too.
+The call also updates the `Task` to match.
+
+Nothing in this library dispatches on the name.
+Whoever looks at the queue reads it,
+which in practice means [`swtop`](swtop.md).
+`ExploreSpaceSobolQMC` and `OptimizeSpaceBotorch` call it themselves
+for every task they submit.
+[`mapreduce`](mapreduce.md) calls it for every map task it submits.
 
 ## Errors that end a wait
 
@@ -225,41 +267,6 @@ and the executor reads both straight off the server:
 For what to do about each, see
 [How to troubleshoot a failing run](../how-to-guides/troubleshoot-a-failing-run.md).
 
-## `Task`
-
-`submit` returns a `Task` with `task_id`, `queue`, `priority`, `function`,
-`input`, `output`, and `parent_task_ids`.
-`output` is a sentinel until the task completes.
-After that it holds the return value,
-or a `RemoteExecutionError(error, error_id)` if the worker raised.
-`wait` and `as_completed` are what fill it in.
-If a parent task failed, the task does not run,
-and `output` is a `RemoteExecutionError` with an empty `error_id`.
-Its `error` is `Dependency failed (task_id=<id>)`,
-and `<id>` is the task that failed.
-`RemoteExecutionError` lives in `slurm_workflows.utils`,
-and imports from the package root like everything else.
-
-`priority` and `parent_task_ids` record what `submit` was given
-as `task_priority` and `task_parents`:
-see [`submit` options](#submit-options).
-A change to `priority` on the `Task` has no effect,
-because the server orders by the value that `submit` sent with the task.
-
-`task_name` is a read-only property, and it is `None`
-until `executor.set_task_name(task, name)` sets it.
-That call stores the name on the server, under `task_name:<task_id>`,
-as UTF-8 rather than a pickle.
-Anything that reads the map can therefore read it too.
-The call also updates the `Task` to match.
-
-Nothing in this library dispatches on the name.
-Whoever looks at the queue reads it,
-which in practice means [`swtop`](swtop.md).
-`ExploreSpaceSobolQMC` and `OptimizeSpaceBotorch` call it themselves
-for every task they submit.
-[`mapreduce`](mapreduce.md) calls it for every map task it submits.
-
 ## `RaiseOnError`
 
 What `as_completed` and `wait` do about a task that fails.
@@ -304,5 +311,5 @@ never_ran = [t for t in tasks if t.output is NoOutput]
 
 `output` stays `NoOutput` for a task that was canceled,
 is unknown to the server,
-or was still pending when the last pilot job went away.
+or was still pending on queues with no pilot job to run it.
 

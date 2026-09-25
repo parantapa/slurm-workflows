@@ -7,7 +7,7 @@ The executor writes some of it, each worker writes some of it,
 and the monitors write the rest.
 [`swtop`](swtop.md) is what reads it back.
 
-## Environment and keys
+## The environment a task sees
 
 Inside a task, these environment variables exist:
 
@@ -19,6 +19,8 @@ Inside a task, these environment variables exist:
 
 The worker sets the first four when it starts,
 before it builds its actor and before it claims a task.
+
+## Keys and time series
 
 **The executor publishes each pilot job as it submits it**,
 under `pilot_job_info:<job-name>`, as a JSON object:
@@ -99,18 +101,6 @@ The next call overwrites the key.
 The server therefore holds the display for the most recent wait,
 and the series holds the history of each.
 
-## The `slurm-pilot-worker` entry point
-
-`pyproject.toml` installs `slurm-pilot-worker`,
-which the generated batch script invokes on the compute node.
-It takes six required options: the server address, the pilot job's name,
-its job group, its actor class name, the work dir and the worker `sys.path`.
-It is what the `worker_exe` argument
-of [`define_job_group`](executor.md#define_job_group-options) names.
-A driver never calls it.
-A wrapper that sets an environment or a profiler around it
-is what `worker_exe` is for.
-
 ## Logs
 
 Everything for a run lives under the executor's `work_dir`.
@@ -122,11 +112,12 @@ and the attribute `executor.work_dir` holds it:
 | `executor.log` | Pilot job submission and cancellation from the executor's side |
 | `<job-name>.sh`, `<job-name>.sbatch` | The generated scripts |
 | `<job-name>-<job-id>-<rank>.out` | One per worker: setup-script output, task-by-task progress, full tracebacks |
-| `<job-name>-<job-id>.out` | The pilot job's own output, and the worker's log too when the job holds a single Slurm task |
+| `<job-name>-<job-id>.out` | The pilot job's own output, and the worker's log too when the job holds a single Slurm task or runs a batch worker |
 
 `<job-name>` is `<executor-name>.job.<group>.<index>`,
 which is the Slurm job name, so `squeue` shows which run a job belongs to.
-The work dir itself defaults to `<cache dir>/slurm-workflows/<executor-name>/<timestamp>`.
+The work dir itself defaults to the path that
+[`SlurmPilotExecutor`](executor.md#slurmpilotexecutorname-server_address-work_dirnone) gives.
 
 Slurm writes those files.
 The worker does not redirect its own output.
@@ -142,7 +133,7 @@ Which of the two holds a worker's log depends on the job group's definition:
     which in practice means `srun`'s own errors.
 
     The exception is a job of exactly one Slurm task:
-    `--ntasks=1`, or `--nodes=1` and nothing else about Slurm tasks.
+    `--ntasks=1`, or a single node and no other Slurm task count.
     It keeps `srun` but drops the `--output`
     and writes to `<job-name>-<job-id>.out` like a batch worker.
     The count is per *job*, not per node:

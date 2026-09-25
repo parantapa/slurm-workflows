@@ -15,14 +15,14 @@ under the `bii_nssac` account.
 The complete program can be found at
 [`examples/example_optimize_himmelblau.py`](../../examples/example_optimize_himmelblau.py).
 
+## Before we start
+
 Work through [Computing pi on a Slurm cluster](computing-pi.md)
 and [Computing pi with a Sobol' QMC exploration](computing-pi-qmc.md)
 first.
 They cover what this one reuses without further comment.
 That is the `ds-service` server, the executor, job groups,
 the `sbatch` arguments, and the setup of an exploration.
-
-## Before we start
 
 Run this program from a Rivanna login node.
 Follow
@@ -40,14 +40,15 @@ Unlike the two pi tutorials, this one needs botorch in two places:
 - On the login node, which imports the optimizer.
 - In the environment of the workers that run the model fit.
 
-So when we follow the setup instructions,
+So in
+[step 3 of the install guide](../how-to-guides/install-on-rivanna.md#3-install-slurm-workflows),
 we install the `botorch` extra.
 It covers both.
 
 ## What the search minimizes
 
 Himmelblau's function has four global minima, all with `f = 0`.
-Notice that the objective returns a mapping rather than a number.
+The objective returns a mapping rather than a number.
 The search minimizes the `"objective"` entry.
 It records every other entry and does not model it.
 

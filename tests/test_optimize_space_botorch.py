@@ -578,6 +578,7 @@ class TestEarlyStopping:
 
         out = capsys.readouterr().out
         assert "stopping after 2 rounds" in out
+        # 5% is the default `min_improvement`.
         assert "5%" in out
 
     def test_the_ceiling_says_so_too(self, tmp_path, capsys):
@@ -1144,7 +1145,7 @@ class TestSeveralSpacesAtOnce:
 
 
 # --------------------------------------------------------------------------
-# Saving and resuming
+# Partial failure, saved observations and resuming
 # --------------------------------------------------------------------------
 
 
@@ -1415,9 +1416,7 @@ class TestSaveAndResume:
 
 
 class TestTaskNames:
-    """What the search calls its tasks on the server.
-
-    The round is in every name because the batches look alike:
+    """The round is in every name because the batches look alike:
     a queue full of evaluations otherwise says nothing
     about where the search stands.
     """

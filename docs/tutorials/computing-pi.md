@@ -137,7 +137,7 @@ after the executor and the job group.
 It moves from `PENDING` to `RUNNING`, and it holds two nodes.
 That job is the whole allocation this run gets.
 
-What to watch for while it runs, in order:
+Behind that one job, this happens, in order:
 
 * The `ds-service` server starts on the login node.
 * The executor submits one pilot job across `NUM_NODES` nodes.

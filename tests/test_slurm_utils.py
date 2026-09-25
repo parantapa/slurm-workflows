@@ -40,7 +40,6 @@ class TestGetCleanEnviron:
     def test_keeps_variables_merely_containing_slurm(
         self, monkeypatch: pytest.MonkeyPatch
     ):
-        """`get_clean_environ` strips only the documented prefixes, not substrings."""
         monkeypatch.setenv("MY_SLURM_HELPER", "keep-me")
         get_clean_environ.cache_clear()
 
@@ -58,6 +57,7 @@ class TestSubmitSbatchJob:
             work_dir=tmp_path,
         )
 
+        # FakeSlurm numbers its jobs from 1000.
         assert job.job_id == 1000
         assert job.name == "myjob"
         assert job.sbatch_args == ["-A alloc", "-p standard"]
@@ -106,10 +106,7 @@ class TestSubmitSbatchJob:
         assert env["KEEP_ME"] == "yes"
 
     def test_finds_the_job_id_after_a_banner(self, fake_slurm, tmp_path: Path):
-        """Sites put warnings and banners on sbatch's stdout.
-
-        See the developer notes, "Slurm interaction".
-        """
+        """Sites put warnings and banners on sbatch's stdout."""
         fake_slurm.sbatch_stdout_override = (
             "sbatch: WARNING: your account is nearly out of hours\n"
             "Submitted batch job 4242\n"

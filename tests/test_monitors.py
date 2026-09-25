@@ -95,6 +95,9 @@ class TestCgroupSampler:
         self.write_cgroup(tmp_path, memory=4096, cpu_usec=int(2 * elapsed * 1e6))
         values = sampler.sample()
 
+        # `sleep` can overrun, so the measured interval is longer
+        # and the rate lower than 2.
+        # The bound asks only that a busy cgroup reports cores in use.
         assert values["cpu"] > 0.5, "a busy cgroup reports cores in use"
 
     def test_a_counter_that_restarts_reports_no_time(self, tmp_path):

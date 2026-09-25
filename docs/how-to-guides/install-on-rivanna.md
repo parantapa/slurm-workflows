@@ -91,4 +91,6 @@ Both must print usage text.
 - [Computing pi on a Slurm cluster](../tutorials/computing-pi.md),
     the first tutorial, which needs exactly this setup
 - [How to run the `ds-service` server](run-the-ds-service-server.md),
+    for starting `ds-service` from your driver
+- [The pilot-job model](../explanation/pilot-job-model.md),
     for what `ds-service` is doing in a run

@@ -116,7 +116,7 @@ A program that exits when the server blinks
 takes the screen down with it,
 usually at the least convenient moment.
 So `swtop` reports an unreachable server and keeps polling.
-The terminal UI reports it above the blocks,
+The terminal UI reports it below the blocks,
 with the last good reading left on screen.
 The same behavior lets you start `swtop` before the server exists.
 There is no meaningful difference between a server that is not up yet

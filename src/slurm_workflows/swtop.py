@@ -3,7 +3,8 @@
 See `docs/reference/swtop.md` for the blocks and what fills them.
 """
 
-# This module decides what to show, and `swtop_tui.py` draws it.
+# This module decides what to show.
+# `swtop_widgets.py` draws it, and `swtop_tui.py` lays those widgets out.
 # "Monitoring" in `docs/developer-notes.md` says
 # why `swtop` collects the way it does.
 
@@ -41,7 +42,8 @@ PILOT_JOB_FIELDS = ["name", "group", "slurm_job_id", "submit_time"]
 # The fields of the progress display a wait publishes.
 PROGRESS_FIELDS = ["progress_id", "desc", "unit", "total"]
 
-# How far back a progress reading still counts as live.
+# How far back each poll reads the progress series.
+# With nothing that recent, the display keeps the last count this collector saw.
 PROGRESS_TAIL_S = 60.0
 
 # Must match the key `SlurmPilotExecutor.set_task_name` writes,
@@ -56,7 +58,7 @@ ALL_TASK_IDS = ""
 UNNAMED = "-"
 
 # How far back a monitored value is still worth showing.
-# A monitor samples every 5 seconds, so nothing this recent is stale.
+# Twelve readings at the default `DEFAULT_MONITOR_INTERVAL_S` of 5 seconds.
 STALE_AFTER_S = 60.0
 
 # The tables show this in place of a value the collector cannot read:
@@ -475,6 +477,8 @@ def _bytes(value: float) -> str:
         if abs(value) < 1024 or unit == "T":
             return f"{value:.1f}{unit}"
         value /= 1024
+    # Unreachable, since the loop returns at "T".
+    # It is here for the type checker.
     return f"{value:.1f}T"
 
 
@@ -584,6 +588,35 @@ def task_rows(snapshot: Snapshot) -> list[tuple[str, list[str]]]:
     ]
 
 
+@dataclass(frozen=True)
+class BlockSpec:
+    """What one block shows, for both displays."""
+
+    # Names the block in ids, such as the `swtop-workers` tab.
+    key: str
+    title: str
+    columns: list[str]
+    empty: str
+    rows: Callable[[Snapshot], list[tuple[str, list[str]]]]
+
+
+# The blocks, in the order both displays show them.
+BLOCKS: tuple[BlockSpec, ...] = (
+    BlockSpec(
+        "pilot-jobs", "pilot jobs", PILOT_JOB_COLUMNS, EMPTY_PILOT_JOBS, pilot_job_rows
+    ),
+    BlockSpec("workers", "workers", WORKER_COLUMNS, EMPTY_WORKERS, worker_rows),
+    BlockSpec("hosts", "hosts", HOST_COLUMNS, EMPTY_HOSTS, host_rows),
+    BlockSpec("jobs", "slurm jobs", JOB_COLUMNS, EMPTY_JOBS, job_rows),
+    BlockSpec("tasks", "tasks", TASK_COLUMNS, EMPTY_TASKS, task_rows),
+)
+
+
+def block_label(spec: BlockSpec, count: int) -> str:
+    """The title of a block with its row count, such as `workers (40)`."""
+    return f"{spec.title} ({count})"
+
+
 def _table(headers: list[str], rows: list[list[str]]) -> list[str]:
     """Left-aligned fixed-width columns, sized to their contents."""
     widths = [len(h) for h in headers]
@@ -614,24 +647,13 @@ def render(snapshot: Snapshot) -> str:
         lines.append(progress)
         lines.append("")
 
-    blocks = [
-        (
-            "pilot jobs",
-            PILOT_JOB_COLUMNS,
-            pilot_job_rows(snapshot),
-            EMPTY_PILOT_JOBS,
-        ),
-        ("workers", WORKER_COLUMNS, worker_rows(snapshot), EMPTY_WORKERS),
-        ("hosts", HOST_COLUMNS, host_rows(snapshot), EMPTY_HOSTS),
-        ("slurm jobs", JOB_COLUMNS, job_rows(snapshot), EMPTY_JOBS),
-        ("tasks", TASK_COLUMNS, task_rows(snapshot), EMPTY_TASKS),
-    ]
-    for title, columns, rows, empty in blocks:
-        lines.append(f"{title} ({len(rows)})")
+    for spec in BLOCKS:
+        rows = spec.rows(snapshot)
+        lines.append(block_label(spec, len(rows)))
         if rows:
-            lines.extend(_table(columns, [cells for _, cells in rows]))
+            lines.extend(_table(spec.columns, [cells for _, cells in rows]))
         else:
-            lines.append(empty)
+            lines.append(spec.empty)
         lines.append("")
 
     return "\n".join(lines[:-1]) + "\n"

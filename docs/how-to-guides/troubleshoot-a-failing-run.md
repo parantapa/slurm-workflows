@@ -15,8 +15,8 @@ and what to do about the errors you are most likely to see.
 
 ## Start from the `error_id`
 
-A task that raised on its worker comes back as
-a [`RemoteExecutionError`](../reference/executor.md#task).
+A task that raised on its worker
+comes back as a [`RemoteExecutionError`](../reference/executor.md#task).
 The warning the executor prints for it ends with an id:
 
 ```
@@ -62,7 +62,7 @@ print([t.output.error_id for t in failed])
 ```
 
 If `grep` finds nothing, search the work dir of another run.
-Each run gets its own timestamped work dir,
+Unless you pass `work_dir`, each run gets its own timestamped work dir,
 and the id belongs to the run that printed it.
 
 ## Find the log for the failure
@@ -76,9 +76,6 @@ That file is `<job-name>-<jobid>-<rank>.out`, not the batch file.
 A failed setup script lands in that same file.
 A job of exactly one Slurm task is the exception:
 it keeps no such file, and writes to `<job-name>-<jobid>.out`.
-
-If a pilot job died immediately, read the generated scripts,
-`<job-name>.sh` and `<job-name>.sbatch`.
 
 ## Tasks never complete, but the pilot jobs run
 
@@ -97,9 +94,9 @@ because you never called `scale_jobs` for those queues.
 The queues can belong to the task itself,
 or to a parent task that is not finished yet.
 Either you never scaled the job group, or the queue name is a typo.
-If you never scaled it, call `scale_jobs` for it before you wait.
-The executor does not check the queue name at `submit` time,
-so compare it against your `define_job_group` names.
+If you never scaled the job group, call `scale_jobs` for it before you wait.
+If the queue name is a typo, compare it against your `define_job_group` names.
+The executor does not check the queue name at `submit` time.
 
 ## `RuntimeError: ... tasks are on, or wait on tasks on, queues with no live pilot job`
 
@@ -108,11 +105,11 @@ You scaled the job group, but its pilot jobs then left the cluster.
 The cause is the time limit, a cancellation,
 or an exit before the queue drained.
 The worker's `.out` file says which.
-Scale the job group down to 0, then back up.
-`scale_jobs` counts every pilot job it submitted,
-the ones that left the cluster included,
-so a call with the old count submits nothing.
-Then submit the tasks again.
+Scale the job group down to 0, then back up,
+and then submit the tasks again.
+A call with the old count submits nothing,
+because `scale_jobs` counts every pilot job it submitted,
+the ones that left the cluster included.
 
 ## `RuntimeError: Task ... was canceled on the task queue server`
 
@@ -147,6 +144,9 @@ A second `define_job_group` with a changed `setup_script`
 raises `AssertionError`,
 so the fix cannot reach a job group the executor already holds.
 
+If a pilot job died immediately, read the generated scripts,
+`<job-name>.sh` and `<job-name>.sbatch`.
+
 ## `ModuleNotFoundError` on a worker
 
 The module is not importable on the compute node.
@@ -168,7 +168,7 @@ Three causes leave the workers block empty
 while the pilot jobs block holds entries.
 The pilot jobs are still pending, their setup scripts did not finish,
 or their workers cannot reach the server.
-For the last two, go to
+For the last two, see
 [Pilot jobs start and exit within seconds](#pilot-jobs-start-and-exit-within-seconds)
 and [Tasks never complete, but the pilot jobs run](#tasks-never-complete-but-the-pilot-jobs-run).
 

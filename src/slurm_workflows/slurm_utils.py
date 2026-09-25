@@ -117,6 +117,7 @@ def submit_sbatch_job(
     """Submit one job, and return it with its id and output file resolved.
 
     Writes `<name>.sbatch` into `work_dir` and makes it executable.
+    `sbatch` runs in the environment `get_clean_environ()` returns.
     Raises `RuntimeError` if `sbatch` succeeds but its output holds no job id,
     `ValueError` if the job id it prints is not a number,
     `subprocess.CalledProcessError` if `sbatch` fails,

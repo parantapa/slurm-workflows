@@ -9,7 +9,7 @@ and the work is on nodes you are not logged in to.
 and of the compute nodes they run on.
 It needs nothing on the cluster side.
 
-For the options, the blocks and the columns, see
+For the options, the keys, the blocks and the columns, see
 [`swtop` reference](../reference/swtop.md).
 
 ## Watch a run from another shell
@@ -27,10 +27,19 @@ If not, use `ds.address`
 from the [`ds-service` server](run-the-ds-service-server.md) you started.
 
 You can start `swtop` before the server is up.
-`swtop` waits, and fills the blocks once there is something to read.
+`swtop` waits, and fills the tabs once there is something to read.
 
-## Make the tasks block readable
+Each block is a tab.
+Press `p`, `w`, `h`, `j` or `t` to show the pilot jobs, workers, hosts,
+slurm jobs or tasks tab.
 
+## Make the tasks tab readable
+
+If you are running an exploration or a search, skip this section.
+`ExploreSpaceSobolQMC` and `OptimizeSpaceBotorch` name what they submit,
+and the tasks tab is readable without your help.
+
+Otherwise, name your tasks.
 Unless you name a task, `swtop` lists it under `-`:
 
 ```python
@@ -43,24 +52,25 @@ since `my-run.task.412` says nothing about which point it is.
 You can name a task after you submit it,
 and the name appears at the next poll.
 
-If you are running an exploration or a search, you need do none of this:
-`ExploreSpaceSobolQMC` and `OptimizeSpaceBotorch` name what they submit,
-and the tasks block is readable without your help.
-
 ## Keep a record of a run instead of a live view
 
-`--plain` prints one frame of text per poll, rather than the live UI.
-Redirected to a file, each poll adds one more frame,
-rather than replacing the last one:
+To keep a record of a run, pass `--plain`
+and redirect the output to a file:
 
 ```sh
 swtop 10.0.0.1:5051 --plain > swtop.log
 ```
 
-The file keeps a record of the run, and you can read it later.
-The blocks and columns are the same either way.
+`--plain` prints one frame of text per poll, rather than the live UI.
+Redirected to a file, each poll adds one more frame,
+rather than replacing the last one.
+The file has the same blocks and columns as the tabs,
+one block after another,
+and you can read it later.
 
 ## Poll less often on a long run
+
+On a long run, pass `-i` with the number of seconds between polls:
 
 ```sh
 swtop 10.0.0.1:5051 -i 10
@@ -71,5 +81,6 @@ The default is every 2 seconds.
 ## Related
 
 - [How to troubleshoot a failing run](troubleshoot-a-failing-run.md)
+- [How to embed `swtop` in a Textual app](embed-swtop-in-a-textual-app.md)
 - [The trail a run leaves](../explanation/the-trail-a-run-leaves.md),
     for why a block can be empty while the run is healthy

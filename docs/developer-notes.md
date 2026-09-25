@@ -41,7 +41,7 @@ and reference describes rather than recommends.
 A reference page covers one thing a user reaches for.
 The page is named after that class, that command or that subject,
 rather than after the module it happens to live in.
-`swtop.md` covers `swtop.py` and `swtop_tui.py` together.
+`swtop.md` covers `swtop.py`, `swtop_widgets.py` and `swtop_tui.py` together.
 What the worker and the monitors publish is documented
 where a user meets it, rather than under its own module.
 A new public class or command needs a page under `reference/`
@@ -82,7 +82,7 @@ pytest                      # test suite
 `[tool.black]` pins `target-version` to the `requires-python` floor,
 so formatting does not drift with whichever interpreter happens to run it.
 `[tool.pyright]` sets the include paths and `pythonVersion`.
-For this reason, run both bare.
+For this reason, run `pyright` bare.
 **Do not pass paths to `pyright`**, or it ignores that configuration.
 
 `pyproject.toml` defines two console entry points.
@@ -101,7 +101,7 @@ Paths are relative to `src/slurm_workflows/`.
 
 | Module | Holds |
 | --- | --- |
-| `__init__.py` | The public API, the one place users import from. Loads the botorch module lazily. |
+| `__init__.py` | The public API of the library. Loads the botorch module lazily. An app that embeds `swtop` imports from `swtop` and `swtop_widgets` instead. |
 | `slurm_pilot_executor.py` | The driver side, entry point `SlurmPilotExecutor`: job groups, submitting tasks, waiting on them, and `mapreduce`. Depends on `slurm_utils`, `templates/` and `utils`, and on `slurm_pilot_worker` for `current_actor`. |
 | `slurm_pilot_worker.py` | The worker side, entry point the `slurm-pilot-worker` command that generated scripts run on compute nodes. Starts the monitors. |
 | `slurm_utils.py` | Calls to the Slurm commands, and the environment `sbatch` runs in |
@@ -109,8 +109,9 @@ Paths are relative to `src/slurm_workflows/`.
 | `explore_space.py` | Sobol' explorations with no model behind them, and the results file format the optimizer also reads |
 | `optimize_space_botorch.py` | The botorch searches. Optional, behind the `botorch` extra. |
 | `monitors.py` | Host and cgroup sampling, and the threads that publish it |
-| `swtop.py` | `swtop`, entry point the `swtop` command: reading a run from the server, and the text display |
-| `swtop_tui.py` | The Textual app `swtop` runs in |
+| `swtop.py` | `swtop`, entry point the `swtop` command: reading a run from the server, and the text display. Imports no Textual, so the text display and its tests run without it. |
+| `swtop_widgets.py` | The Textual widgets and the poller that `swtop` and any embedding app lay out. Depends on `swtop`, never the reverse. |
+| `swtop_tui.py` | The Textual app `swtop` runs in: the layout of the widgets, and the keys |
 | `templates/` | Jinja templates for the generated scripts, and their loader |
 | `utils.py` | Helpers shared across modules: the remote error record, ids, the check on an objective's result, and formatting |
 
@@ -119,6 +120,11 @@ Paths are relative to `src/slurm_workflows/`.
 `examples/` holds the scripts the tutorials walk through.
 `extra/` holds the README's banner image
 and a FoxyProxy configuration for Rivanna.
+`MANIFEST.in` decides what the sdist ships:
+the `.py` and `.jinja` files under `src/slurm_workflows`,
+the README, the license and `pyproject.toml`.
+A package data file of any other type needs a line there,
+or an installed copy runs without it.
 
 The driver and the workers never talk to each other directly.
 They talk only through the `ds-service` server,
@@ -146,8 +152,8 @@ This table says what each one is here for.
 | `cloudpickle` | `slurm_pilot_executor`, `slurm_pilot_worker` | Serializing functions, arguments and return values, so a locally defined function can cross to a compute node. |
 | `jinja2` | `templates/` | Rendering the worker shell script and its sbatch wrapper. |
 | `json5` | `templates/` | Parsing the `{#- name: ... -#}` headers of the multi-template files. |
-| `scipy` (>=1.15) | `explore_space` | `stats.qmc.Sobol` for the exploration design. The floor is for the `rng=` argument. |
-| `textual` | `swtop_tui` | The `swtop` terminal UI. |
+| `scipy` (>=1.15) | `explore_space` | `stats.qmc.Sobol` for the exploration design. |
+| `textual` | `swtop_widgets`, `swtop_tui` | The `swtop` terminal UI, and the widgets other apps embed. |
 | `click` | `swtop`, `slurm_pilot_worker` | Both console entry points. |
 | `psutil` | `monitors` | Host and process sampling. |
 | `platformdirs` | `slurm_pilot_executor` | Locating the per-user cache dir a run's `work_dir` defaults into. |
@@ -161,7 +167,7 @@ Development tooling, behind the `dev` and `test` extras:
 | --- | --- | --- |
 | `pytest` | `test` | The suite. See [`how-to-run-tests.md`](how-to-run-tests.md). |
 | `botorch` | `test` | So the optimizer tests run rather than skip. |
-| `black` | `dev` | Formatting. Configured in `pyproject.toml`. Run it bare. |
+| `black` | `dev` | Formatting. Configured in `pyproject.toml`. |
 | `pyright` | `dev` | Type checking. Configured in `pyproject.toml`. Run it bare. |
 | `setuptools_scm` | build | Deriving the version from git tags, with a `1.0.0-dev` fallback. |
 | `cpush` | external | Deploying to clusters. See `.cpush.json5`. |
@@ -215,7 +221,7 @@ and `swtop` is what turns that into a bar.
 The driver prints nothing,
 so a run under `nohup` leaves no progress bar in its output file.
 A run that someone watches from another shell shows one.
-A wait appends the count at most once a second,
+While tasks return, a wait appends the count at most once a second,
 so the cost does not grow with the batch.
 A wait appends the final count even when it raises,
 since the exception says nothing about how far it got.
@@ -306,9 +312,6 @@ Their log lines land in both work dirs,
 even when each executor has a server to itself.
 `SlurmPilotExecutor` validates the name
 (`[A-Za-z][A-Za-z0-9_-]*`, at least 3 characters).
-The characters that are safe in a Slurm job name,
-a directory name, a logger name and a task id
-are the intersection of four sets, not one.
 
 **A run publishes itself in two halves, one key each.**
 `SlurmPilotExecutor._add_job` writes `pilot_job_info:<job-name>`
@@ -342,11 +345,7 @@ The reason is that a name is a string,
 and something other than this library has to read it.
 `Task.task_name` is read-only for the same reason.
 The map holds the other copy,
-and an assignment to the attribute renames the task in this process alone.
-
-The template inlines `setup_script` verbatim
-into the generated worker script (`{{ setup_script }}`).
-Nothing validates it.
+and an assignment to the attribute would rename the task in this process alone.
 
 ### Mapreduce
 
@@ -376,13 +375,6 @@ so that call's own map tasks drain the item queue and nothing else does.
 It also stays clear of `_starved_tasks` and `_stranded_tasks`.
 Both look at the queues of the tasks handed to the wait,
 never at the item queue.
-
-The queue name carries a UUID token as well as a counter.
-The counter restarts at 0 in a new process.
-Without the token, a re-run of one executor name against a surviving server
-collides with the item tasks the first run left behind.
-`task_add` refuses a duplicate id,
-so that collision fails the call with items already on the server.
 
 **A map task resolves a method name once, not once per item.**
 A worker builds its actor at startup and keeps it for the pilot job.
@@ -464,7 +456,7 @@ Use `{#` without the dash inside a body.
 **Never import torch or botorch here.**
 This rule is the whole point of the split.
 A search space is arithmetic on one value at a time,
-so you can build and test one where you cannot install the optimizer.
+so code that builds or tests a search space runs where the optimizer cannot be installed.
 `tests/test_search_space.py` therefore runs without the `importorskip`
 that skips every botorch test.
 `optimize_space_botorch` imports only what it uses of it
@@ -523,7 +515,7 @@ and a stored copy can come from a different space.
 ### Batch Bayesian optimization (`optimize_space_botorch.py`)
 
 **`OptimizeSpaceBotorch` never explores.**
-You construct an `OptimizeSpaceBotorch` from results files,
+`OptimizeSpaceBotorch` starts from results files,
 and it fails if a study has no observations in them.
 That dependence on files is what makes a search resumable.
 The state that has to survive a time limit is a file, not an object.
@@ -565,17 +557,9 @@ each against its own `patience`, floor and ceiling.
   Tests assert them by constructing with them
   (`make_opt(..., acqf_timeout_s=...)`) or against `opt.studies[i].<knob>`,
   never against a literal.
-- **The stall counter runs from round 1.
-  `min_search_rounds` gates the stop, not the counting.**
-  Report the gap to the stop as
-  `max(patience - stalled, min_search_rounds - round_number)`.
-  A bare `stalled`/`patience` ratio runs past its own denominator
-  whenever the floor outlasts the streak, which the defaults do.
 - **One acquisition, one `optimize_acqf` call per study per round**,
   for the whole batch.
-  `qLogNoisyExpectedImprovement` takes `X_baseline`,
-  every point measured so far, rather than a `best_f` scalar.
-  That argument has to be the `train_x` from this round's fit,
+  Its `X_baseline` has to be the `train_x` from this round's fit,
   not a stale copy.
 - **Never import this module eagerly from the package `__init__.py`.**
   `OptimizeSpaceBotorch` and `OptimizationStudy` are importable
@@ -609,11 +593,6 @@ A monitor must not hold open a worker that Slurm kills at its time limit,
 and a failed sample must not end the series.
 A node briefly unreachable is the common case, and a gap beats a stop.
 `close()` stops them before closing the client whose channel they use.
-
-**CPU is a rate, taken as the difference of two totals.**
-The kernel reports CPU as microseconds that only rise,
-so `CgroupSampler` keeps the previous reading.
-The first sample of a run necessarily reports 0 cores.
 
 **`swtop` can only show what an RPC can answer.**
 `task_get_count_by_state` covers every task,
@@ -658,9 +637,31 @@ which a 3600-worker pool needs to keep.
 Those keys come from the row builders in `swtop.py`.
 
 **Both displays read the same row builders.**
-`pilot_job_rows`, `worker_rows`, `host_rows`, `job_rows` and `task_rows`
-are the one definition of what each block shows.
+`BLOCKS` in `swtop.py` is the one definition of the blocks.
+It gives each block its title, columns, empty message and row builder,
+and it sets their order.
 The text frames and the UI differ only in how they draw them.
+
+**The widgets bind no keys, and set no ids.**
+An app that embeds the widgets sets up its own keys,
+and a key a widget binds would take one from that app.
+An id that a widget sets could collide with one of the app's.
+So only `SwtopApp` binds keys, including the tab keys in `TAB_KEYS`,
+and only `SwtopApp` gives ids to its areas.
+The panes from `block_pane` are the exception:
+a `TabbedContent` needs pane ids,
+so their default ids carry an `swtop-` prefix.
+Each widget carries its styles in `DEFAULT_CSS`,
+since an app that embeds it loads no stylesheet of `swtop`'s.
+Those styles select on a widget type or on an `swtop-` class, never on an id.
+
+**The poller finds its views through `attach`.**
+`SnapshotPoller` does not search the DOM for views.
+A search would also find the views of a second poller,
+and an app that watches two servers would then mix them up.
+`attach` also shows the last snapshot on a view at once.
+The poller mounts before the app's `on_mount` attaches the views,
+so its first poll can end before they are attached.
 
 ### Slurm interaction (`slurm_utils.py`)
 
@@ -693,10 +694,6 @@ and keeps a file for each of them.
 Slurm writes those files itself via `--output`,
 and `logging.basicConfig` leaves the streams on the inherited handles.
 A second redirect leaves the Slurm-written files empty.
-
-**`submit_sbatch_job` searches `sbatch`'s stdout for the job id, and does not match at the start.**
-A site that prints a banner or a warning there
-otherwise turns a successful submission into a parse failure.
 
 **`sbatch` gets an environment with no Slurm variables in it.**
 `get_clean_environ` drops `SLURM_`, `SLURMD_`, `PMI_` and `SRUN_`.

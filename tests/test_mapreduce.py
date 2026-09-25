@@ -437,6 +437,7 @@ class TestMapreduceTask:
         """Three tasks on one queue fold every item exactly once between them."""
         queue = "mr-direct"
         for index in range(60):
+            # The order the items are served in does not matter to these tests.
             ds_client.task_add(
                 task_id=f"{queue}.item.{index}",
                 parent_task_ids=[],
@@ -468,6 +469,7 @@ class TestMapreduceTask:
     ):
         queue = "mr-done"
         for index in range(5):
+            # The order the items are served in does not matter to these tests.
             ds_client.task_add(
                 task_id=f"{queue}.item.{index}",
                 parent_task_ids=[],

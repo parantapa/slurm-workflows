@@ -44,12 +44,8 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
-# Deprecations are the ones worth failing on:
-# they are how a dependency announces a break one release ahead,
-# and a warning nobody reads is a break discovered at the worst moment.
-# Everything else stays a warning
-# --- botorch is deliberately handed a constant objective in places,
-# and says so at runtime.
+# Deprecations fail the suite, and every other warning stays a warning.
+# See the developer notes, Conventions.
 filterwarnings = [
     "error::DeprecationWarning",
     "error::PendingDeprecationWarning",

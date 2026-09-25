@@ -191,7 +191,8 @@ class TestRemoteErrors:
         self, executor, ds_service_address, tmp_path
     ):
         """Serialization happens inside the try block, so the handler catches it too."""
-        task = executor.submit("cpu", lambda: (_ for _ in range(3)))  # generator
+        # A generator cannot be pickled, so the result fails to serialize.
+        task = executor.submit("cpu", lambda: (_ for _ in range(3)))
 
         worker = make_worker(ds_service_address, tmp_path)
         run_worker(worker, expect_tasks=1)
@@ -673,7 +674,10 @@ class TestCli:
         assert "/extra/path" in captured["sys_path_head"]
 
     def test_leaves_the_process_streams_alone(self, captured, tmp_path):
-        """A redirect empties the file Slurm writes. See the developer notes."""
+        """A redirect empties the file Slurm writes.
+
+        See the developer notes, "Slurm interaction".
+        """
         before = (sys.stdout, sys.stderr)
 
         self.invoke(tmp_path)

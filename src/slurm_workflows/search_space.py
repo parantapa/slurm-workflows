@@ -1,14 +1,8 @@
-"""Search spaces: what an optimizer can vary, and over what.
-
-A search space maps parameter names to ranges.
-Every range moves one of its own values into `[0, 1]` and back again.
-So an optimizer works in the unit cube.
-The objective sees values of the kind it declared.
-Nothing here imports torch or botorch.
-"""
+"""Search spaces: what an optimizer can vary, and over what."""
 
 from __future__ import annotations
 
+# No torch or botorch import here. See the developer notes, Search spaces.
 import math
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence

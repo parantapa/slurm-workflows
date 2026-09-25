@@ -29,8 +29,8 @@ That download is large.
 Without the extra, `test_optimize_space_botorch.py` skips,
 and the rest of the suite still runs.
 `[dev]` adds `black` and `pyright`.
-The repository conventions require a clean run of both,
-alongside a passing suite.
+The gate that runs them is under Conventions
+in the [developer notes](developer-notes.md#conventions).
 
 ## What is real and what is mocked
 
@@ -73,7 +73,7 @@ Paths are relative to [`tests/`](../tests).
 | `test_worker.py` | `PilotWorker` and the `slurm-pilot-worker` CLI |
 | `test_monitors.py` | The host and cgroup samplers and the monitor threads |
 | `test_swtop.py` | The `swtop` collector: what it collects, how it renders as text, and the CLI |
-| `test_swtop_tui.py` | The Textual app: table updates, what each block shows, and polling |
+| `test_swtop_tui.py` | The Textual app and its widgets: table updates, what each block shows, the layout and the keys, embedding in another app, and polling |
 | `test_search_space.py` | The range types and the unit cube mapping (no botorch needed) |
 | `test_explore_space.py` | `ExploreSpaceSobolQMC`: the design it draws and what it records (no botorch needed) |
 | `test_utils.py` | The shared helpers |
@@ -113,9 +113,8 @@ Paths are relative to [`tests/`](../tests).
   and the polling tests use a tighter explicit `time_limit` fixture.
 - **The botorch tests mostly use a stand-in executor.**
   `LocalExecutor` runs the objective inline.
-  The optimizer's contract with the executor is three calls wide:
-  `submit` returns a `Task`, `set_task_name` names it,
-  and `wait` fills in its `output`.
+  The comment on `as_executor` names the three calls
+  the optimizer makes on it.
   A GP fit already dominates each test,
   so a queue round trip adds nothing.
   `TestRealExecutor` keeps the stand-in honest,

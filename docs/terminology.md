@@ -31,14 +31,14 @@ Do not spend a source's word on something that source does not mean by it.
 Two facts from `ds_service_client` settle the hard cases,
 so they are worth stating before the tables:
 
-* `task_get(worker_id, queue)` is documented as
-  "Claim a task for `worker_id` from the first queue holding one".
+* `task_get(worker_id, queue)` is documented
+  as "Claim a task for `worker_id` from the first queue holding one".
   In `ds-service` a **worker** is whatever claims a task.
   Here the claimant is the process,
   because `PilotWorker` passes its own `worker_id`.
   A worker is therefore a process, and nothing else is a worker.
-* `task_add` is documented as
-  "Register a task, and enqueue it on each of its queues once it is Ready".
+* `task_add` is documented
+  as "Register a task, and enqueue it on each of its queues once it is Ready".
   A **task** is the `ds-service` unit of work.
   Slurm also calls a process inside a job step a task.
   That second sense always carries the word Slurm in front of it.
@@ -103,7 +103,7 @@ A group is a recipe for **pilot jobs**.
 Scaling a group sets how many jobs it has,
 and the group holds `SlurmJob` objects.
 How many workers those jobs start
-is decided by `--ntasks-per-node` and `is_batch_worker`,
+is decided by the Slurm task count in its sbatch arguments and by `is_batch_worker`,
 which the group does not control.
 One group scaled to a single job can hold eighty workers.
 
@@ -248,7 +248,8 @@ because rule 4 leaves no room for a second word for the same thing.
 | **sampler** | The callable a monitor calls. | `sample_host`, `CgroupSampler` | reader, probe |
 | **subject** | The node or job a monitor samples. | `SubjectInfo` | target, entity, resource |
 | **`swtop`** | The program. Call it by name. | the entry point | the monitor, the dashboard, the UI |
-| **block** | One section of the `swtop` screen. | `swtop_tui.Block` | panel, pane, table, widget |
+| **block** | One of the five lists `swtop` shows: pilot jobs, workers, hosts, slurm jobs and tasks. | `swtop.BlockSpec`, `swtop_widgets.BlockTable` | panel, pane, table, widget |
+| **tab** | How the `swtop` terminal UI shows a block. | `swtop_widgets.block_pane` | pane, page |
 | **error id** | The id in a `RemoteExecutionError`, which appears beside the traceback. | `error_id` | trace id, failure id, error code |
 | **time limit** | Slurm's `--time`. | Slurm | walltime, wall time, wall clock |
 | **wall clock** | Elapsed real time, as in `acqf_timeout_s`. | ordinary usage | walltime, runtime |

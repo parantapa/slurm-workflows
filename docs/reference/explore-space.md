@@ -43,9 +43,9 @@ A Sobol' sequence is balanced at that prefix length.
 100 workers that ask for 100 points evaluate 64 and leave 36 workers idle.
 
 The objective contract is the same for both classes:
-see [The objective](search-space.md#the-objective).
+see [The objective](objective.md).
 What a failed evaluation does to a run is the same too:
-see [Failures](search-space.md#failures).
+see [Failures](objective.md#failures).
 
 ## Methods
 
@@ -69,15 +69,16 @@ exploration.save("explore.pkl.gz")
 result = exploration.results["demo"]   # points, values, outputs, unit_points
 ```
 
-`exploration.results[name]` holds four index-aligned lists, in submission order.
-They are the `points` evaluated, the `values` ranked,
-the whole `outputs`, and `unit_points`, the points in the unit cube.
-`exploration.studies` is the study list with the point count and seed filled in.
-`ExploreSpaceSobolQMC` leaves the caller's own `ExplorationStudy` objects alone.
-
 A second call to `run()` re-evaluates the same design:
 the seed decides the draw, so there is no "next 4096 points".
 A different seed draws a different design.
+
+## Attributes
+
+| Attribute | What it holds |
+| --- | --- |
+| `results[name]` | Four index-aligned lists, in submission order: the `points` evaluated, the `values` ranked, the whole `outputs`, and `unit_points`, the points in the unit cube. |
+| `studies` | The study list with the point count and seed filled in. `ExploreSpaceSobolQMC` leaves the caller's own `ExplorationStudy` objects alone. |
 
 ## The results file
 

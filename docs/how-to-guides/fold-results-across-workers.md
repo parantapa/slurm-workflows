@@ -23,7 +23,7 @@ def count_hits(path, threshold):
         return sum(1 for line in fobj if float(line.split(",")[2]) > threshold)
 ```
 
-## Call it
+## Call `mapreduce`
 
 ```python
 from operator import add
@@ -54,7 +54,7 @@ The call blocks until every map task is back,
 so scale the job group up before you call it.
 Unlike `submit`, it checks for pilot jobs first.
 If no job group named in `queue` has a pilot job from `scale_jobs`,
-it raises `RuntimeError`.
+it raises `RuntimeError`, unless `iterable` is empty.
 A pilot job that is still pending is enough.
 
 ## Pick a `reduce_fn` and an `init` that go together
@@ -100,16 +100,16 @@ its worker built at startup.
 For the rules, and for what a job group without an actor raises, see
 [Mapping with an actor's method](../reference/mapreduce.md#mapping-with-an-actors-method).
 
-## Choose the two numbers separately
+## Set `num_tasks` by the pool, not by the item count
+
+Nothing divides the items up in advance,
+so each map task claims the next item whenever it is free.
 
 Set `num_tasks` to how many map tasks you want draining the item queue,
 not to the number of items.
 Size it by the pool, as you size any batch of tasks.
 A few times the number of workers is a reasonable start.
 A map task that claims slow items then does not hold up the end of the run.
-
-Nothing divides the items up in advance,
-so each map task claims the next item whenever it is free.
 
 ## Chunk the items when each one is small
 

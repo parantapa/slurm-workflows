@@ -436,7 +436,7 @@ class TestScaleWorkers:
             executor.scale_jobs("nope", 1)
 
     def test_a_submitted_job_is_published(self, defined, ds_client, fake_slurm):
-        """`swtop` reads the jobs from the store, and nothing else announces them."""
+        """`swtop` reads the jobs from the map, and nothing else announces them."""
         defined.scale_jobs("cpu", 1)
 
         (job_name,) = defined.groups["cpu"].jobs
@@ -459,7 +459,7 @@ class TestScaleWorkers:
         }
 
     def test_a_canceled_job_keeps_its_key(self, defined, ds_client):
-        """Nothing deletes it: the store records what the executor submitted."""
+        """Nothing deletes it: the map records what the executor submitted."""
         defined.scale_jobs("cpu", 2)
         defined.scale_jobs("cpu", 0)
 
@@ -526,7 +526,6 @@ class TestScaleWorkers:
         assert sorted(fake_slurm.cancelled_job_ids) == sorted(job_ids)
 
     def test_already_finished_jobs_are_not_cancelled(self, defined, fake_slurm):
-        """Nothing scancels a worker whose job already exited."""
         defined.scale_jobs("cpu", 2)
         fake_slurm.running_job_ids.clear()  # both jobs finished on their own
 
@@ -888,7 +887,6 @@ class TestAsCompleted:
                 executor.wait([ghost_task()], desc="test")
 
     def test_canceled_task_raises(self, executor, ds_client, time_limit):
-        # `Canceled` arrived with ds-service 4.0.0.
         # Nothing here cancels, so this cancel arrives out of band.
         # See the comment on the `else` of the poll loop in `_as_completed`.
         task = executor.submit("cpu", square, 3)

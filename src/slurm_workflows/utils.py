@@ -41,9 +41,9 @@ def objective_value(
 ) -> float:
     """The value to rank one evaluation by.
 
-    Raises `RuntimeError` in three cases.
-    The result is not a mapping, or it lacks `objective_key`,
-    or it holds a value there that is not a finite float.
+    Raises `RuntimeError` if the result is not a mapping,
+    if it lacks `objective_key`,
+    or if the value there is not a float or is not finite.
     The message names what came back and at which point.
     """
     if not isinstance(output, Mapping):

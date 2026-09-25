@@ -65,8 +65,10 @@ PROGRESS_INTERVAL_S: float = 1.0
 
 # The queue one `mapreduce` call puts its items on,
 # and the id of each item task on that queue.
-# The `mapreduce` segment keeps these ids clear of `<name>.task.<n>`,
-# and the token keeps two runs of one executor name clear of each other.
+# The `mapreduce` segment keeps these ids clear of `<name>.task.<n>`.
+# The token keeps two runs of one executor name clear of each other:
+# the index restarts at 0 in each executor,
+# and `task_add` refuses a duplicate id.
 MAPREDUCE_QUEUE_TEMPLATE = "{name}.mapreduce.{index}.{token}"
 MAPREDUCE_ITEM_TEMPLATE = "{queue}.item.{index}"
 
@@ -199,6 +201,7 @@ class _Progress:
     def record(self, done: int) -> None:
         """Append `done`, unless the series took a value recently."""
         now = time.monotonic()
+        # The final count always goes out, whatever the interval.
         if done < self.total and now - self._last_sent < PROGRESS_INTERVAL_S:
             return
         self.append(done)
@@ -362,6 +365,7 @@ class SlurmPilotExecutor:
         `name` is also the queue name.
         `setup_script` is shell text, not a path.
         The executor inlines it into each generated worker script.
+        Nothing checks it.
         `actor_class_name` is a dotted `module.Class` path
         that each worker imports and constructs at startup.
         The actor arguments need an `actor_class_name` to construct,
@@ -817,7 +821,8 @@ class SlurmPilotExecutor:
             unrunnable_ids = {task.task_id for task in unrunnable}
             return [task for task in pending if task.task_id not in unrunnable_ids]
 
-        # Before the first yield.
+        # Before the first yield, so under `RAISE_ON_FIRST_ERROR`
+        # a queue that never had a pilot job raises before the caller sees any result.
         if pending:
             starved, message = self._starved_tasks(pending)
             if starved:
@@ -868,6 +873,9 @@ class SlurmPilotExecutor:
                     # Something outside this run canceled the task,
                     # or a task it waits on.
                     # The server never dispatches it again.
+                    # This message and the next say "task queue server" on purpose:
+                    # a user greps for that string.
+                    # See docs/terminology.md, The server.
                     failed(
                         f"Task {task.task_id} was canceled on the task queue "
                         f"server, so it will never produce an output"

@@ -18,6 +18,9 @@ asks it for a batch of points at once, evaluates that batch, and repeats.
 It needs botorch, which is an optional dependency.
 The package's `botorch` extra installs it,
 and the README's [Installation](../../README.md#installation) section covers that.
+`OptimizeSpaceBotorch` and `OptimizationStudy` import from the package root.
+The package resolves them on first use rather than at import time,
+so `import slurm_workflows` still works without botorch installed.
 
 `studies` is a **list**, as for an exploration.
 `OptimizeSpaceBotorch` searches several spaces in the same rounds,
@@ -39,9 +42,9 @@ or a range since narrowed past a saved point,
 rather than fit on them.
 
 The objective contract is the same for both classes:
-see [The objective](search-space.md#the-objective).
+see [The objective](objective.md).
 What a failed evaluation does to a run is the same too:
-see [Failures](search-space.md#failures).
+see [Failures](objective.md#failures).
 
 ## `OptimizationStudy`
 
@@ -61,7 +64,7 @@ The exploration study's fields, minus the design ones, plus the search:
 | `extra_objective_kwargs` | `{}` | Extra arguments passed to the objective and not varied. |
 | `priority` | `0.0` | The priority of every task the study submits, fits and evaluations alike. The highest priority runs first. |
 
-## Tuning the propose step
+### Tuning the propose step
 
 Four study arguments tune the acquisition optimization.
 They are settings of one run.
@@ -103,15 +106,21 @@ params, value = opt.best_point("demo")
 
 `save` writes only what this instance evaluated,
 so an earlier file passed alongside it counts every point once.
-`opt.results[name]` is that same set of points as lists,
-and `opt.prior[name]` is what the files held, in the same shape.
-`best_point` and `observations` cover both.
-`opt.studies` is the study list with the parallelism filled in.
 
 The run reports itself as it goes.
 It gives the best point after every round,
 how long each fit and each propose step took,
 and why a study stopped.
+
+## Attributes
+
+| Attribute | What it holds |
+| --- | --- |
+| `results[name]` | The points this instance evaluated, as lists. `save` writes the same set. |
+| `prior[name]` | What the files held, in the same shape as `results[name]`. |
+| `studies` | The study list with the parallelism filled in. |
+
+`best_point` and `observations` cover both `results` and `prior`.
 
 ## What a round is
 

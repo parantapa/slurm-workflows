@@ -1,12 +1,8 @@
 """Batch Bayesian optimization of search spaces, with botorch.
 
-Fits a Gaussian process to everything measured so far,
-and asks it for a whole batch of points at once.
-Evaluates that batch across a pilot pool, refits, repeats.
-This module does not explore.
 A run starts from the results files `ExploreSpaceSobolQMC.save` wrote.
-
-See `docs/reference/optimize-space.md` for what a round does and how a search stops.
+See `docs/reference/optimize-space.md`
+for what a round does and how a search stops.
 """
 
 from __future__ import annotations
@@ -232,8 +228,6 @@ class OptimizeSpaceBotorch:
     ) -> None:
         """Validate every study and load the observations it starts from.
 
-        The studies all run together, in the same rounds.
-        Each drops out when it meets its own stopping rule.
         files: results files to start from,
             as `ExploreSpaceSobolQMC.save` or this class's own `save` wrote them.
             The search models a study on every observation
@@ -433,7 +427,7 @@ class OptimizeSpaceBotorch:
         A round is one fit per still-running study,
         then every study's proposed batch, evaluated on its objective queue.
         Studies advance in step and drop out independently,
-        each on its own patience and ceiling.
+        each on its own patience, floor and ceiling.
         A second call runs another set of rounds for every study,
         on everything measured so far.
         It counts rounds and stalled rounds from the start again.
@@ -471,7 +465,7 @@ class OptimizeSpaceBotorch:
                 round_number,
             )
 
-            still_running = []
+            still_running: list[OptimizationStudy] = []
             for study in active:
                 self._report_best(study.name)
 
@@ -484,8 +478,12 @@ class OptimizeSpaceBotorch:
 
                 stalled[study.name] += 1
 
-                # Whichever bound is further away:
+                # The streak counts from round 1,
+                # and `min_search_rounds` gates the stop, not the counting.
+                # So the gap is whichever bound is further away:
                 # the streak reaching `patience`, or the rounds reaching the floor.
+                # A bare `stalled`/`patience` ratio overshoots
+                # when the floor is further.
                 remaining = max(
                     study.patience - stalled[study.name],
                     study.min_search_rounds - round_number,
@@ -567,7 +565,7 @@ class OptimizeSpaceBotorch:
             detail = f": {'; '.join(broken)}" if broken else ""
             raise RuntimeError(f"fitting the model failed during {desc}{detail}") from e
 
-        proposals = {}
+        proposals: dict[str, list[list[float]]] = {}
         for study, (_, submission) in zip(studies, submissions):
             proposals[study.name] = self._candidates(study, submission, desc)
         return proposals

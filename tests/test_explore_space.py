@@ -104,14 +104,21 @@ class LocalExecutor:
     ) -> None:
         self.waits.append(desc)
         self.batch_sizes.append(len(tasks))
+        # The exploration always waits with `RAISE_AFTER_COMPLETED`,
+        # and every callable already ran in `submit`,
+        # so raising on any failure is that policy here.
         failed = [t for t in tasks if isinstance(t.output, RemoteExecutionError)]
         if failed:
             raise RuntimeError(f"{len(failed)} of {len(tasks)} tasks did not succeed")
 
 
-# `exploration.executor` keeps this type.
-# A test that reads the stand-in's records back through it
-# therefore carries `# type: ignore[attr-defined]`.
+# The exploration makes three calls on the executor:
+# `submit`, `set_task_name` and `wait`.
+# `LocalExecutor` covers all three,
+# and `TestRealExecutor` checks that they are enough.
+# `exploration.executor` keeps the cast type,
+# so a test that reads the stand-in's records back through it
+# carries `# type: ignore[attr-defined]`.
 def as_executor(executor: LocalExecutor) -> SlurmPilotExecutor:
     """Type the stand-in as the executor it stands in for."""
     return cast(SlurmPilotExecutor, executor)
@@ -392,8 +399,6 @@ class TestRun:
 
 
 class TestTaskNames:
-    """What the exploration calls its evaluations on the server."""
-
     def test_every_point_is_named_after_its_task(self):
         exploration = explorer(study(points=4))
 

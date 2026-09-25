@@ -56,9 +56,8 @@ def parse_file(prefix: str, path: Path) -> dict[str, TemplateText]:
             if head_end == -1:
                 raise ValueError("Unable to find end of header")
 
-            # A body runs to the next header,
-            # so it cannot itself contain `{#-`:
-            # use `{#` without the dash for a comment inside one.
+            # A body runs to the next header, which limits what a body can hold.
+            # See the developer notes, Templates.
             body_end = text.find("{#-", head_end)
             if body_end == -1:
                 body_end = len(text)
