@@ -45,13 +45,19 @@ def _time_limit(seconds: float, message: str) -> Iterator[None]:
     try:
         yield
     finally:
+        # This disarms any outer alarm as well.
+        # A `time_limit` block inside a test ends the 60s hang guard,
+        # so the rest of that test runs unguarded.
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous)
 
 
 @pytest.fixture
 def time_limit() -> Callable[[float, str], AbstractContextManager[None]]:
-    """Bound a block that can spin forever if the code under test regresses."""
+    """Bound a block that can spin forever if the code under test regresses.
+
+    The block raises `TimeoutError(message)` once `seconds` pass.
+    """
 
     return _time_limit
 

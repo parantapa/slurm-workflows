@@ -28,7 +28,13 @@ class Model:
 ```
 
 Slurm ends a pilot job, at its time limit or through `scancel`,
-without the worker calling `close()`.
+with SIGTERM, and with SIGKILL a little later.
+The worker turns the SIGTERM into `SystemExit` and calls its own `close()`,
+so the actor's `close()` runs too.
+The SIGKILL can cut a slow `close()` short.
+A SIGKILL on its own, or a node failure, skips it.
+Keep `close()` short,
+and do not rely on it for anything the next run needs.
 
 The class must be importable on the compute node.
 By default, each worker adds the executor's current working directory

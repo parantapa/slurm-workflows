@@ -15,7 +15,7 @@ import json
 import asyncio
 from typing import Callable, cast, AsyncIterator
 from datetime import datetime, timedelta, timezone
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from contextlib import asynccontextmanager
 
 import click
@@ -27,14 +27,19 @@ from .slurm_pilot_executor import (
     PROGRESS_SERIES_PREFIX,
     PILOT_JOB_INFO_PREFIX,
 )
-from .slurm_pilot_worker import WORKER_INFO_PREFIX
+from .slurm_pilot_worker import (
+    WORKER_INFO_PREFIX,
+    WORKER_EXIT_PREFIX,
+    PILOT_JOB_START_PREFIX,
+    PILOT_JOB_EXIT_PREFIX,
+)
 
 DEFAULT_INTERVAL_S: float = 2.0
 
 # The fields a worker publishes about itself,
 # in the order it writes them.
 # The tables order their own columns.
-WORKER_INFO_FIELDS = ["group", "name", "slurm_job_id", "hostname", "pid"]
+WORKER_INFO_FIELDS = ["group", "name", "slurm_job_id", "hostname", "pid", "start_time"]
 
 # The fields the executor publishes about a pilot job, likewise.
 PILOT_JOB_FIELDS = ["name", "group", "slurm_job_id", "submit_time"]
@@ -56,6 +61,9 @@ ALL_TASK_IDS = ""
 
 # The tables show this in place of the name of a task that nothing named.
 UNNAMED = "-"
+
+# The pilot jobs table shows this in place of the start time of a queued job.
+NOT_STARTED = "-"
 
 # How far back a monitored value is still worth showing.
 # Twelve readings at the default `DEFAULT_MONITOR_INTERVAL_S` of 5 seconds.
@@ -80,8 +88,10 @@ STATE_ORDER = [
 
 # What each block says when it has nothing to show.
 # Each says why it is empty, since an empty block is usually a question.
-EMPTY_PILOT_JOBS = "no pilot jobs have been submitted through this server"
-EMPTY_WORKERS = "no workers have registered with this server"
+EMPTY_PILOT_JOBS = (
+    "no pilot jobs have been submitted through this server, or all of them exited"
+)
+EMPTY_WORKERS = "no workers have registered with this server, or all of them exited"
 EMPTY_HOSTS = "no host is being monitored"
 EMPTY_JOBS = "no slurm job is being monitored"
 EMPTY_TASKS = "no tasks have been submitted to this server"
@@ -97,16 +107,22 @@ class WorkerInfo:
     slurm_job_id: str
     hostname: str
     pid: str
+    start_time: str = UNKNOWN
 
 
 @dataclass
 class PilotJobInfo:
-    """One pilot job, as the executor described it when it submitted it."""
+    """One pilot job, as the executor described it when it submitted it.
+
+    `start_time` is what the pilot job published when it started,
+    or `NOT_STARTED` for a job that has not published one.
+    """
 
     name: str
     group: str
     slurm_job_id: str
     submit_time: str
+    start_time: str = NOT_STARTED
 
 
 @dataclass
@@ -168,6 +184,9 @@ class ProgressInfo:
 class Snapshot:
     """One poll's worth of server state.
 
+    `worker_jobs`, `workers` and `jobs` leave out
+    the pilot jobs and the workers that published their exit,
+    and the Slurm jobs of those pilot jobs.
     A poll that failed sets `error` and leaves every other reading empty.
     """
 
@@ -195,6 +214,7 @@ class Collector:
         self.address = address
         # See "`Collector` reads an identity once" in the developer notes.
         self._pilot_jobs: dict[str, PilotJobInfo] = {}
+        self._pilot_job_starts: dict[str, str] = {}
         self._workers: dict[str, WorkerInfo] = {}
         # The last count read for a progress id,
         # so a display that no longer moves still shows where it stopped.
@@ -212,19 +232,34 @@ class Collector:
         But a server that the client cannot reach raises.
         The caller decides whether to keep polling.
         """
-        # None of these six needs an answer from another,
+        # None of these needs an answer from another,
         # so they go out together and the poll waits once.
-        counts, progress, worker_jobs, workers, hosts, jobs = await asyncio.gather(
-            self.client.task_get_count_by_state(),
-            self._collect_progress(),
-            self._collect_pilot_jobs(),
-            self._collect_workers(),
-            self._collect_subjects(HOST_SERIES),
-            self._collect_subjects(JOB_SERIES),
+        # Two groups, since `asyncio.gather` types at most six at a time.
+        (counts, progress, worker_jobs, workers, hosts, jobs), exited = (
+            await asyncio.gather(
+                asyncio.gather(
+                    self.client.task_get_count_by_state(),
+                    self._collect_progress(),
+                    self._collect_pilot_jobs(),
+                    self._collect_workers(),
+                    self._collect_subjects(HOST_SERIES),
+                    self._collect_subjects(JOB_SERIES),
+                ),
+                asyncio.gather(
+                    self._exited(PILOT_JOB_EXIT_PREFIX),
+                    self._exited(WORKER_EXIT_PREFIX),
+                ),
+            )
         )
+        exited_jobs, exited_workers = exited
         # The tasks do need the workers:
         # a running task carries the name of the worker that holds it.
+        # Every worker, since one that just exited can still hold a task.
         tasks = await self._collect_tasks(workers)
+
+        exited_slurm_jobs = {
+            j.slurm_job_id for j in worker_jobs if j.name in exited_jobs
+        }
 
         return Snapshot(
             address=self.address,
@@ -238,12 +273,19 @@ class Collector:
                 "canceled": counts.canceled,
             },
             progress=progress,
-            worker_jobs=worker_jobs,
-            workers=workers,
+            worker_jobs=[j for j in worker_jobs if j.name not in exited_jobs],
+            workers=[w for w in workers if w.worker_id not in exited_workers],
             tasks=tasks,
             hosts=hosts,
-            jobs=jobs,
+            jobs=[j for j in jobs if j.subject not in exited_slurm_jobs],
         )
+
+    async def _exited(self, prefix: str) -> set[str]:
+        """The names under `prefix` that published their exit."""
+        # The key alone says so, and nothing reads the time in it.
+        return {
+            key[len(prefix) :] for key in await self.client.map_search_key(f"^{prefix}")
+        }
 
     async def _text(self, key: str) -> str:
         """One key's value as text, or `UNKNOWN` if the server does not hold it."""
@@ -280,19 +322,38 @@ class Collector:
         return info
 
     async def _collect_pilot_jobs(self) -> list[PilotJobInfo]:
-        """Every pilot job the executor published, cached like the rest."""
-        names = [
-            key[len(PILOT_JOB_INFO_PREFIX) :]
-            for key in await self.client.map_search_key(f"^{PILOT_JOB_INFO_PREFIX}")
-        ]
+        """Every pilot job the executor published, with when it started."""
+        info_keys, start_keys = await asyncio.gather(
+            self.client.map_search_key(f"^{PILOT_JOB_INFO_PREFIX}"),
+            self.client.map_search_key(f"^{PILOT_JOB_START_PREFIX}"),
+        )
+        names = [key[len(PILOT_JOB_INFO_PREFIX) :] for key in info_keys]
+        started = {key[len(PILOT_JOB_START_PREFIX) :] for key in start_keys}
 
         missing = [n for n in names if n not in self._pilot_jobs]
-        await asyncio.gather(*(self._pilot_job_info(n) for n in missing))
+        missing_starts = sorted(started - self._pilot_job_starts.keys())
+        await asyncio.gather(
+            *(self._pilot_job_info(n) for n in missing),
+            *(self._pilot_job_start(n) for n in missing_starts),
+        )
 
         listed = [
-            self._pilot_jobs.get(name) or _unknown_pilot_job(name) for name in names
+            replace(
+                self._pilot_jobs.get(name) or _unknown_pilot_job(name),
+                start_time=self._pilot_job_starts.get(name, NOT_STARTED),
+            )
+            for name in names
         ]
         return sorted(listed, key=lambda j: (j.group, j.name))
+
+    async def _pilot_job_start(self, name: str) -> None:
+        """Cache when one job started, if its key is readable."""
+        text = await self._text(f"{PILOT_JOB_START_PREFIX}{name}")
+        try:
+            start_time = str(json.loads(text)["start_time"])
+        except (ValueError, TypeError, KeyError):
+            return
+        self._pilot_job_starts[name] = start_time
 
     async def _pilot_job_info(self, name: str) -> None:
         """Cache one job's published description, if it is readable."""
@@ -303,7 +364,6 @@ class Collector:
         except (ValueError, TypeError, KeyError):
             return
 
-        # Cached as soon as it is read, so a poll cut short keeps it.
         # See "`Collector` reads an identity once" in the developer notes.
         self._pilot_jobs[name] = PilotJobInfo(**fields)
 
@@ -335,7 +395,6 @@ class Collector:
             # so the next poll reads the key again.
             return
 
-        # Cached as soon as it is read, so a poll cut short keeps it.
         self._workers[worker_id] = WorkerInfo(worker_id=worker_id, **fields)
 
     async def _collect_tasks(self, workers: list[WorkerInfo]) -> list[TaskInfo]:
@@ -387,7 +446,7 @@ class Collector:
         )
 
     async def _task_name(self, task_id: str) -> None:
-        """Cache one task's name as soon as it is read, so a poll cut short keeps it."""
+        """Cache one task's name."""
         self._task_names[task_id] = await self._text(f"{TASK_NAME_PREFIX}{task_id}")
 
     async def _collect_subjects(self, prefixes: dict[str, str]) -> list[SubjectInfo]:
@@ -493,8 +552,8 @@ def _cell(values: dict[str, float], name: str, fmt: Callable[[float], str]) -> s
 
 
 # The columns of each block, which the text frames and the UI share.
-PILOT_JOB_COLUMNS = ["NAME", "GROUP", "JOB", "SUBMITTED"]
-WORKER_COLUMNS = ["NAME", "GROUP", "HOST", "JOB", "PID"]
+PILOT_JOB_COLUMNS = ["NAME", "GROUP", "JOB", "SUBMITTED", "STARTED"]
+WORKER_COLUMNS = ["NAME", "GROUP", "HOST", "JOB", "PID", "STARTED"]
 HOST_COLUMNS = ["HOST", "FREE MEM", "LOAD", "/dev/shm", "/tmp"]
 JOB_COLUMNS = ["JOB", "MEMORY", "CPU"]
 TASK_COLUMNS = ["NAME", "TASK ID", "STATE", "WORKER"]
@@ -531,17 +590,23 @@ def counts_line(snapshot: Snapshot) -> str:
 
 
 def pilot_job_rows(snapshot: Snapshot) -> list[tuple[str, list[str]]]:
-    """One row per submitted pilot job, keyed by its job name."""
+    """One row per pilot job that has not exited, keyed by its job name."""
     return [
-        (job.name, [job.name, job.group, job.slurm_job_id, job.submit_time])
+        (
+            job.name,
+            [job.name, job.group, job.slurm_job_id, job.submit_time, job.start_time],
+        )
         for job in snapshot.worker_jobs
     ]
 
 
 def worker_rows(snapshot: Snapshot) -> list[tuple[str, list[str]]]:
-    """One row per registered worker, keyed by its worker id."""
+    """One row per registered worker that has not exited, keyed by its worker id."""
     return [
-        (w.worker_id, [w.name, w.group, w.hostname, w.slurm_job_id, w.pid])
+        (
+            w.worker_id,
+            [w.name, w.group, w.hostname, w.slurm_job_id, w.pid, w.start_time],
+        )
         for w in snapshot.workers
     ]
 

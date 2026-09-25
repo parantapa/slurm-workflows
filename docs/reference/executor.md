@@ -10,7 +10,7 @@ and [what a run publishes](what-a-run-publishes.md)
 have pages of their own.
 The driver runs on a login node, or inside a Slurm job.
 
-Every name these reference pages use is importable from the package root,
+Every name this page and those two use is importable from the package root,
 except `NoOutput`:
 
 ```python
@@ -56,8 +56,8 @@ Generated scripts and all logs land there.
 
 | Method | What it does |
 | --- | --- |
-| `define_job_group(name, sbatch_args, ...)` | Register a job group. Submits nothing. The job group name is also the queue name. A second identical definition does nothing. A definition that differs raises `AssertionError`. |
-| `scale_jobs(name, count)` | Submit or cancel pilot jobs so the job group has `count` jobs. |
+| `define_job_group(name, sbatch_args, ...)` | Register a job group. Submits nothing. The job group name is also the queue name. A second identical definition registers nothing new, and only rewrites any actor arguments it passes. A definition that differs raises `AssertionError`. |
+| `scale_jobs(name, count)` | Submit or cancel pilot jobs so the job group has `count` jobs. The count includes every job the group submitted and did not cancel, even one that already left the cluster, so calling it again with the same count submits nothing. `stop()` forgets the jobs, so a later call submits `count` new ones. A job group `define_job_group` did not register raises `AssertionError`. |
 | `submit(queue, fn, *args, task_parents=None, task_priority=0.0, **kwargs) -> Task` | Enqueue one task and return a `Task` straight away. `queue` is a job group name or a list of them. `fn` is a callable, or a method name (`str`) for actor workers. `task_parents` is a list of the `Task`s this one waits on. `task_priority` orders the queue. See [`submit` options](#submit-options). |
 | [`mapreduce(desc, queue, ...)`](mapreduce.md) | Map an iterable across the pool and fold the results into one value. Blocks. `init` must be the identity of `reduce_fn`. |
 | `as_completed(tasks, desc, unit="task", raise_on_error=...)` | Yield tasks as their results arrive. `desc` and `unit` label the progress `swtop` draws. Raises `RuntimeError` rather than blocking forever on a task whose queues have no worker. |
@@ -136,6 +136,12 @@ For the task-side view of actors, see
 which the generated worker script, `<job-name>.sh`, invokes on the compute node.
 It takes six required options: the server address, the pilot job's name,
 its job group, its actor class name, the work dir and the worker `sys.path`.
+With `--pilot-job-event start` or `--pilot-job-event exit`,
+it publishes that the pilot job started or exited, and starts no worker.
+The generated batch script runs the worker script with that option
+when the job starts and when it exits.
+The worker script passes its own arguments on to the entry point.
+A wrapper named by `worker_exe` must pass them on too.
 It is what the `worker_exe` argument
 of [`define_job_group`](#define_job_group-options) names.
 A driver never calls it.

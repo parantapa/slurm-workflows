@@ -1,4 +1,4 @@
-"""Compute pi on Rivanna's BII cluster.
+"""Compute pi on the `bii` partition of Rivanna.
 
 `docs/tutorials/computing-pi.md` walks through this program.
 """

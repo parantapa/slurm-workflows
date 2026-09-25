@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from typing import NoReturn
 
-# Instances created in this process, so tests can assert on per-worker state.
+# Every CounterActor created in this process,
+# so tests can assert on per-worker state.
 INSTANCES: list["CounterActor"] = []
 
 

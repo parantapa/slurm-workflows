@@ -1,7 +1,7 @@
 """HPC workflow helpers for Slurm clusters.
 
 The names in `__all__` are importable from here.
-`NoOutput` is not, and imports from `slurm_pilot_executor`.
+`NoOutput` is not among them, and lives in `slurm_pilot_executor`.
 `OptimizeSpaceBotorch` and `OptimizationStudy` resolve on first use,
 so `import slurm_workflows` works without botorch installed.
 """

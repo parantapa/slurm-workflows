@@ -66,7 +66,7 @@ def make_worker(
     slurm_job_id: int = 42,
     hostname: str = "testhost",
     # Long, so the only sample is the one taken at startup
-    # by the first worker on a host,
+    # by the first worker of each job on a host,
     # which is what the tests look at.
     monitor_interval: float = 60.0,
 ) -> PilotWorker:
@@ -85,14 +85,16 @@ def make_worker(
 
 
 def run_worker(worker: PilotWorker, expect_tasks: int) -> None:
-    """Run the worker's real main loop until it completes `expect_tasks` tasks."""
+    """Run the worker's real main loop until it completes `expect_tasks` tasks.
+
+    Queue the tasks before the call, or from another thread.
+    The worker answers an empty queue with a sleep and another request,
+    so a worker that never gets `expect_tasks` tasks
+    spins until the hang guard ends the test.
+    """
     # `_StoppingClient` forwards everything it does not override,
     # so it satisfies the worker's use of the client without subclassing it.
     worker.client = cast(DsServiceClient, _StoppingClient(worker.client, expect_tasks))
-    # The tasks must arrive, before the call or from another thread.
-    # The worker answers an empty queue with a sleep and another request,
-    # so a worker that never gets `expect_tasks` tasks
-    # spins until the hang guard fires.
     try:
         worker.main()
     except StopWorker:
@@ -100,10 +102,12 @@ def run_worker(worker: PilotWorker, expect_tasks: int) -> None:
 
 
 def poll_worker(worker: PilotWorker, polls: int) -> int:
-    """Run the worker's real main loop for `polls` fetches, and count them."""
-    # For the empty-queue case, where `run_worker` never stops.
+    """Run the worker's real main loop for `polls` fetches, and count them.
+
+    Use it for the empty-queue case, where `run_worker` never stops.
+    The count tells a loop that gave up early from one that kept polling.
+    """
     # See docs/how-to-run-tests.md, "Notes for future changes".
-    # The count tells a loop that gave up early from one that kept polling.
     client = _IdlingClient(worker.client, polls)
     worker.client = cast(DsServiceClient, client)
     try:

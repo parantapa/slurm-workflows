@@ -165,7 +165,8 @@ class ExploreSpaceSobolQMC:
             raise ValueError(f"exploration study names must be unique: {duplicates}")
 
         self.executor = executor
-        # Validate here, so a bad study fails before anything reaches the cluster.
+        # Validated here, so a bad study fails before anything reaches the cluster.
+        # `_resolve` returns a copy, so the caller's dataclass stays as written.
         self.studies = [
             self._resolve(study, num_exploration_points) for study in studies
         ]
@@ -385,7 +386,7 @@ class ExploreSpaceSobolQMC:
         The file holds one dict keyed by study name.
         Each entry holds `points`, `values` and `outputs`,
         index-aligned and in submission order.
-        Read it back with `load_results`.
+        `load_results` reads it back.
         Plain `pickle`, so an objective's result must be plainly picklable.
         Overwrites `path`.
         If the exploration evaluated nothing, it writes empty lists.

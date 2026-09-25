@@ -1,5 +1,18 @@
 {#- name: "worker_sbatch_script" -#}
 
+# The worker script publishes when this pilot job starts and exits.
+# It runs in a bash of its own, so its setup script leaves this shell as it was.
+# A failure to publish does not end the job.
+report_pilot_job() {
+    /bin/bash '{{ worker_script_path }}' --pilot-job-event "$1" || true
+}
+# Slurm sends SIGTERM when it cancels the job or the job reaches its time limit.
+# The TERM trap turns it into a plain `exit 143` (128 + 15),
+# so the job exits with that status after the EXIT trap has run.
+trap 'exit 143' TERM
+trap 'report_pilot_job exit' EXIT
+report_pilot_job start
+
 {% if is_batch_worker %}
 echo "Running batch worker."
 
@@ -8,15 +21,21 @@ echo "Running batch worker."
 # A job of one Slurm task writes to the batch job's own output file.
 # SLURM_NTASKS is unset only when no Slurm task count was given,
 # and Slurm then starts one Slurm task per node.
+# `:-` keeps an unset variable from becoming an error if `-u` is ever set.
 num_slurm_tasks="${SLURM_NTASKS:-${SLURM_JOB_NUM_NODES:-}}"
+# The batch output file must say why the shell took the branch below.
 echo "Num Slurm tasks: ${num_slurm_tasks}"
 if [[ "${num_slurm_tasks}" = "1" ]] ; then
+    # Before `srun` in both branches, since the batch output file is the only record
+    # of a job that dies before the worker script gets as far as its own log.
     set -x
     srun /bin/bash '{{ worker_script_path }}'
 else
     echo "Redirecting output."
 
     set -x
+    # One file for each Slurm task,
+    # so the tasks do not interleave into the one batch output file.
     srun --output '{{ work_dir }}/{{ name }}-%j-%t.out' /bin/bash '{{ worker_script_path }}'
 fi
 {% endif %}
@@ -32,10 +51,12 @@ fi
 set -Eeuo pipefail
 set -x
 
+# The batch script passes --pilot-job-event through here.
 {{ worker_exe }} \
     --group '{{ group }}' \
     --name '{{ name }}' \
     --actor-class-name '{{ actor_class_name }}' \
     --server-address '{{ server_address }}' \
     --work-dir '{{ work_dir }}' \
-    --python-paths-json '{{ python_paths_json }}'
+    --python-paths-json '{{ python_paths_json }}' \
+    "$@"

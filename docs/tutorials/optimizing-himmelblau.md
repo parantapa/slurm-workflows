@@ -236,6 +236,8 @@ Either phase names every task it submits on the server.
 So [`swtop`](../how-to-guides/watch-a-run-with-swtop.md) shows
 `himmelblau-explore-00` through `himmelblau-search-<round>-<index>`
 as the run works through them.
+Each search round also runs one `himmelblau-fit-<round>` task,
+which fits the model and proposes that round's points.
 We start it in another shell now,
 and watch a round go by.
 The program does not print the server address `swtop` needs.

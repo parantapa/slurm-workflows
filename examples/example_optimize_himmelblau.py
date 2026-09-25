@@ -1,4 +1,4 @@
-"""Batch Bayesian optimization on Rivanna's BII cluster.
+"""Batch Bayesian optimization on the `bii` partition of Rivanna.
 
 `docs/tutorials/optimizing-himmelblau.md` walks through this program.
 """

@@ -19,7 +19,8 @@ and how to spell the other one.
 Three sources, in this order of precedence:
 
 1. **Slurm**, for anything that exists on the cluster.
-    Slurm named it. This library does not get a vote.
+    Slurm named it.
+    This library does not get a vote.
 2. **`ds-service`**, for anything that exists on the server.
     The client API is the spelling, down to the case.
 3. **This library's own public API**,
@@ -47,7 +48,8 @@ so they are worth stating before the tables:
 
 1. **Bare "task" means a `ds-service` task.**
     Every other sense is qualified, every time.
-2. **The driver is a process. The executor is an object.**
+2. **The driver is a process.
+    The executor is an object.**
     If a sentence stays true with two executors in one program,
     it is about the driver.
 3. **A worker is a process.
@@ -286,10 +288,10 @@ or a results file written before the change.
 `PILOT_WORKER_ID` did not change.
 It holds a worker id, which is what it always held.
 
-A run started before this change writes the old keys,
-so `swtop` from this release shows an empty pilot jobs block against it.
-Nothing migrates a server, because the map is in memory
-and dies with the server.
+Two identifiers kept a retired word.
+The worker's logger is still named `worker_process`,
+and that name appears in every worker log line.
+`swtop.Snapshot` still holds the pilot jobs in its `worker_jobs` field.
 
 ## Applying this
 
@@ -301,7 +303,9 @@ even where one of them is clear on its own.
 **In identifiers.**
 A name carries the same word the prose does.
 An argument that holds a job group name is `group` or `job_group`,
-never `worker`.
+or `name` on `define_job_group` and `scale_jobs`,
+which act on a job group.
+It is never `worker`.
 
 **In error messages and CLI help.**
 These reach a user who has read nothing else,

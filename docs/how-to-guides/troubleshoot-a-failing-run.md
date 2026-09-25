@@ -74,6 +74,9 @@ With the default `is_batch_worker=False`,
 a worker's own log goes to the file of its Slurm task.
 That file is `<job-name>-<jobid>-<rank>.out`, not the batch file.
 A failed setup script lands in that same file.
+It lands in the batch file `<job-name>-<jobid>.out` too,
+because the batch script also runs the setup script
+when it publishes the job's start and exit.
 A job of exactly one Slurm task is the exception:
 it keeps no such file, and writes to `<job-name>-<jobid>.out`.
 
@@ -90,13 +93,16 @@ The wait raises the error in the next section instead.
 ## `RuntimeError: ... tasks are on, or wait on tasks on, queues with no worker started`
 
 The executor raises this error as soon as you wait,
-because you never called `scale_jobs` for those queues.
+because the executor holds no pilot job for those queues.
 The queues can belong to the task itself,
 or to a parent task that is not finished yet.
 Either you never scaled the job group, or the queue name is a typo.
 If you never scaled the job group, call `scale_jobs` for it before you wait.
 If the queue name is a typo, compare it against your `define_job_group` names.
 The executor does not check the queue name at `submit` time.
+The same error follows `scale_jobs(name, 0)` or `stop()`,
+because the executor then holds no pilot job for the job group.
+Scale the job group back up before you wait.
 
 ## `RuntimeError: ... tasks are on, or wait on tasks on, queues with no live pilot job`
 
@@ -106,7 +112,8 @@ The cause is the time limit, a cancellation,
 or an exit before the queue drained.
 The worker's `.out` file says which.
 Scale the job group down to 0, then back up,
-and then submit the tasks again.
+and then wait on the same tasks again.
+The server still holds them, and the new pilot jobs run them.
 A call with the old count submits nothing,
 because `scale_jobs` counts every pilot job it submitted,
 the ones that left the cluster included.
@@ -137,7 +144,9 @@ A `Task` from an earlier run does not work.
 The setup script failed.
 The worker script runs it,
 so the traceback lands in the worker's `<job-name>-<jobid>-<rank>.out` file.
-Open that file rather than the batch file,
+The batch script also runs it to publish the job's start and exit,
+so the same errors land in the batch file `<job-name>-<jobid>.out`.
+Open either file,
 fix the script,
 then start the run again.
 A second `define_job_group` with a changed `setup_script`
@@ -168,9 +177,16 @@ Three causes leave the workers block empty
 while the pilot jobs block holds entries.
 The pilot jobs are still pending, their setup scripts did not finish,
 or their workers cannot reach the server.
-For the last two, see
-[Pilot jobs start and exit within seconds](#pilot-jobs-start-and-exit-within-seconds)
-and [Tasks never complete, but the pilot jobs run](#tasks-never-complete-but-the-pilot-jobs-run).
+A pilot job shows `-` under `STARTED` while it is still pending,
+or while its batch script has not yet finished its first run of the setup script.
+For workers that cannot reach the server, see
+[Tasks never complete, but the pilot jobs run](#tasks-never-complete-but-the-pilot-jobs-run).
+
+A pilot job whose workers all exited does not stay behind.
+Its batch script publishes the job's own exit,
+and the job leaves the pilot jobs block with them.
+For a job that does so within seconds, see
+[Pilot jobs start and exit within seconds](#pilot-jobs-start-and-exit-within-seconds).
 
 ## Related
 

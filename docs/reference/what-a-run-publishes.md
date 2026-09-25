@@ -50,11 +50,39 @@ so anything can read it:
 | `slurm_job_id` | The job it is running in |
 | `hostname` | The compute node it landed on |
 | `pid` | Its process id on that node |
+| `start_time` | When it started, an ISO 8601 timestamp with an offset |
 
 The worker id is what the worker claims tasks under
 (`task_get_worker_id` says which worker holds a running task).
 It is the path from a task to the worker and the node that ran it.
 Nothing removes the key when a worker exits.
+
+**Each pilot job and each worker publishes when it starts and when it exits**,
+in keys of their own.
+Each value is a JSON object with one field,
+an ISO 8601 timestamp with an offset:
+
+| Key | Field | Written |
+| --- | --- | --- |
+| `pilot_job_start:<job-name>` | `start_time` | When Slurm starts the pilot job's batch script |
+| `pilot_job_exit:<job-name>` | `exit_time` | When that batch script exits |
+| `worker_exit:<worker-id>` | `exit_time` | When the worker exits |
+
+A worker's start time is the `start_time` field of `worker_info:<worker-id>`.
+
+The batch script publishes the pilot job's two keys
+by running its worker script with `--pilot-job-event start`
+and `--pilot-job-event exit`.
+That run sources the job group's setup script as a worker does,
+and then publishes, and starts no worker.
+
+A pilot job or a worker that Slurm cancels
+or that reaches its time limit still publishes its exit.
+Slurm sends it SIGTERM first,
+and it publishes before Slurm sends SIGKILL.
+A worker that fails to build its actor publishes its exit too.
+A process that dies of SIGKILL, or with its node, publishes nothing.
+Nothing removes these keys either.
 
 Workers also sample the node they run on and the Slurm job they belong to.
 Every 5 seconds they append to these `ds-service` time series:
@@ -66,9 +94,12 @@ Every 5 seconds they append to these `ds-service` time series:
 - `slurm_job_memory:<job-id>`
 - `slurm_job_cpu:<job-id>`
 
-One worker per node and one per job does this.
-The workers elect them with the `host_monitor:<hostname>`
+One worker per job does this for the job,
+and one worker per job does it for each node the job runs on.
+The workers elect them with the `host_monitor:<hostname>:<job-id>`
 and `slurm_job_monitor:<job-id>` counters.
+Two pilot jobs that share a node therefore both sample it,
+into the same host series.
 [`swtop`](swtop.md) displays the result.
 
 Why a run publishes in these two halves rather than one
@@ -109,7 +140,7 @@ and the attribute `executor.work_dir` holds it:
 
 | File | Contents |
 | --- | --- |
-| `executor.log` | Pilot job submission and cancellation from the executor's side |
+| `executor.log` | Pilot job submission and cancellation from the executor's side, a line for each `mapreduce` call, and each liveness check that could not run `squeue` |
 | `<job-name>.sh`, `<job-name>.sbatch` | The generated scripts |
 | `<job-name>-<job-id>-<rank>.out` | One per worker: setup-script output, task-by-task progress, full tracebacks |
 | `<job-name>-<job-id>.out` | The pilot job's own output, and the worker's log too when the job holds a single Slurm task or runs a batch worker |

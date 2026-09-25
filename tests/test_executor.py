@@ -888,7 +888,8 @@ class TestAsCompleted:
 
     def test_canceled_task_raises(self, executor, ds_client, time_limit):
         # Nothing here cancels, so this cancel arrives out of band.
-        # See the comment on the `else` of the poll loop in `_as_completed`.
+        # See the comment on the `TaskState.Canceled` branch
+        # of the poll loop in `_as_completed`.
         task = executor.submit("cpu", square, 3)
         assert ds_client.task_cancel(task.task_id)
 
@@ -1313,11 +1314,9 @@ class TestStrandedTasks:
     def test_only_the_stranded_tasks_are_given_up_on(
         self, executor, fake_slurm, setup_script, ds_client, check_immediately
     ):
-        """A job group that reaches its time limit must not discard another's work.
-
-        The shape of a real run: a one-job `opt` pool dies
-        while the `eval` pool still works through its round.
-        """
+        """A job group that reaches its time limit must not discard another's work."""
+        # The shape of a real run: a one-job `opt` pool dies
+        # while the `eval` pool still works through its round.
         executor.define_job_group("eval", [], setup_script)
         executor.define_job_group("opt", [], setup_script)
         executor.scale_jobs("eval", 1)
@@ -1392,12 +1391,9 @@ class TestStrandedTasks:
     def test_not_checked_before_the_interval_elapses(
         self, executor, fake_slurm, setup_script, ds_client
     ):
-        """A queue with no job yet is normal right after submitting.
-
-        This is the pattern the README documents:
-        submit first, scale workers after.
-        """
+        """A queue with no job yet is normal right after submitting."""
         executor.define_job_group("cpu", [], setup_script)
+        # The README says a caller can submit tasks before the workers exist.
         task = executor.submit("cpu", square, 6)
         assert fake_slurm.running_job_ids == []
 
@@ -1490,12 +1486,11 @@ class TestWaitingOnParents:
 
 
 class TestLogging:
-    """One executor, one log file.
+    """One executor, one log file."""
 
-    Each test here uses its own executor name,
-    rather than the logger a previous test left in the registry.
-    The developer notes, under Logging, say why a shared name breaks this.
-    """
+    # Each test here uses its own executor name,
+    # rather than the logger a previous test left in the registry.
+    # The developer notes, under Logging, say why a shared name breaks this.
 
     @staticmethod
     def file_handlers(ex: SlurmPilotExecutor) -> list[logging.Handler]:

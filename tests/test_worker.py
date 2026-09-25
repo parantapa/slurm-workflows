@@ -10,8 +10,10 @@ import json
 import logging
 import os
 import sys
+import signal
 import threading
 from pathlib import Path
+from datetime import datetime
 from typing import Generator, NoReturn
 
 import pytest
@@ -190,8 +192,9 @@ class TestRemoteErrors:
     def test_unserializable_result_is_reported_as_an_error(
         self, executor, ds_service_address, tmp_path
     ):
-        """Serialization happens inside the try block, so the handler catches it too."""
         # A generator cannot be pickled, so the result fails to serialize.
+        # Serialization happens inside the try block,
+        # so the handler catches it too.
         task = executor.submit("cpu", lambda: (_ for _ in range(3)))
 
         worker = make_worker(ds_service_address, tmp_path)
@@ -464,6 +467,7 @@ class TestWorkerIdentity:
 
         published = json.loads(ds_client.map_get(f"worker_info:{worker.worker_id}"))
 
+        start_time = published.pop("start_time")
         assert published == {
             "group": "cpu",
             "name": "w-1",
@@ -471,6 +475,7 @@ class TestWorkerIdentity:
             "hostname": "testhost",
             "pid": 4242,
         }
+        assert datetime.fromisoformat(start_time).tzinfo is not None
         worker.close()
 
     def test_the_identity_is_one_key_not_one_per_field(
@@ -513,9 +518,41 @@ class TestWorkerIdentity:
         published = json.loads(ds_client.map_get(f"worker_info:{wid}"))
         assert published["hostname"] == "testhost"
 
+    def test_nothing_says_a_running_worker_exited(
+        self, ds_service_address, ds_client, tmp_path
+    ):
+        worker = make_worker(ds_service_address, tmp_path, group="cpu", name="w-1")
+
+        assert ds_client.map_search_key("^worker_exit:") == []
+        worker.close()
+
+    def test_close_publishes_the_exit(self, ds_service_address, ds_client, tmp_path):
+        worker = make_worker(ds_service_address, tmp_path, group="cpu", name="w-1")
+
+        worker.close()
+
+        published = json.loads(ds_client.map_get(f"worker_exit:{worker.worker_id}"))
+        assert datetime.fromisoformat(published["exit_time"]).tzinfo is not None
+
+    def test_a_worker_that_dies_building_its_actor_publishes_its_exit(
+        self, ds_service_address, ds_client, tmp_path
+    ):
+        with pytest.raises(AttributeError):
+            make_worker(
+                ds_service_address,
+                tmp_path,
+                group="cpu",
+                name="w-1",
+                actor_class_name="support_actor.Missing",
+            )
+
+        assert ds_client.map_search_key("^worker_exit:") == [
+            "worker_exit:w-1.42.testhost.4242"
+        ]
+
 
 class TestMonitors:
-    """One worker per node and per job samples. The rest do not."""
+    """Within each job, one worker samples each node, and one samples the job."""
 
     def test_the_first_worker_takes_on_both(self, ds_service_address, tmp_path):
         worker = make_worker(ds_service_address, tmp_path)
@@ -544,14 +581,35 @@ class TestMonitors:
         first.close()
         second.close()
 
-    def test_a_worker_in_another_job_takes_on_that_job(
+    def test_a_worker_in_another_job_takes_on_its_node_and_its_job(
         self, ds_service_address, tmp_path
     ):
+        """Two jobs that share a node each sample it."""
         first = make_worker(ds_service_address, tmp_path)
         second = make_worker(ds_service_address, tmp_path, slurm_job_id=99)
 
-        assert [m.subject for m in second.monitors] == ["99"]
+        assert [m.subject for m in second.monitors] == ["testhost", "99"]
         first.close()
+        second.close()
+
+    def test_a_later_job_on_a_reused_node_samples_it_again(
+        self, ds_service_address, ds_client, tmp_path
+    ):
+        """The node's series must not stay stale once its first job is gone."""
+        first = make_worker(ds_service_address, tmp_path, name="w-1")
+        first.close()
+        # A load average cannot be negative, so a value >= 0 is a fresh sample.
+        ds_client.time_series_append(
+            "host_load_average:testhost", -1.0, "2000-01-01T00:00:00+00:00"
+        )
+
+        second = make_worker(ds_service_address, tmp_path, slurm_job_id=99)
+
+        assert "testhost" in [m.subject for m in second.monitors]
+        assert wait_for(
+            lambda: ds_client.time_series_get("host_load_average:testhost")[-1].value
+            >= 0.0
+        )
         second.close()
 
     def test_the_election_is_a_counter_per_subject(
@@ -560,7 +618,7 @@ class TestMonitors:
         first = make_worker(ds_service_address, tmp_path, name="w-1")
         second = make_worker(ds_service_address, tmp_path, name="w-2")
 
-        assert ds_client.counter_get_current_value("host_monitor:testhost") == 2
+        assert ds_client.counter_get_current_value("host_monitor:testhost:42") == 2
         assert ds_client.counter_get_current_value("slurm_job_monitor:42") == 2
         first.close()
         second.close()
@@ -603,20 +661,28 @@ class TestMonitors:
 
 
 class TestCli:
-    """The console entry point: its options, sys.path, and leaving output alone."""
+    """The console entry point.
+
+    The cases cover its options, `sys.path`, SIGTERM, the pilot job events,
+    and leaving the output streams alone.
+    """
 
     @pytest.fixture(autouse=True)
     def _restore_process_state(self):
-        """Put `sys.path` and the environment back after each case."""
-        # The command prepends to `sys.path` and undoes nothing,
-        # because in production the process is the worker.
-        # The autouse fixture in `conftest.py` also restores the environment.
+        """Restore `sys.path`, the SIGTERM handler and the environment."""
+        # The command prepends to `sys.path` and installs a SIGTERM handler,
+        # and undoes neither, because in production the process is the worker.
+        # Nothing else restores those two.
+        # The autouse fixture in `conftest.py` already restores the environment,
+        # so restoring it here as well is only belt and braces.
         env = dict(os.environ)
         path = list(sys.path)
+        sigterm = signal.getsignal(signal.SIGTERM)
         yield
         os.environ.clear()
         os.environ.update(env)
         sys.path[:] = path
+        signal.signal(signal.SIGTERM, sigterm)
 
     @pytest.fixture
     def captured(self, monkeypatch):
@@ -683,6 +749,38 @@ class TestCli:
         self.invoke(tmp_path)
 
         assert captured["streams"] == before
+
+    def test_sigterm_still_closes_the_worker(self, captured, monkeypatch, tmp_path):
+        """Slurm ends a job with SIGTERM, and the worker must still say it exited."""
+
+        def terminated(self) -> None:
+            os.kill(os.getpid(), signal.SIGTERM)
+
+        # captured has already swapped in FakeWorker, so this patches its main.
+        monkeypatch.setattr(worker_mod.PilotWorker, "main", terminated)
+
+        exit_code = self.invoke(tmp_path)
+
+        assert exit_code == 128 + signal.SIGTERM
+        assert captured["closed"] is True
+
+    @pytest.mark.parametrize("event", ["start", "exit"])
+    def test_a_pilot_job_event_is_published_and_starts_no_worker(
+        self, captured, ds_service_address, ds_client, tmp_path, event
+    ):
+        exit_code = self.invoke(
+            tmp_path,
+            **{
+                "--server-address": ds_service_address,
+                "--name": "testex.job.cpu.0",
+                "--pilot-job-event": event,
+            },
+        )
+
+        assert exit_code == 0
+        assert "kwargs" not in captured
+        published = json.loads(ds_client.map_get(f"pilot_job_{event}:testex.job.cpu.0"))
+        assert datetime.fromisoformat(published[f"{event}_time"]).tzinfo is not None
 
     def test_rejects_missing_work_dir(self, captured, tmp_path):
         exit_code = self.invoke(tmp_path, **{"--work-dir": str(tmp_path / "nope")})

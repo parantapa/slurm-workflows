@@ -60,14 +60,15 @@ tasks  waiting 0  ready 118  running 40  finished 240  failed 2  canceled 0  tot
 
 explore  [###############---------]  242/400 point  60%  working
 
-pilot jobs (1)
-NAME              GROUP  JOB      SUBMITTED
-my-run.job.cpu.0  cpu    1846231  2026-01-30T10:58:12-05:00
+pilot jobs (2)
+NAME              GROUP  JOB      SUBMITTED                  STARTED
+my-run.job.cpu.0  cpu    1846231  2026-01-30T10:58:12-05:00  2026-01-30T10:59:40-05:00
+my-run.job.cpu.1  cpu    1846232  2026-01-30T10:58:12-05:00  -
 
 workers (40)
-NAME              GROUP  HOST      JOB      PID
-my-run.job.cpu.0  cpu    udc-an28  1846231  31402
-my-run.job.cpu.0  cpu    udc-an28  1846231  31403
+NAME              GROUP  HOST      JOB      PID    STARTED
+my-run.job.cpu.0  cpu    udc-an28  1846231  31402  2026-01-30T10:59:52-05:00
+my-run.job.cpu.0  cpu    udc-an28  1846231  31403  2026-01-30T10:59:52-05:00
 ...
 
 hosts (2)
@@ -110,23 +111,39 @@ The blocks come from different places:
 - **Task counts** are a single RPC, so they always cover every task.
     A server belongs to one executor,
     so every task on it is a task of the run `swtop` watches.
-- **Pilot jobs** are the ones the executor submitted.
+- **Pilot jobs** are the ones the executor submitted
+    that have not exited.
     The executor publishes each one as it submits it.
     A job appears here the moment `scale_jobs` returns,
     whether or not Slurm started it.
-- **Workers** are the ones that registered themselves,
-    which each worker does when it starts.
-    A job in the pilot jobs block with no worker against it
-    is still queued, or its setup script did not finish.
+    `STARTED` is `-` while the job is still pending,
+    or while its batch script has not yet finished its first run of the setup script.
+    The batch script publishes the start through the worker script,
+    which runs the setup script first.
+    A job leaves the block when it publishes its exit.
+- **Workers** are the ones that registered themselves
+    and have not exited.
+    Each worker registers when it starts.
+    A started job in the pilot jobs block with no worker against it
+    is still inside its setup script,
+    or its workers cannot reach the server.
     One job usually holds many workers, one per Slurm task,
     so the two counts differ by design.
 - **Hosts and Slurm jobs** are what the monitors sample every 5 seconds:
     see [What the hosts and jobs blocks measure](#what-the-hosts-and-jobs-blocks-measure).
+    The Slurm job of a pilot job that exited leaves the block.
+    A host stays, marked `(stale)` once its readings stop.
 - **Tasks** are all tasks on the server, named or not.
 
 Every block says why it is empty, and never shows a bare header.
 A pilot job or a worker whose description the collector
 cannot read yet shows `?` in those fields.
+
+`swtop` learns that a pilot job or a worker exited
+from the exit it publishes:
+see [What a run publishes](what-a-run-publishes.md).
+One that dies without publishing it, of SIGKILL or with its node,
+stays in its block.
 
 ## Frames of text instead of a UI
 
@@ -206,6 +223,8 @@ The worker that sampled it is gone:
 its job ended, or something killed it.
 The remaining workers do not take over the job,
 so a run that scales down loses the readings for what it gave up.
+A node comes back to life when another pilot job lands on it,
+since each pilot job samples every node it runs on.
 A single `-` on an otherwise live row
 is one series with nothing recent in it.
 That is what a node without that path looks like.
@@ -240,9 +259,15 @@ To do that, see
   and closes it when it unmounts.
 - `collector`: a `Collector` that the caller owns.
   Its client must belong to the app's event loop.
+  `open_collector(address)` in `slurm_workflows.swtop`
+  is an async context manager that yields one
+  on a client of its own, and closes that client on the way out.
+  Enter it on the app's event loop.
 
 Its other arguments are `interval`, in seconds, `2.0` by default,
 and `views`, the views to attach from the start.
+It raises `ValueError` when it gets both `address` and `collector` or neither,
+or when `interval` is not greater than 0.
 
 | Member | What it does |
 | --- | --- |

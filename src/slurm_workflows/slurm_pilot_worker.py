@@ -5,11 +5,14 @@ import sys
 import json
 import time
 import pickle
+import signal
 import socket
 import logging
 import importlib
 from pathlib import Path
-from typing import Any
+from types import FrameType
+from datetime import datetime
+from typing import Any, Literal
 
 import click
 import cloudpickle
@@ -32,6 +35,14 @@ NEXT_TASK_RETRY_TIME_S: float = 0.1
 # `docs/reference/what-a-run-publishes.md` lists the fields.
 WORKER_INFO_PREFIX = "worker_info:"
 
+# One JSON key per worker that exited, keyed on its worker id,
+# and one per pilot job that started and that exited, keyed on its job name.
+# Each is written once, so `swtop` reads it once.
+# `docs/reference/what-a-run-publishes.md` lists the fields.
+WORKER_EXIT_PREFIX = "worker_exit:"
+PILOT_JOB_START_PREFIX = "pilot_job_start:"
+PILOT_JOB_EXIT_PREFIX = "pilot_job_exit:"
+
 # The actor of the worker running in this process, or None.
 # A task reads it through `current_actor()`,
 # which is how a task dispatches a method name of its own.
@@ -50,6 +61,28 @@ def _set_current_actor(actor: Any | None) -> None:
     """Record the actor this process runs tasks against."""
     global _CURRENT_ACTOR
     _CURRENT_ACTOR = actor
+
+
+def _timestamp() -> str:
+    """Now, as an ISO 8601 timestamp with the local offset."""
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def publish_pilot_job_event(
+    client: DsServiceClient, name: str, event: Literal["start", "exit"]
+) -> None:
+    """Record when the pilot job `name` started or exited, as one JSON key."""
+    if event == "start":
+        key, field = f"{PILOT_JOB_START_PREFIX}{name}", "start_time"
+    else:
+        key, field = f"{PILOT_JOB_EXIT_PREFIX}{name}", "exit_time"
+    client.map_set(key, json.dumps({field: _timestamp()}).encode("utf-8"))
+
+
+def _exit_on_sigterm(signum: int, frame: FrameType | None) -> None:
+    """Turn the SIGTERM Slurm sends into a `SystemExit`, so cleanup runs."""
+    # The status a shell reports for a death by that signal.
+    raise SystemExit(128 + signum)
 
 
 class PilotWorker:
@@ -74,12 +107,13 @@ class PilotWorker:
     ) -> None:
         """Register this worker on the server and build its actor.
 
-        Puts this worker's identity in the environment first,
+        Puts this worker's identity in the environment,
         so the actor and every task it runs can read it.
-        Publishes the worker's identity before it builds the actor,
-        and starts each monitor that no other worker has taken.
-        Whatever importing or constructing the actor raises propagates.
-        Before that, this worker closes its own monitors and client.
+        Publishes that identity on the server,
+        and starts each monitor that no other worker of this job has taken.
+        Whatever importing or constructing the actor raises propagates,
+        after this worker publishes its exit
+        and closes its own monitors and client.
         Otherwise `current_actor()` returns the new actor.
         """
         self.group = group
@@ -91,9 +125,10 @@ class PilotWorker:
         # The job name carries the job group.
         self.worker_id = "%s.%s.%s.%s" % (name, slurm_job_id, hostname, pid)
         self.logger = logging.getLogger("worker_process")
+        self._exit_published = False
 
-        # Before the client and the actor, so a task this worker runs
-        # can reach the server and name itself on it.
+        # Before the actor is built, so its constructor and every task
+        # can reach the server and name themselves on it.
         self._publish_environment()
 
         self.client = DsServiceClient(self.server_address)
@@ -108,10 +143,13 @@ class PilotWorker:
         self.actor_instance: Any | None
         try:
             self.actor_instance = self._build_actor(actor_class_name)
-        except Exception:
+        except BaseException:
             # Nothing calls `close()` on a worker whose constructor raised,
             # so it stops what it started before it re-raises.
+            # A `BaseException`, so the `SystemExit` of a SIGTERM
+            # that lands while the actor is built cleans up too.
             self._stop_monitors()
+            self._publish_exit()
             self.client.close()
             raise
 
@@ -152,19 +190,41 @@ class PilotWorker:
             "slurm_job_id": slurm_job_id,
             "hostname": hostname,
             "pid": pid,
+            "start_time": _timestamp(),
         }
         self.client.map_set(
             f"{WORKER_INFO_PREFIX}{self.worker_id}",
             json.dumps(identity).encode("utf-8"),
         )
 
+    def _publish_exit(self) -> None:
+        """Record when this worker exited, once, as one JSON key."""
+        if self._exit_published:
+            return
+        self._exit_published = True
+        try:
+            self.client.map_set(
+                f"{WORKER_EXIT_PREFIX}{self.worker_id}",
+                json.dumps({"exit_time": _timestamp()}).encode("utf-8"),
+            )
+        except Exception:
+            # A worker on its way out cannot do more than say so.
+            self.logger.exception("Failed to publish the exit of %s", self.worker_id)
+
     def _start_monitors(
         self, hostname: str, slurm_job_id: int, interval: float
     ) -> None:
-        """Monitor this node and this job, if no other worker already does."""
+        """Monitor this node and this job, unless another worker of this job already does."""
         # The counter hands out distinct values,
         # so exactly one worker sees 1 and takes the subject.
-        if self.client.counter_get_next_value(f"host_monitor:{hostname}") == 1:
+        # The host counter key holds the job id,
+        # because counters never reset while the server runs,
+        # and a node that a later pilot job lands on would otherwise get no sampler.
+        # Two live jobs on one node both sample it,
+        # which only adds points to the same series.
+        # See the developer notes, Monitoring.
+        counter = f"host_monitor:{hostname}:{slurm_job_id}"
+        if self.client.counter_get_next_value(counter) == 1:
             self.logger.info("Monitoring host %s", hostname)
             self.monitors.append(
                 start_host_monitor(self.client, hostname, interval, self.logger)
@@ -206,7 +266,7 @@ class PilotWorker:
         self.monitors.clear()
 
     def close(self) -> None:
-        """Stop the monitors, close the connection, and close the actor.
+        """Stop the monitors, publish the exit, and close the connection and actor.
 
         Calls the actor's own `close()` if it has one.
         Clears `current_actor()` if it holds this worker's actor.
@@ -214,6 +274,7 @@ class PilotWorker:
         # Before the client, whose channel they use.
         self._stop_monitors()
 
+        self._publish_exit()
         self.client.close()
         if self.actor_instance is not None:
             # Only this worker's own actor, since a test can build two
@@ -229,6 +290,9 @@ class PilotWorker:
 
         Never returns of its own accord:
         a worker lives until its Slurm job ends.
+        The command line entry point turns the SIGTERM
+        that ends the job into a `SystemExit`,
+        which this loop does not catch.
         The worker catches every `Exception` a task raises,
         logs it under a generated `error_id`,
         and returns it to the caller as a `RemoteExecutionError`
@@ -309,6 +373,12 @@ class PilotWorker:
     required=True,
     help="JSON encoded Python paths.",
 )
+@click.option(
+    "--pilot-job-event",
+    type=click.Choice(["start", "exit"]),
+    default=None,
+    help="Publish that the pilot job started or exited, and start no worker.",
+)
 def slurm_pilot_worker(
     group: str,
     name: str,
@@ -316,8 +386,14 @@ def slurm_pilot_worker(
     server_address: str,
     work_dir: Path,
     python_paths_json: str,
+    pilot_job_event: Literal["start", "exit"] | None,
 ) -> None:
-    """Start a worker."""
+    """Start a worker, or publish an event of the pilot job it runs in."""
+    if pilot_job_event is not None:
+        with DsServiceClient(server_address) as client:
+            publish_pilot_job_event(client, name, pilot_job_event)
+        return
+
     # Outside a Slurm job, the id is -1.
     slurm_job_id = int(os.environ.get("SLURM_JOB_ID", -1))
     hostname = socket.gethostname()
@@ -330,6 +406,10 @@ def slurm_pilot_worker(
     python_paths: list[str] = json.loads(python_paths_json)
     for path in python_paths:
         sys.path.insert(0, path)
+
+    # Slurm ends the job with SIGTERM, and Python's default for it skips `finally`.
+    # See the developer notes, Slurm interaction.
+    signal.signal(signal.SIGTERM, _exit_on_sigterm)
 
     worker = PilotWorker(
         group=group,

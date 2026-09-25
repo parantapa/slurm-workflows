@@ -19,10 +19,10 @@ pytest tests/test_templates.py::TestParseFile::test_a_body_is_stripped
 
 The suite needs no Slurm cluster.
 The suite takes about 55s end to end.
-Everything but the botorch tests takes about 26s,
+Everything but the botorch tests takes about 20s,
 and GP fits take the rest.
-Most of that first 26s goes to one ds-service process per test.
-A test against the real server costs that time.
+Most tests start a ds-service process of their own,
+and a test against the real server pays for that start.
 
 The `[test]` extra installs botorch, and so torch.
 That download is large.
@@ -120,8 +120,10 @@ Paths are relative to [`tests/`](../tests).
   `TestRealExecutor` keeps the stand-in honest,
   and runs a whole optimization
   through the real executor, the real queue and a real worker.
-  The worker runs in a thread,
-  because the optimizer blocks in `wait` the moment it submits.
+- **A test whose driver blocks runs its real worker in a thread.**
+  `mapreduce`, the exploration and the optimizer
+  all block in a wait the moment they submit,
+  so nothing on the test's own thread could run the worker.
 - **Four botorch tests assert search behavior, not bookkeeping.**
   They catch a flipped sign on the objective:
   botorch maximizes, and the optimizer minimizes.

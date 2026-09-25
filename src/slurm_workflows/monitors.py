@@ -1,6 +1,5 @@
 """Background sampling of a compute node and of a Slurm job.
 
-One elected worker per node and one per job runs these threads.
 Each thread appends to a `ds-service` time series,
 one series per measurement per subject.
 `docs/reference/swtop.md` says what the readings mean.
@@ -13,7 +12,7 @@ import logging
 import threading
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Callable
+from typing import Callable, Mapping
 
 import psutil
 
@@ -185,11 +184,13 @@ class Monitor(threading.Thread):
         self,
         client: DsServiceClient,
         subject: str,
-        prefixes: dict[str, str],
+        prefixes: Mapping[str, str],
         sampler: Callable[[], dict[str, float]],
         interval: float = DEFAULT_MONITOR_INTERVAL_S,
         logger: logging.Logger | None = None,
     ) -> None:
+        # A daemon, so a monitor never holds open a worker
+        # that Slurm kills at its time limit.
         super().__init__(daemon=True, name=f"monitor:{subject}")
         self.client = client
         self.subject = subject

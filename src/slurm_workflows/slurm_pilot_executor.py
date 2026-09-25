@@ -154,13 +154,15 @@ class Task:
     queue: list[str]
     priority: float
     function: Callable | str
-    input: tuple
+    input: tuple[tuple[Any, ...], dict[str, Any]]
     output: Any
     parent_task_ids: list[str] = field(default_factory=list)
     _task_name: str | None = None
     # The parents themselves, so a wait can check their queues too.
     _parents: list["Task"] = field(default_factory=list, repr=False, compare=False)
 
+    # Read-only: the map holds the other copy,
+    # and an assignment would rename the task in this process alone.
     @property
     def task_name(self) -> str | None:
         """The name `SlurmPilotExecutor.set_task_name` set, or None."""
@@ -363,19 +365,24 @@ class SlurmPilotExecutor:
 
         `scale_jobs` submits the jobs.
         `name` is also the queue name.
-        `setup_script` is shell text, not a path.
-        The executor inlines it into each generated worker script.
-        Nothing checks it.
+        A second, identical definition of a job group does nothing.
+        A definition that differs from the first one raises `AssertionError`.
+
         `actor_class_name` is a dotted `module.Class` path
         that each worker imports and constructs at startup.
         The actor arguments need an `actor_class_name` to construct,
         and raise `ValueError` without one.
         Actor arguments a later call passes replace the earlier ones,
         even for an otherwise identical definition.
+
+        `setup_script` is shell text, not a path.
+        The executor inlines it into each generated worker script.
+        Nothing checks it.
         `is_batch_worker` runs one worker in the batch script itself,
         rather than one per Slurm task under `srun`.
-        A second, identical definition of a job group does nothing.
-        A definition that differs from the first one raises `AssertionError`.
+        `python_paths` go on the front of each worker's `sys.path`.
+        `add_cwd_to_python_path` adds the driver's current directory
+        as it is at this call.
         """
         python_str_paths: list[str] = []
         if python_paths is not None:
@@ -517,7 +524,7 @@ class SlurmPilotExecutor:
             except Exception:
                 raise RuntimeError("Failed to get running slurm job ids")
 
-            to_cancel_jobids = []
+            to_cancel_jobids: list[int] = []
             for _ in range(to_cancel):
                 _, job = group.jobs.popitem()
                 self.logger.info("Canceling pilot job: %s", job.name)
@@ -597,6 +604,9 @@ class SlurmPilotExecutor:
         fn: Callable | str,
         *args: Any,
         task_parents: list[Task] | None = None,
+        # 0.0 for every task keeps submission order,
+        # since equal priorities are served oldest first.
+        # A priority taken from a rising clock would serve the newest task first.
         task_priority: float = 0.0,
         **kwargs: Any,
     ) -> Task:
@@ -671,9 +681,11 @@ class SlurmPilotExecutor:
         Each of those tasks folds what it claims into a partial result,
         and this call folds the partial results into the value it returns.
 
-        For every item it claims, a task computes
-        `reduce_fn(previous, map_fn(item, *map_extra_args, **map_extra_kwargs),
-        *reduce_extra_args, **reduce_extra_kwargs)`.
+        For every item it claims, a task computes:
+
+            reduce_fn(previous, map_fn(item, *map_extra_args, **map_extra_kwargs),
+                      *reduce_extra_args, **reduce_extra_kwargs)
+
         The first `previous` is `init`.
 
         `map_fn` is a callable, or the name of a method
@@ -759,7 +771,7 @@ class SlurmPilotExecutor:
         # Every item is on the queue by now,
         # which is what lets a task read an empty queue as a finished one.
         # No more tasks than items: another one can only return `init`.
-        tasks = []
+        tasks: list[Task] = []
         for index in range(min(num_tasks, len(items))):
             task = self._submit(
                 queue,
@@ -1128,7 +1140,7 @@ class SlurmPilotExecutor:
         if job_ids is None:
             return
 
-        to_cancel_jobids = []
+        to_cancel_jobids: list[int] = []
         for group in self.groups.values():
             for job in group.jobs.values():
                 if job.job_id in job_ids:
@@ -1164,6 +1176,7 @@ class SlurmPilotExecutor:
 
         The executor is spent afterward.
         Python calls this at the end of a `with` block.
+        A failure to list or cancel the jobs is printed or logged, not raised.
         """
         self._cleanup_all_workers()
         for group in self.groups.values():
@@ -1173,7 +1186,11 @@ class SlurmPilotExecutor:
         self._close_log_handler()
 
     def stop(self) -> None:
-        """Cancel every pilot job, and leave the executor usable."""
+        """Cancel every pilot job, and leave the executor usable.
+
+        A failure to list or cancel the jobs is printed or logged, not raised,
+        and the executor forgets the jobs either way.
+        """
         self._cleanup_all_workers()
         for group in self.groups.values():
             group.jobs.clear()

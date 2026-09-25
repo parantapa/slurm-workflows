@@ -1,15 +1,4 @@
-"""Tests for the `swtop` monitor.
-
-The server is real, as everywhere else here,
-so what the collector reports is what a live queue tells it.
-The tests mock Slurm, since a worker's identity comes from the store
-rather than from a running job.
-
-Each test that polls a collector directly does so through `LoopBound`,
-so no test has to be a coroutine,
-and a test can change the store between two polls.
-The caching and staleness tests rely on that.
-"""
+"""Tests for the `swtop` collector, its text rendering and its CLI."""
 
 from __future__ import annotations
 
@@ -25,6 +14,7 @@ from ds_service_client import DsServiceClient, DsServiceClientAsync
 
 from slurm_workflows import swtop as swtop_mod
 from slurm_workflows.swtop import UNNAMED, Collector, Snapshot, render, swtop
+from slurm_workflows.slurm_pilot_worker import publish_pilot_job_event
 from worker_harness import make_worker
 from test_monitors import wait_for
 
@@ -355,6 +345,59 @@ class TestCollectWorkerJobs:
         assert counting.reads("pilot_job_info:") == after_first
         bound.close()
 
+    def test_a_queued_job_has_no_start_time(self, collector, executor):
+        executor.define_job_group("cpu", [])
+        executor.scale_jobs("cpu", 1)
+
+        (listed,) = collector.snapshot().worker_jobs
+
+        assert listed.start_time == swtop_mod.NOT_STARTED
+
+    def test_a_started_job_shows_when_it_started(self, collector, executor, ds_client):
+        executor.define_job_group("cpu", [])
+        executor.scale_jobs("cpu", 1)
+        (job_name,) = executor.groups["cpu"].jobs
+        collector.snapshot()
+
+        publish_pilot_job_event(ds_client, job_name, "start")
+        published = json.loads(ds_client.map_get(f"pilot_job_start:{job_name}"))
+        (listed,) = collector.snapshot().worker_jobs
+
+        assert listed.start_time == published["start_time"]
+
+    def test_a_start_time_is_read_once(self, ds_service_address, executor, ds_client):
+        executor.define_job_group("cpu", [])
+        executor.scale_jobs("cpu", 1)
+        (job_name,) = executor.groups["cpu"].jobs
+        publish_pilot_job_event(ds_client, job_name, "start")
+        bound = LoopBound(ds_service_address, wrap=CountingClient)
+        counting = cast(CountingClient, bound.collector.client)
+
+        bound.snapshot()
+        bound.snapshot()
+
+        assert counting.reads("pilot_job_start:") == 1
+        bound.close()
+
+    def test_an_exited_job_and_its_slurm_job_are_not_listed(
+        self, collector, executor, ds_client
+    ):
+        executor.define_job_group("cpu", [])
+        executor.scale_jobs("cpu", 2)
+        exited, running = sorted(executor.groups["cpu"].jobs.items())
+        for name, _ in (exited, running):
+            publish_pilot_job_event(ds_client, name, "start")
+        for _, job in (exited, running):
+            ds_client.time_series_append(
+                f"slurm_job_memory:{job.job_id}", 1.0, _now_utc()
+            )
+
+        publish_pilot_job_event(ds_client, exited[0], "exit")
+        snapshot = collector.snapshot()
+
+        assert [j.name for j in snapshot.worker_jobs] == [running[0]]
+        assert [j.subject for j in snapshot.jobs] == [str(running[1].job_id)]
+
 
 class TestCollectWorkers:
     def test_a_worker_appears_once_it_registers(
@@ -402,6 +445,29 @@ class TestCollectWorkers:
         for worker in workers:
             worker.close()
 
+    def test_a_worker_shows_when_it_started(
+        self, collector, ds_service_address, ds_client, tmp_path
+    ):
+        worker = make_worker(ds_service_address, tmp_path, group="cpu", name="w-1")
+        published = json.loads(ds_client.map_get(f"worker_info:{worker.worker_id}"))
+
+        (listed,) = collector.snapshot().workers
+
+        assert listed.start_time == published["start_time"]
+        worker.close()
+
+    def test_an_exited_worker_is_not_listed(
+        self, collector, ds_service_address, tmp_path
+    ):
+        exited = make_worker(ds_service_address, tmp_path, group="cpu", name="w-1")
+        running = make_worker(ds_service_address, tmp_path, group="cpu", name="w-2")
+        assert len(collector.snapshot().workers) == 2
+
+        exited.close()
+
+        assert [w.name for w in collector.snapshot().workers] == ["w-2"]
+        running.close()
+
     def test_an_identity_is_read_once_however_long_it_runs(
         self, ds_service_address, tmp_path
     ):
@@ -420,7 +486,7 @@ class TestCollectWorkers:
         bound.close()
 
     def test_a_poll_cut_short_keeps_what_it_read(self, ds_service_address, ds_client):
-        """A slow poll that is cancelled still leaves the next one less to read."""
+        """A slow poll that is canceled still leaves the next one less to read."""
         for name in ("w-1", "w-2", "w-3"):
             ds_client.map_set(
                 f"worker_info:{name}",
@@ -431,6 +497,7 @@ class TestCollectWorkers:
                         "slurm_job_id": 42,
                         "hostname": "testhost",
                         "pid": 1,
+                        "start_time": "2026-09-07T11:05:41-04:00",
                     }
                 ).encode(),
             )
@@ -473,6 +540,7 @@ class TestCollectWorkers:
                     "slurm_job_id": 42,
                     "hostname": "testhost",
                     "pid": 1,
+                    "start_time": "2026-09-07T11:05:41-04:00",
                 }
             ).encode(),
         )
@@ -627,6 +695,7 @@ class TestRender:
 
         assert "2.0G" in out
         assert "3.50" in out
+        # :.1f rounds half to even, so 12.25 shows as 12.2.
         assert "12.2%" in out
         assert "1.0G" in out
         assert "12.4 cores" in out
@@ -661,7 +730,7 @@ class TestRender:
         assert "workers" not in out
 
     def test_every_line_fits_together(self, collector):
-        """`render` pads the columns, so no row is ragged or unterminated."""
+        """No row carries trailing padding, and the text ends with a newline."""
         out = render(collector.snapshot())
 
         assert out.endswith("\n")
@@ -732,7 +801,7 @@ class TestCli:
         assert result.exit_code != 0
 
     def test_an_unreachable_server_is_reported_not_fatal(self, stop_after_one_poll):
-        """A monitor that quits when the server blinks is not much of a monitor."""
+        """A failed poll is reported, and the loop keeps running."""
         result = CliRunner().invoke(swtop, ["127.0.0.1:1"])
 
         assert result.exit_code == 0

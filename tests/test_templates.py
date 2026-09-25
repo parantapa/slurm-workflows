@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import time
+import signal
 import subprocess
 from pathlib import Path
 
@@ -247,12 +249,7 @@ class TestWorkerSbatchScript:
         )
 
     def test_each_srun_task_gets_its_own_output_file(self, srun_lines):
-        """`srun` fans out over every task in the allocation.
-
-        Without a per-task --output,
-        the tasks all interleave into the one batch output file.
-        For this reason the pattern carries both the job id and the task id.
-        """
+        """The per-task output pattern carries both the job id and the task id."""
         out = self.render()
 
         _, per_task = srun_lines(out)
@@ -262,6 +259,91 @@ class TestWorkerSbatchScript:
         out = self.render(work_dir="/some/other/dir")
 
         assert "--output '/some/other/dir/" in out
+
+
+class TestPilotJobEvents:
+    """The batch script reports its own start and exit through the worker script.
+
+    These run the shell against a stub worker script
+    that echoes its arguments,
+    and a stub `srun` that echoes its command line
+    or sleeps until the test signals the job.
+    """
+
+    def render(self, tmp_path: Path, is_batch_worker: bool) -> str:
+        worker_script = tmp_path / "worker.sh"
+        worker_script.write_text('echo "worker $*"\n')
+        return render_template(
+            "slurm_pilot:worker_sbatch_script",
+            name="testex.job.cpu.0",
+            work_dir="/scratch/work",
+            is_batch_worker=is_batch_worker,
+            worker_script_path=worker_script,
+        )
+
+    @pytest.mark.parametrize("is_batch_worker", [False, True])
+    def test_start_and_exit_bracket_the_worker(
+        self, tmp_path: Path, is_batch_worker: bool
+    ):
+        out = run_sbatch_script(
+            self.render(tmp_path, is_batch_worker), tmp_path, SLURM_NTASKS="1"
+        ).stdout
+
+        reported = [ln for ln in out.splitlines() if "--pilot-job-event" in ln]
+        assert reported == [
+            "worker --pilot-job-event start",
+            "worker --pilot-job-event exit",
+        ]
+
+    def test_a_failed_report_does_not_end_the_job(self, tmp_path: Path, srun_lines):
+        worker_script = tmp_path / "worker.sh"
+        worker_script.write_text('[[ "$*" != *pilot-job-event* ]] || exit 1\n')
+        script = render_template(
+            "slurm_pilot:worker_sbatch_script",
+            name="testex.job.cpu.0",
+            work_dir="/scratch/work",
+            is_batch_worker=False,
+            worker_script_path=worker_script,
+        )
+
+        proc = run_sbatch_script(script, tmp_path, SLURM_NTASKS="1")
+
+        assert proc.returncode == 0
+        assert len(srun_lines(proc.stdout)) == 1
+
+    def test_sigterm_still_reports_the_exit(self, tmp_path: Path):
+        """What Slurm does when it cancels the job or the time limit passes."""
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        srun = bin_dir / "srun"
+        srun.write_text('#!/bin/bash\ntouch "$STARTED"\nexec sleep 30\n')
+        srun.chmod(0o755)
+        script_path = tmp_path / "job.sbatch"
+        script_path.write_text(self.render(tmp_path, is_batch_worker=False))
+        started = tmp_path / "started"
+
+        proc = subprocess.Popen(
+            ["bash", str(script_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            # A group of its own, since Slurm signals every process of the job.
+            start_new_session=True,
+            env={
+                "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                "SLURM_NTASKS": "1",
+                "STARTED": str(started),
+            },
+        )
+        deadline = time.monotonic() + 10
+        while not started.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        os.killpg(proc.pid, signal.SIGTERM)
+        out, _ = proc.communicate(timeout=10)
+
+        # 143 is 128 + SIGTERM, what the TERM trap exits with.
+        assert proc.returncode == 143
+        assert out.splitlines()[-1] == "worker --pilot-job-event exit"
 
 
 class TestOutputRedirectByTaskCount:
@@ -304,7 +386,6 @@ class TestOutputRedirectByTaskCount:
         self, tmp_path: Path, env: dict[str, str], srun_lines
     ):
         # The last case names no task count, so SLURM_NTASKS is unset.
-        # See the developer notes, "Slurm interaction".
         out = run_sbatch_script(self.render(), tmp_path, **env).stdout
 
         # One line, because only one of the two branches can run.
@@ -336,7 +417,6 @@ class TestOutputRedirectByTaskCount:
         self, tmp_path: Path, env: dict[str, str], srun_lines
     ):
         # One task *per node* is not one task.
-        # See the developer notes, "Slurm interaction".
         out = run_sbatch_script(self.render(), tmp_path, **env).stdout
 
         assert srun_lines(out) == [
@@ -347,10 +427,7 @@ class TestOutputRedirectByTaskCount:
     def test_the_task_count_is_never_overridden_by_the_node_count(
         self, tmp_path: Path, srun_lines
     ):
-        """SLURM_NTASKS is the job's task count, so nothing else gets a vote.
-
-        See the developer notes, "Slurm interaction".
-        """
+        """SLURM_NTASKS is the job's task count, so nothing else gets a vote."""
         out = run_sbatch_script(
             self.render(),
             tmp_path,
@@ -362,11 +439,7 @@ class TestOutputRedirectByTaskCount:
         assert "--output" in command
 
     def test_the_count_it_decided_on_is_echoed(self, tmp_path: Path):
-        """The batch output file must say why the shell took that branch.
-
-        Otherwise the only way to tell which file a worker's log went to
-        is to re-read the sbatch script and guess what Slurm set.
-        """
+        """The batch output file records the task count the shell decided on."""
         proc = run_sbatch_script(
             self.render(),
             tmp_path,
@@ -386,24 +459,13 @@ class TestOutputRedirectByTaskCount:
     def test_the_srun_command_is_traced(
         self, tmp_path: Path, env: dict[str, str], traced: str
     ):
-        """`set -x` is what puts the command line in the batch output file.
-
-        That file is all there is to read
-        when a job dies before the worker script gets as far as its own log.
-        For this reason `set -x` has to come before `srun` runs,
-        in either branch.
-        """
+        """`set -x` traces the `srun` command line, in either branch."""
         proc = run_sbatch_script(self.render(), tmp_path, **env)
 
         assert traced in proc.stderr
 
     def test_the_guard_survives_a_strict_shell(self, tmp_path: Path, srun_lines):
-        """The script reads both variables with `:-`.
-
-        Nothing sets `-u` on the generated sbatch script today,
-        so an unset variable merely expands empty.
-        The default is only worth anything if it cannot become an error later.
-        """
+        """The script reads both variables with `:-`, so `set -u` does not break it."""
         out = run_sbatch_script("set -u\n" + self.render(), tmp_path).stdout
 
         (command,) = srun_lines(out)
@@ -461,6 +523,12 @@ class TestWorkerScript:
         out = self.render(actor_class_name="pkg.mod.MyActor")
 
         assert "--actor-class-name 'pkg.mod.MyActor'" in out
+
+    def test_passes_its_own_arguments_on(self):
+        """How the batch script asks it to publish a pilot job event."""
+        out = self.render()
+
+        assert out.rstrip().endswith('"$@"')
 
     def test_custom_worker_exe(self):
         out = self.render(worker_exe="/opt/bin/my-worker")

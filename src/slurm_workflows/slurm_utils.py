@@ -23,13 +23,16 @@ def get_clean_environ() -> dict[str, str]:
     """The environment, less every Slurm-set variable.
 
     Drops `SLURM_`, `SLURMD_`, `PMI_` and `SRUN_`.
-    A driver that runs inside an allocation
-    then submits jobs of its own.
+    A job submitted from inside an allocation
+    takes none of that allocation's settings.
 
     The result is built once per process and shared between callers.
     A later change to `os.environ` does not show in it,
     and a caller must not modify it.
     """
+    # `sbatch` reads `SLURM_*` variables as defaults,
+    # so a driver inside an allocation would give every pilot job
+    # its own node count and Slurm task count.
     sanitized_env: dict[str, str] = {}
     for k, v in os.environ.items():
         if (

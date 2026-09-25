@@ -91,6 +91,6 @@ class SwtopApp(App):
 async def run_app(collector: Collector, interval: float) -> None:
     """Run the terminal UI until the viewer quits.
 
-    Await this on the loop the collector's client belongs to.
+    The collector's client must belong to the loop that awaits this.
     """
     await SwtopApp(collector, interval).run_async()

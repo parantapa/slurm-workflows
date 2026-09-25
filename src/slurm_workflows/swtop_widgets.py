@@ -29,7 +29,11 @@ from .swtop import (
 class SnapshotView(Protocol):
     """A widget that shows what it can of one snapshot."""
 
-    def show(self, snapshot: Snapshot) -> None: ...
+    def show(self, snapshot: Snapshot) -> None:
+        """Draw what the view can of `snapshot`,
+        which may be a failed poll with `error` set and every reading empty.
+        """
+        ...
 
 
 def sync_table(table: DataTable, rows: list[tuple[str, list[str]]]) -> None:
@@ -44,6 +48,7 @@ def sync_table(table: DataTable, rows: list[tuple[str, list[str]]]) -> None:
     wanted = {key: cells for key, cells in rows}
     columns = list(table.columns)
 
+    # Never `DataTable.clear()`, which loses the scroll position and the cursor.
     for key in [str(row.value) for row in table.rows]:
         if key not in wanted:
             table.remove_row(key)
@@ -57,8 +62,7 @@ def sync_table(table: DataTable, rows: list[tuple[str, list[str]]]) -> None:
             table.add_row(*cells, key=key)
 
 
-# Every view below ignores a failed poll except `ErrorLine`,
-# so the screen keeps the last good reading while the server is away.
+# Every view below ignores a failed poll except `ErrorLine`.
 # See "`swtop` draws a failed poll" in the developer notes.
 
 
@@ -112,6 +116,7 @@ class ProgressDisplay(Vertical):
 
     def compose(self) -> ComposeResult:
         yield Static("", classes="swtop-progress-label")
+        # A placeholder until `show` sets the real total.
         yield ProgressBar(total=100, show_eta=False)
 
     def show(self, snapshot: Snapshot) -> None:
@@ -246,7 +251,7 @@ class SwtopTabs(TabbedContent):
 class SnapshotPoller(Widget):
     """Polls one server on an interval, and shows each snapshot on its views.
 
-    Give it either `address` or `collector`.
+    It takes exactly one of `address` and `collector`.
     With `address`, the poller opens a collector of its own on mount,
     on the app's event loop, and closes it on unmount.
     With `collector`, the caller owns the collector,
@@ -288,12 +293,14 @@ class SnapshotPoller(Widget):
         self.address = collector.address if collector is not None else address
         self.collector = collector
         self.interval = interval
+        # Views come only through `attach`, never a DOM query,
+        # which would also find a second poller's views.
         self.views: list[SnapshotView] = list(views)
         # The last snapshot, which a view attached later starts from.
         self.snapshot: Snapshot | None = None
         self._stack = AsyncExitStack() if collector is None else None
-        # Whether a poll is in flight, and whether `poll_now` asked for
-        # another while it was.
+        # Whether a poll is in flight,
+        # and whether `poll_now` asked for another while it was.
         self._polling = False
         self._again = False
 
@@ -302,7 +309,7 @@ class SnapshotPoller(Widget):
 
         A view that is attached after a poll shows that poll's snapshot at once,
         so it does not wait for the next interval.
-        Attach a widget only once it is mounted.
+        A widget must be mounted before it is attached.
         """
         new = [v for v in views if v not in self.views]
         self.views.extend(new)
@@ -348,8 +355,8 @@ class SnapshotPoller(Widget):
 
     def _tick(self) -> None:
         """Poll on the interval, unless a poll is still in flight."""
-        # A tick during a slow poll is dropped rather than queued,
-        # so a slow server is polled as often as it answers and no more.
+        # A tick during a slow poll is dropped, not queued.
+        # See "`SnapshotPoller` lets a slow poll finish" in the developer notes.
         if not self._polling:
             self.poll_now()
 

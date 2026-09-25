@@ -87,9 +87,25 @@ def snapshot(**kwargs) -> Snapshot:
         counts={"ready": 1, "running": 2, "finished": 3, "canceled": 0},
         progress=ProgressInfo("p-1", "explore", "point", 8, 2),
         worker_jobs=[
-            PilotJobInfo("run.job.cpu.0", "cpu", "42", "2026-09-07T11:04:57-04:00")
+            PilotJobInfo(
+                "run.job.cpu.0",
+                "cpu",
+                "42",
+                "2026-09-07T11:04:57-04:00",
+                "2026-09-07T11:05:30-04:00",
+            )
         ],
-        workers=[WorkerInfo("w-id", "cpu", "run.job.cpu.0", "42", "node-1", "17")],
+        workers=[
+            WorkerInfo(
+                "w-id",
+                "cpu",
+                "run.job.cpu.0",
+                "42",
+                "node-1",
+                "17",
+                "2026-09-07T11:05:41-04:00",
+            )
+        ],
         hosts=[
             SubjectInfo("node-1", {"free_memory": 2 * 1024**3, "load_average": 3.5})
         ],
@@ -219,10 +235,23 @@ class TestDisplay:
                 app.poller.deliver(snapshot())
 
                 assert rows_of(app, "pilot-jobs") == [
-                    ["run.job.cpu.0", "cpu", "42", "2026-09-07T11:04:57-04:00"]
+                    [
+                        "run.job.cpu.0",
+                        "cpu",
+                        "42",
+                        "2026-09-07T11:04:57-04:00",
+                        "2026-09-07T11:05:30-04:00",
+                    ]
                 ]
                 assert rows_of(app, "workers") == [
-                    ["run.job.cpu.0", "cpu", "node-1", "42", "17"]
+                    [
+                        "run.job.cpu.0",
+                        "cpu",
+                        "node-1",
+                        "42",
+                        "17",
+                        "2026-09-07T11:05:41-04:00",
+                    ]
                 ]
                 assert rows_of(app, "hosts")[0][:3] == ["node-1", "2.0G", "3.50"]
                 assert rows_of(app, "jobs") == [["42", "1.0G", "12.4 cores"]]
@@ -325,6 +354,8 @@ class TestDisplay:
                     )
                 )
 
+                # The tab label follows a message the table posts,
+                # so let it be handled.
                 await pilot.pause()
 
                 assert label_of(app, "workers") == "workers (3)"
@@ -400,7 +431,14 @@ class TestFailedPoll:
                 app.poller.deliver(snapshot(error="TimeoutError: server unreachable"))
 
                 assert rows_of(app, "workers") == [
-                    ["run.job.cpu.0", "cpu", "node-1", "42", "17"]
+                    [
+                        "run.job.cpu.0",
+                        "cpu",
+                        "node-1",
+                        "42",
+                        "17",
+                        "2026-09-07T11:05:41-04:00",
+                    ]
                 ]
 
         drive(scenario)
@@ -699,7 +737,14 @@ class TestEmbedding:
                 panes = [pane.id for pane in app.query(TabPane)]
                 assert panes == ["mine", "swtop-workers", "swtop-tasks"]
                 assert rows_of(app, "workers") == [
-                    ["run.job.cpu.0", "cpu", "node-1", "42", "17"]
+                    [
+                        "run.job.cpu.0",
+                        "cpu",
+                        "node-1",
+                        "42",
+                        "17",
+                        "2026-09-07T11:05:41-04:00",
+                    ]
                 ]
                 assert label_of(app, "workers") == "workers (1)"
                 assert label_of(app, "tasks") == "tasks (1)"
@@ -862,7 +907,7 @@ class TestRealServer:
         drive(scenario)
 
     def test_an_unreachable_server_is_reported_not_fatal(self):
-        """A monitor that quits when the server blinks is not much of one."""
+        """A failed poll is reported, and the app keeps running."""
 
         async def scenario():
             async with open_collector("127.0.0.1:1") as collector:

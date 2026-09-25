@@ -1,11 +1,10 @@
-"""Tests for the host and Slurm job monitors.
+"""Tests for the host and Slurm job monitors."""
 
-The samplers read this machine,
-so the assertions are about shape and plausibility
-rather than exact numbers.
-The tests point the cgroup reader at files they write themselves,
-which is the only way to assert on values a kernel decides.
-"""
+# The samplers read this machine,
+# so the assertions are about shape and plausibility
+# rather than exact numbers.
+# The tests point the cgroup reader at files they write themselves,
+# which is the only way to assert on values a kernel decides.
 
 from __future__ import annotations
 
@@ -132,6 +131,7 @@ class TestCgroupSampler:
 
         A kernel thread has no address space, so the sum over them is zero.
         """
+        # A pid well above every live one, so it names no process.
         dead = max(psutil.pids()) + 1000
         assert not psutil.pid_exists(dead)
         (tmp_path / "cgroup.procs").write_text(f"{dead}\n")

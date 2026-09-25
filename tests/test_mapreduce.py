@@ -73,9 +73,6 @@ def count_hits(path, threshold):
 # --------------------------------------------------------------------------
 
 
-# `_mapreduce_task` reads `DS_SERVER_ADDRESS` and `PILOT_WORKER_ID`,
-# which a real worker sets,
-# so a test that runs a real worker checks the worker too.
 # See the developer notes, "A map task builds a client of its own".
 @pytest.fixture
 def mapreduce_env(monkeypatch: pytest.MonkeyPatch, ds_service_address: str) -> None:
@@ -84,10 +81,8 @@ def mapreduce_env(monkeypatch: pytest.MonkeyPatch, ds_service_address: str) -> N
     monkeypatch.setenv("PILOT_WORKER_ID", "test-worker.42.testhost.4242")
 
 
-# `mapreduce` blocks as soon as it submits,
-# so nothing can play the worker's part after the fact.
-# Every test that needs a result runs a real worker in a thread,
-# the way `test_explore_space.py` does.
+# Why a real worker runs in a thread:
+# see docs/how-to-run-tests.md, "Notes for future changes".
 @pytest.fixture
 def worker_thread(
     ds_service_address: str, tmp_path: Path
@@ -363,6 +358,8 @@ class TestActors:
             num_tasks=1,
         )
 
+        # The worker runs in a thread of this process,
+        # and current_actor() is process-wide.
         actor = current_actor()
         assert isinstance(actor, support_actor.MapActor)
         assert actor.calls == 6
@@ -437,6 +434,7 @@ class TestMapreduceTask:
         """Three tasks on one queue fold every item exactly once between them."""
         queue = "mr-direct"
         for index in range(60):
+            # Any priority will do.
             # The order the items are served in does not matter to these tests.
             ds_client.task_add(
                 task_id=f"{queue}.item.{index}",
@@ -469,6 +467,7 @@ class TestMapreduceTask:
     ):
         queue = "mr-done"
         for index in range(5):
+            # Any priority will do.
             # The order the items are served in does not matter to these tests.
             ds_client.task_add(
                 task_id=f"{queue}.item.{index}",

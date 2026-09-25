@@ -1,4 +1,4 @@
-"""Compute pi with a Sobol' QMC exploration on Rivanna's BII cluster.
+"""Compute pi with a Sobol' QMC exploration on the `bii` partition of Rivanna.
 
 `docs/tutorials/computing-pi-qmc.md` walks through this program.
 """

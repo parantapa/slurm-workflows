@@ -36,7 +36,7 @@ class MyApp(App):
         yield SummaryLine()
         with TabbedContent():
             with TabPane("My results", id="results"):
-                yield Static("my own view")
+                yield Static("my own view", id="my-status")
             for spec in BLOCKS:
                 if spec.key in {"workers", "tasks"}:
                     yield block_pane(spec)

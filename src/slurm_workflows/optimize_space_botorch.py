@@ -18,7 +18,8 @@ import torch
 from botorch.models import SingleTaskGP
 from botorch.models.transforms import Standardize
 
-# The tests monkeypatch the next three names as module globals.
+# The tests monkeypatch `fit_gpytorch_mll`, `optimize_acqf`
+# and `qLogNoisyExpectedImprovement` as module globals.
 # See the developer notes, Batch Bayesian optimization.
 from botorch.fit import fit_gpytorch_mll
 from botorch.optim import optimize_acqf
@@ -78,6 +79,7 @@ class OptimizationStudy:
         Stalled rounds below it count toward patience.
         But they cannot end the search.
     max_search_rounds: hard ceiling.
+        The search runs at least one round, even when this is 0.
     patience: consecutive stalled rounds that end the search.
         A round that improves resets the count.
     min_improvement: fraction of the incumbent's magnitude
@@ -128,7 +130,8 @@ class OptimizationResult:
     """What one study measured, in submission order.
 
     The four lists are index-aligned.
-    The search evaluates `points[i]`, gets `outputs[i]` back,
+    The search evaluates `points[i]`,
+    gets the objective's whole result back as `outputs[i]`,
     models the point by `values[i]`,
     and records `unit_points[i]` as its place in the unit cube.
     `unit_points` is where the objective ran, after any rounding.
@@ -136,7 +139,6 @@ class OptimizationResult:
 
     points: list[dict[str, Any]] = field(default_factory=list)
     values: list[float] = field(default_factory=list)
-    # The objective's whole result, not just the number modeled from it.
     outputs: list[dict[str, Any]] = field(default_factory=list)
     unit_points: list[list[float]] = field(default_factory=list)
 
@@ -161,9 +163,9 @@ def fit_and_propose(
     """
     train_x = torch.tensor(unit_points, dtype=DTYPE)
 
-    # Botorch maximizes and the search minimizes the objective.
-    # So this function fits the model to -f,
-    # and the acquisition values below are in that space.
+    # Botorch maximizes and the search minimizes, so this function fits the model to -f.
+    # The acquisition values below are in that space too.
+    # Get the sign backwards and the search walks uphill without failing.
     train_y = torch.tensor([[-v] for v in values], dtype=DTYPE)
 
     model = SingleTaskGP(train_x, train_y, outcome_transform=Standardize(m=1))
@@ -700,8 +702,8 @@ class OptimizeSpaceBotorch:
         # A copy, so a later change to the returned mapping
         # cannot rewrite what the run recorded.
         result.outputs.append(dict(output))
-        # From the rounded params, never the continuous candidate.
-        # See the developer notes, Batch Bayesian optimization.
+        # The point the objective actually ran at, mapped back to the unit cube.
+        # Otherwise the fit tells the GP about a location the objective never ran at.
         result.unit_points.append(to_unit(study.space, params))
 
     def _improved_enough(

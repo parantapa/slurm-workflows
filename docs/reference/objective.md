@@ -49,6 +49,12 @@ Both classes record what did come back before they raise the exception.
 `save()` therefore still holds the good points,
 and the next run resumes from them.
 
+This holds for an objective that raises.
+An objective that returns a result the contract rejects,
+such as a bare float or a `NaN`,
+raises as soon as its class records it,
+and the points after it in submission order are not recorded.
+
 ## Related
 
 - [Search spaces](search-space.md)

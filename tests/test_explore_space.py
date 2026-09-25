@@ -112,10 +112,9 @@ class LocalExecutor:
             raise RuntimeError(f"{len(failed)} of {len(tasks)} tasks did not succeed")
 
 
-# The exploration makes three calls on the executor:
-# `submit`, `set_task_name` and `wait`.
-# `LocalExecutor` covers all three,
-# and `TestRealExecutor` checks that they are enough.
+# The exploration makes the same three executor calls as the optimizer.
+# See `as_executor` in `tests/test_optimize_space_botorch.py`.
+# `TestRealExecutor` here checks that the three calls are enough.
 # `exploration.executor` keeps the cast type,
 # so a test that reads the stand-in's records back through it
 # carries `# type: ignore[attr-defined]`.
@@ -720,9 +719,8 @@ class TestRealExecutor:
             executor,
         )
 
-        # A real worker in a thread:
-        # the exploration blocks in wait() as soon as it submits.
-        # Nothing can then play the worker's part after the fact.
+        # Why a real worker runs in a thread:
+        # see docs/how-to-run-tests.md, "Notes for future changes".
         worker = make_worker(ds_service_address, tmp_path / "worker", group="cpu")
         thread = threading.Thread(
             target=run_worker, args=(worker, 2 * points), daemon=True
