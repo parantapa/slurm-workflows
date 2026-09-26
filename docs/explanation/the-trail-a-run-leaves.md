@@ -125,7 +125,7 @@ or every reading arrives forty times over.
 The election uses a `ds-service` counter.
 `counter_get_next_value` returns distinct, gap-free values.
 The worker told 1 for `host_monitor:<hostname>:<job-id>` takes the node,
-and the part of the job on that node.
+the part of the job on that node, and the GPUs that part can see.
 Slurm accounts a job in a separate cgroup on each node,
 so no single worker can read the whole of a job that spans nodes.
 No lock, no designated rank,

@@ -52,6 +52,11 @@ since `my-run.task.412` says nothing about which point it is.
 You can name a task after you submit it,
 and the name appears at the next poll.
 
+The tasks tab shows only waiting, ready and running tasks at start.
+To see the tasks that failed, check `Failed` in the row of checkboxes
+above the table.
+The other states work the same way.
+
 ## Keep a record of a run instead of a live view
 
 To keep a record of a run, pass `--plain`

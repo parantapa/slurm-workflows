@@ -25,6 +25,7 @@ from slurm_workflows import slurm_pilot_worker as worker_mod
 from slurm_workflows.slurm_pilot_executor import RaiseOnError
 from slurm_workflows.slurm_pilot_worker import current_actor, slurm_pilot_worker
 from slurm_workflows.utils import RemoteExecutionError
+from conftest import FakeGpu
 from worker_harness import make_worker, poll_worker, run_worker
 from test_monitors import wait_for
 
@@ -552,7 +553,7 @@ class TestWorkerIdentity:
 
 
 class TestMonitors:
-    """Within each job, one worker samples each node, and one samples the job."""
+    """Within each job, one worker per node samples the node, the job and its GPUs."""
 
     def test_the_first_worker_takes_on_both(self, ds_service_address, tmp_path):
         worker = make_worker(ds_service_address, tmp_path)
@@ -635,6 +636,34 @@ class TestMonitors:
             lambda: bool(ds_client.time_series_get("slurm_job_memory:42:testhost"))
         )
         worker.close()
+
+    def test_on_a_gpu_node_it_samples_the_gpus_too(
+        self, ds_service_address, ds_client, tmp_path, fake_nvml
+    ):
+        fake_nvml.gpus = [FakeGpu()]
+
+        worker = make_worker(ds_service_address, tmp_path)
+
+        assert [m.name for m in worker.monitors][-1] == "gpu-monitor:42:testhost"
+        assert wait_for(
+            lambda: bool(
+                ds_client.time_series_get("slurm_job_gpu_utilization:42:testhost:0")
+            )
+        )
+        worker.close()
+
+    def test_only_the_elected_worker_samples_the_gpus(
+        self, ds_service_address, tmp_path, fake_nvml
+    ):
+        fake_nvml.gpus = [FakeGpu()]
+
+        first = make_worker(ds_service_address, tmp_path, name="w-1")
+        second = make_worker(ds_service_address, tmp_path, name="w-2")
+
+        assert len(first.monitors) == 3
+        assert second.monitors == []
+        first.close()
+        second.close()
 
     def test_a_failed_actor_leaves_none_of_them_running(
         self, ds_service_address, tmp_path

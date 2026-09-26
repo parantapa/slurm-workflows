@@ -44,6 +44,14 @@ A test can inspect the scripts the executor sent to `sbatch`
 A test can also inject a command failure
 (`fake_slurm.fail_command("sbatch")`).
 
+**NVML is mocked.**
+`FakeNvml` (in `tests/conftest.py`) replaces the `pynvml` functions
+the GPU monitor calls, in every test.
+It lists no GPU until a test adds a `FakeGpu` to `fake_nvml.gpus`.
+So a machine with GPUs runs the suite as one without.
+The patch reaches only the test's own process.
+A worker process that a test starts reads the real NVML.
+
 **ds-service is real.**
 Each test gets its own server process on a random port.
 So the tests run against the real server,
@@ -71,14 +79,14 @@ Paths are relative to [`tests/`](../tests).
 | `test_executor.py` | `SlurmPilotExecutor`: job groups, scaling, submit/poll, lifecycle |
 | `test_mapreduce.py` | `SlurmPilotExecutor.mapreduce`: item and map tasks, the fold, and the item queue |
 | `test_worker.py` | `PilotWorker` and the `slurm-pilot-worker` CLI |
-| `test_monitors.py` | The host and cgroup samplers and the monitor threads |
+| `test_monitors.py` | The host, cgroup and GPU samplers and the monitor threads |
 | `test_swtop.py` | The `swtop` collector: what it collects, how it renders as text, and the CLI |
 | `test_swtop_tui.py` | The Textual app and its widgets: table updates, what each block shows, the layout and the keys, embedding in another app, and polling |
 | `test_search_space.py` | The range types and the unit cube mapping (no botorch needed) |
 | `test_explore_space.py` | `ExploreSpaceSobolQMC`: the design it draws and what it records (no botorch needed) |
 | `test_utils.py` | The shared helpers |
 | `test_optimize_space_botorch.py` | `OptimizeSpaceBotorch`: the observations it starts from, rounds, acquisition, search behavior, resuming (skips without botorch) |
-| `conftest.py` | Fixtures: real ds-service, fake Slurm, executor, hang guards |
+| `conftest.py` | Fixtures: real ds-service, fake Slurm, fake NVML, executor, hang guards |
 | `worker_harness.py` | Runs a real worker's main loop for a bounded number of tasks, or of queue polls |
 | `support_actor.py` | Actor classes. They must stay importable by name for the actor tests |
 

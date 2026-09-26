@@ -1,13 +1,15 @@
-"""Tests for the host and Slurm job monitors."""
+"""Tests for the host, Slurm job and GPU monitors."""
 
 # The samplers read this machine,
 # so the assertions are about shape and plausibility
 # rather than exact numbers.
 # The tests point the cgroup reader at files they write themselves,
 # which is the only way to assert on values a kernel decides.
+# The GPU tests read the fake NVML in `conftest.py` instead.
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -17,16 +19,39 @@ import pytest
 
 from slurm_workflows import monitors as monitors_mod
 from slurm_workflows.monitors import (
+    GPU_INFO_PREFIX,
+    GPU_SERIES,
     HOST_SERIES,
     JOB_SERIES,
     CgroupSampler,
+    GpuMonitor,
+    GpuReading,
     Monitor,
+    gpu_subject,
+    job_subject,
+    nvml_session,
+    query_gpus,
     sample_host,
+    split_gpu_subject,
+    split_job_subject,
+    start_gpu_monitor,
     start_host_monitor,
     start_slurm_job_monitor,
-    job_subject,
-    split_job_subject,
 )
+
+import pynvml
+
+from conftest import FakeGpu, FakeNvml
+
+GIB = 1024**3
+
+
+def two_gpus(fake_nvml: FakeNvml) -> None:
+    """Give the fake NVML two GPUs, the second one idle."""
+    fake_nvml.gpus = [
+        FakeGpu(uuid="GPU-aaaa", memory_used=GIB, utilization=45),
+        FakeGpu(uuid="GPU-bbbb", memory_used=0, utilization=0),
+    ]
 
 
 def wait_for(predicate: Callable[[], object], timeout: float = 5.0) -> bool:
@@ -280,12 +305,217 @@ class TestJobSubject:
         assert split_job_subject("1846231") == ("1846231", "")
 
 
-def test_the_two_series_maps_do_not_overlap():
+class TestGpuSubject:
+    def test_a_subject_splits_back_into_its_job_node_and_gpu(self):
+        assert split_gpu_subject(gpu_subject(1846231, "udc-an28", 3)) == (
+            "1846231",
+            "udc-an28",
+            "3",
+        )
+
+    def test_it_extends_the_subject_of_its_job(self):
+        assert gpu_subject(7, "node-1", 0) == f"{job_subject(7, 'node-1')}:0"
+
+
+class TestNvmlSession:
+    def test_it_shuts_down_what_it_started(self, fake_nvml):
+        with nvml_session():
+            assert fake_nvml.sessions == 1
+
+        assert fake_nvml.sessions == 0
+
+    def test_no_driver_raises(self, fake_nvml):
+        fake_nvml.no_driver = True
+
+        with pytest.raises(pynvml.NVMLError) as raised:
+            with nvml_session():
+                pass
+
+        assert getattr(raised.value, "value") == pynvml.NVML_ERROR_LIBRARY_NOT_FOUND
+
+
+class TestQueryGpus:
+    def test_it_reads_each_gpu(self, fake_nvml):
+        two_gpus(fake_nvml)
+
+        with nvml_session():
+            first, second = query_gpus()
+
+        assert (first.index, first.uuid, first.name) == (
+            "0",
+            "GPU-aaaa",
+            "NVIDIA A100-SXM4-80GB",
+        )
+        assert first.memory_total == 80 * GIB
+        assert first.values == {
+            "memory_used": 1 * GIB,
+            "memory_free": 79 * GIB,
+            "utilization": 45.0,
+        }
+        assert (second.index, second.uuid) == ("1", "GPU-bbbb")
+
+    def test_an_unsupported_measurement_is_left_out(self, fake_nvml):
+        # A MIG instance reports no utilization.
+        fake_nvml.gpus = [FakeGpu(utilization=None)]
+
+        with nvml_session():
+            (gpu,) = query_gpus()
+
+        assert set(gpu.values) == {"memory_used", "memory_free"}
+
+    def test_unsupported_memory_leaves_out_the_total_too(self, fake_nvml):
+        fake_nvml.gpus = [FakeGpu(memory_total=None)]
+
+        with nvml_session():
+            (gpu,) = query_gpus()
+
+        assert gpu.memory_total is None
+        assert set(gpu.values) == {"utilization"}
+
+    def test_no_gpu_is_an_empty_list(self, fake_nvml):
+        with nvml_session():
+            assert query_gpus() == []
+
+    def test_outside_a_session_it_raises(self, fake_nvml):
+        two_gpus(fake_nvml)
+
+        with pytest.raises(pynvml.NVMLError) as raised:
+            query_gpus()
+
+        assert getattr(raised.value, "value") == pynvml.NVML_ERROR_UNINITIALIZED
+
+
+class TestGpuMonitor:
+    def test_each_gpu_gets_series_of_its_own(self, ds_client, fake_nvml):
+        two_gpus(fake_nvml)
+        monitor = GpuMonitor(ds_client, "7:node-1")
+
+        with nvml_session():
+            monitor.append_sample()
+
+        for index in ["0", "1"]:
+            for name, prefix in GPU_SERIES.items():
+                points = ds_client.time_series_get(f"{prefix}7:node-1:{index}")
+                assert len(points) == 1, name
+        used = ds_client.time_series_get("slurm_job_gpu_memory_used:7:node-1:0")
+        assert used[-1].value == 1 * GIB
+
+    def test_the_type_of_each_gpu_goes_in_the_map(self, ds_client, fake_nvml):
+        two_gpus(fake_nvml)
+        monitor = GpuMonitor(ds_client, "7:node-1")
+
+        with nvml_session():
+            monitor.append_sample()
+
+        info = json.loads(ds_client.map_get(f"{GPU_INFO_PREFIX}7:node-1:0"))
+        assert info == {
+            "name": "NVIDIA A100-SXM4-80GB",
+            "uuid": "GPU-aaaa",
+            "memory_total": 80 * GIB,
+        }
+
+    def test_the_type_is_written_again_only_when_it_changes(self, ds_client, fake_nvml):
+        fake_nvml.gpus = [FakeGpu()]
+        monitor = GpuMonitor(ds_client, "7:node-1")
+        key = f"{GPU_INFO_PREFIX}7:node-1:0"
+
+        with nvml_session():
+            monitor.append_sample()
+            ds_client.map_set(key, b"overwritten by the test")
+            monitor.append_sample()
+            assert ds_client.map_get(key) == b"overwritten by the test"
+
+            fake_nvml.gpus = [FakeGpu(name="NVIDIA H100")]
+            monitor.append_sample()
+
+        assert json.loads(ds_client.map_get(key))["name"] == "NVIDIA H100"
+
+    def test_the_gpus_of_one_reading_share_a_timestamp(self, ds_client, fake_nvml):
+        two_gpus(fake_nvml)
+        monitor = GpuMonitor(ds_client, "7:node-1")
+
+        with nvml_session():
+            monitor.append_sample()
+
+        stamps = {
+            ds_client.time_series_get(f"{prefix}7:node-1:{index}")[-1].datetime
+            for prefix in GPU_SERIES.values()
+            for index in ["0", "1"]
+        }
+        assert len(stamps) == 1
+
+    def test_its_thread_name_differs_from_the_job_monitors(self, ds_client):
+        monitor = GpuMonitor(ds_client, "7:node-1")
+
+        assert monitor.subject == "7:node-1"
+        assert monitor.name == "gpu-monitor:7:node-1"
+
+    def test_the_thread_holds_one_session_while_it_runs(self, ds_client, fake_nvml):
+        fake_nvml.gpus = [FakeGpu()]
+        monitor = GpuMonitor(ds_client, "7:node-1", interval=60.0)
+        monitor.start()
+
+        assert wait_for(
+            lambda: bool(
+                ds_client.time_series_get("slurm_job_gpu_utilization:7:node-1:0")
+            )
+        )
+        assert fake_nvml.sessions == 1
+        monitor.stop()
+        assert fake_nvml.sessions == 0
+
+    def test_a_thread_that_cannot_start_nvml_logs_it_and_ends(
+        self, ds_client, fake_nvml, caplog
+    ):
+        fake_nvml.no_driver = True
+        monitor = GpuMonitor(ds_client, "7:node-1", interval=60.0)
+
+        monitor.start()
+        monitor.join(5.0)
+
+        assert not monitor.is_alive()
+        assert "cannot use NVML" in caplog.text
+
+
+class TestStartGpuMonitor:
+    def test_it_samples_the_gpus_nvml_lists(self, ds_client, fake_nvml):
+        two_gpus(fake_nvml)
+
+        monitor = start_gpu_monitor(ds_client, 7, "node-1", interval=60.0)
+
+        assert monitor is not None
+        assert wait_for(
+            lambda: bool(
+                ds_client.time_series_get("slurm_job_gpu_utilization:7:node-1:1")
+            )
+        )
+        monitor.stop()
+
+    def test_a_node_with_no_gpu_starts_nothing(self, ds_client, fake_nvml):
+        assert start_gpu_monitor(ds_client, 7, "node-1", interval=60.0) is None
+        assert fake_nvml.sessions == 0
+
+    def test_a_node_with_no_driver_starts_nothing(self, ds_client, fake_nvml):
+        fake_nvml.no_driver = True
+
+        assert start_gpu_monitor(ds_client, 7, "node-1", interval=60.0) is None
+
+
+def test_the_series_maps_do_not_overlap():
     """A subject's prefix has to say which monitor wrote it."""
-    assert set(HOST_SERIES.values()).isdisjoint(JOB_SERIES.values())
+    maps = [HOST_SERIES, JOB_SERIES, GPU_SERIES]
+    prefixes = [prefix for series in maps for prefix in series.values()]
+    assert len(prefixes) == len(set(prefixes))
 
 
-@pytest.mark.parametrize("prefixes", [HOST_SERIES, JOB_SERIES])
+def test_no_job_series_prefix_starts_a_gpu_series_prefix():
+    """`swtop` finds the subjects of a series by searching on its prefix."""
+    for job_prefix in JOB_SERIES.values():
+        for gpu_prefix in [*GPU_SERIES.values(), GPU_INFO_PREFIX]:
+            assert not gpu_prefix.startswith(job_prefix)
+
+
+@pytest.mark.parametrize("prefixes", [HOST_SERIES, JOB_SERIES, GPU_SERIES])
 def test_every_series_prefix_ends_with_a_separator(prefixes):
     """The monitor appends the subject raw, so the prefix carries the colon."""
     assert all(prefix.endswith(":") for prefix in prefixes.values())

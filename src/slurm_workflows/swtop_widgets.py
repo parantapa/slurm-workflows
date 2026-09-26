@@ -4,19 +4,30 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from contextlib import AsyncExitStack
+from dataclasses import replace
 from datetime import datetime
 from typing import Any, Protocol
 
 from textual.app import ComposeResult
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
 from textual.css.query import NoMatches
 from textual.message import Message
 from textual.widget import Widget
-from textual.widgets import DataTable, ProgressBar, Static, TabbedContent, TabPane
+from textual.widgets import (
+    Checkbox,
+    DataTable,
+    ProgressBar,
+    Static,
+    TabbedContent,
+    TabPane,
+)
 
 from .swtop import (
     BLOCKS,
     DEFAULT_INTERVAL_S,
+    DEFAULT_TASK_STATES,
+    EMPTY_TASKS_IN_STATES,
+    STATE_ORDER,
     BlockSpec,
     Collector,
     Snapshot,
@@ -173,6 +184,8 @@ class BlockTable(Vertical):
         super().__init__(**kwargs)
         self.spec = spec
         self.count = 0
+        # The last good snapshot, which `redraw` draws.
+        self.snapshot: Snapshot | None = None
 
     def compose(self) -> ComposeResult:
         yield Static(self.spec.empty, classes="swtop-block-empty")
@@ -187,28 +200,155 @@ class BlockTable(Vertical):
         """Put the block's rows in the table, or say why there are none."""
         if snapshot.error is not None:
             return
-        rows = self.spec.rows(snapshot)
+        self.snapshot = snapshot
+        self.redraw()
+
+    def rows(self, snapshot: Snapshot) -> list[tuple[str, list[str]]]:
+        """The rows of `snapshot` that this table shows."""
+        return self.spec.rows(snapshot)
+
+    def empty_text(self, snapshot: Snapshot) -> str:
+        """What the table says when `snapshot` gives it no rows."""
+        return self.spec.empty
+
+    def redraw(self) -> None:
+        """Draw the last good snapshot again, or nothing before the first one.
+
+        `show` calls it after each good poll.
+        A subclass calls it when what it picks out of a snapshot changes.
+        """
+        if self.snapshot is None:
+            return
+        rows = self.rows(self.snapshot)
         table = self.query_one(DataTable)
         sync_table(table, rows)
 
         # One or the other: a header row over nothing reads as a failure.
         table.display = bool(rows)
-        self.query_one(".swtop-block-empty", Static).display = not rows
+        empty = self.query_one(".swtop-block-empty", Static)
+        empty.display = not rows
+        if not rows:
+            empty.update(self.empty_text(self.snapshot))
 
         if len(rows) != self.count:
             self.count = len(rows)
             self.post_message(self.CountChanged(self, self.count))
 
 
+class TaskStateFilter(Horizontal):
+    """A checkbox for each task state, which picks the states a `TaskTable` shows.
+
+    `states` are the states checked at start.
+    The checkboxes come in the order of `STATE_ORDER`.
+    Each change posts `Changed`.
+    """
+
+    DEFAULT_CSS = """
+    TaskStateFilter {
+        height: auto;
+        padding: 0 1;
+    }
+    TaskStateFilter Checkbox {
+        border: none;
+        padding: 0 1 0 0;
+        background: transparent;
+    }
+    TaskStateFilter Checkbox:focus { border: none; }
+    """
+
+    class Changed(Message):
+        """The viewer checked or unchecked a state."""
+
+        def __init__(self, state_filter: TaskStateFilter) -> None:
+            super().__init__()
+            self.state_filter = state_filter
+
+        @property
+        def states(self) -> frozenset[str]:
+            """The states now checked."""
+            return self.state_filter.states
+
+    def __init__(
+        self, states: Iterable[str] = DEFAULT_TASK_STATES, **kwargs: Any
+    ) -> None:
+        super().__init__(**kwargs)
+        self._initial = frozenset(states)
+
+    def compose(self) -> ComposeResult:
+        # The name, not an id, carries the state,
+        # so two filters on one screen do not clash.
+        for state in STATE_ORDER:
+            yield Checkbox(state, state in self._initial, name=state)
+
+    @property
+    def states(self) -> frozenset[str]:
+        """The states now checked."""
+        return frozenset(
+            box.name
+            for box in self.query(Checkbox)
+            if box.value and box.name is not None
+        )
+
+    def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
+        # One message of this widget's own in place of the checkbox's.
+        event.stop()
+        self.post_message(self.Changed(self))
+
+
+class TaskTable(BlockTable):
+    """A `BlockTable` for the tasks block, with a `TaskStateFilter` above the rows.
+
+    It shows only the tasks in `states`, which follow its checkboxes.
+    Its count, and so the tab label, is the number of tasks it shows.
+    """
+
+    def __init__(
+        self,
+        spec: BlockSpec,
+        states: Iterable[str] = DEFAULT_TASK_STATES,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(spec, **kwargs)
+        self.states = frozenset(states)
+
+    def compose(self) -> ComposeResult:
+        yield TaskStateFilter(self.states)
+        yield from super().compose()
+
+    def rows(self, snapshot: Snapshot) -> list[tuple[str, list[str]]]:
+        """The rows of the tasks in `states`."""
+        shown = [t for t in snapshot.tasks if t.state in self.states]
+        return self.spec.rows(replace(snapshot, tasks=shown))
+
+    def empty_text(self, snapshot: Snapshot) -> str:
+        """Why no task shows: there are none, or none in `states`."""
+        return self.spec.empty if not snapshot.tasks else EMPTY_TASKS_IN_STATES
+
+    def on_task_state_filter_changed(self, event: TaskStateFilter.Changed) -> None:
+        # The message goes on bubbling, for an app that wants the states too.
+        self.states = event.states
+        self.redraw()
+
+
+# The table `block_table` makes for a block, by block key,
+# where it is not a plain `BlockTable`.
+BLOCK_TABLES: dict[str, type[BlockTable]] = {"tasks": TaskTable}
+
+
+def block_table(spec: BlockSpec, **kwargs: Any) -> BlockTable:
+    """A `TaskTable` for the tasks block, and a `BlockTable` for any other."""
+    return BLOCK_TABLES.get(spec.key, BlockTable)(spec, **kwargs)
+
+
 class BlockPane(TabPane):
-    """A tab that holds one `BlockTable`, and keeps its count in its label."""
+    """A tab that holds the table of one block, and keeps its count in its label."""
 
     DEFAULT_CSS = """
     BlockPane { padding: 0; }
     """
 
     def __init__(self, spec: BlockSpec, **kwargs: Any) -> None:
-        super().__init__(block_label(spec, 0), BlockTable(spec), **kwargs)
+        super().__init__(block_label(spec, 0), block_table(spec), **kwargs)
         self.spec = spec
 
     def on_block_table_count_changed(self, event: BlockTable.CountChanged) -> None:
@@ -224,7 +364,7 @@ class BlockPane(TabPane):
 
 
 def block_pane(spec: BlockSpec, *, id: str | None = None) -> BlockPane:
-    """A tab that holds a `BlockTable` for `spec`, labeled with its count.
+    """A tab that holds the `block_table` for `spec`, labeled with its count.
 
     The id defaults to `swtop-` and the block key, such as `swtop-workers`.
     """

@@ -16,6 +16,7 @@ from typing import Any, cast
 import pytest
 from textual.app import App, ComposeResult
 from textual.widgets import (
+    Checkbox,
     DataTable,
     Footer,
     Header,
@@ -27,6 +28,10 @@ from textual.widgets import (
 
 from slurm_workflows.swtop import (
     BLOCKS,
+    DEFAULT_TASK_STATES,
+    EMPTY_TASKS,
+    EMPTY_TASKS_IN_STATES,
+    STATE_ORDER,
     Collector,
     Snapshot,
     SubjectInfo,
@@ -45,6 +50,8 @@ from slurm_workflows.swtop_widgets import (
     SummaryLine,
     BlockPane,
     SwtopTabs,
+    TaskStateFilter,
+    TaskTable,
     block_pane,
     sync_table,
 )
@@ -403,6 +410,172 @@ class TestDisplay:
         drive(scenario)
 
 
+def tasks_in_every_state() -> list[TaskInfo]:
+    """One task in each state `STATE_ORDER` names, in that order."""
+    return [
+        TaskInfo(f"run.task.{i}", f"t-{state.lower()}", state)
+        for i, state in enumerate(STATE_ORDER)
+    ]
+
+
+def state_box(app: App, state: str) -> Checkbox:
+    """The checkbox of `state` in the tasks tab."""
+    boxes = app.query_one(TaskStateFilter).query(Checkbox)
+    return next(box for box in boxes if box.name == state)
+
+
+class TestTaskStateFilter:
+    def test_the_tasks_tab_has_a_task_table(self):
+        async def scenario():
+            app = SwtopApp(as_collector(StubCollector()), 3600.0)
+            async with app.run_test():
+                assert isinstance(
+                    app.query_one("#swtop-tasks").query_one(BlockTable), TaskTable
+                )
+                assert not app.query_one("#swtop-workers").query(TaskStateFilter)
+
+        drive(scenario)
+
+    def test_there_is_a_checkbox_for_each_state_in_order(self):
+        async def scenario():
+            app = SwtopApp(as_collector(StubCollector()), 3600.0)
+            async with app.run_test():
+                boxes = app.query_one(TaskStateFilter).query(Checkbox)
+                assert [box.name for box in boxes] == STATE_ORDER
+
+        drive(scenario)
+
+    def test_it_starts_on_the_tasks_still_to_finish(self):
+        async def scenario():
+            app = SwtopApp(as_collector(StubCollector()), 3600.0)
+            async with app.run_test() as pilot:
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                app.poller.deliver(snapshot(tasks=tasks_in_every_state()))
+                await pilot.pause()
+
+                assert [row[2] for row in rows_of(app, "tasks")] == [
+                    "Running",
+                    "Ready",
+                    "Waiting",
+                ]
+                assert label_of(app, "tasks") == "tasks (3)"
+                checked = {box.name for box in app.query(Checkbox) if box.value}
+                assert checked == set(DEFAULT_TASK_STATES)
+
+        drive(scenario)
+
+    def test_checking_a_state_shows_its_tasks_at_once(self):
+        async def scenario():
+            app = SwtopApp(as_collector(StubCollector()), 3600.0)
+            async with app.run_test() as pilot:
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                app.poller.deliver(snapshot(tasks=tasks_in_every_state()))
+
+                # No poll in between: the table redraws the last one.
+                state_box(app, "Failed").value = True
+                await pilot.pause()
+
+                assert "Failed" in [row[2] for row in rows_of(app, "tasks")]
+                assert label_of(app, "tasks") == "tasks (4)"
+
+        drive(scenario)
+
+    def test_unchecking_a_state_hides_its_tasks(self):
+        async def scenario():
+            app = SwtopApp(as_collector(StubCollector()), 3600.0)
+            async with app.run_test() as pilot:
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                app.poller.deliver(snapshot(tasks=tasks_in_every_state()))
+
+                state_box(app, "Running").value = False
+                await pilot.pause()
+
+                assert [row[2] for row in rows_of(app, "tasks")] == [
+                    "Ready",
+                    "Waiting",
+                ]
+
+        drive(scenario)
+
+    def test_the_choice_holds_across_polls(self):
+        async def scenario():
+            app = SwtopApp(as_collector(StubCollector()), 3600.0)
+            async with app.run_test() as pilot:
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                state_box(app, "Finished").value = True
+                await pilot.pause()
+
+                app.poller.deliver(snapshot(tasks=tasks_in_every_state()))
+
+                assert "Finished" in [row[2] for row in rows_of(app, "tasks")]
+
+        drive(scenario)
+
+    def test_clicking_a_checkbox_toggles_its_state(self):
+        async def scenario():
+            app = SwtopApp(as_collector(StubCollector()), 3600.0)
+            async with app.run_test() as pilot:
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                app.poller.deliver(snapshot(tasks=tasks_in_every_state()))
+                await pilot.press("t")
+                await pilot.pause()
+
+                await pilot.click(state_box(app, "Canceled"))
+                await pilot.pause()
+
+                assert "Canceled" in [row[2] for row in rows_of(app, "tasks")]
+
+        drive(scenario)
+
+    def test_tasks_in_no_chosen_state_say_so(self):
+        async def scenario():
+            app = SwtopApp(as_collector(StubCollector()), 3600.0)
+            async with app.run_test() as pilot:
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                done = [TaskInfo("run.task.0", "t-0", "Finished")]
+                app.poller.deliver(snapshot(tasks=done))
+
+                block = app.query_one("#swtop-tasks")
+                assert not block.query_one(DataTable).display
+                empty = block.query_one(".swtop-block-empty", Static)
+                assert text_of(empty) == EMPTY_TASKS_IN_STATES
+
+                app.poller.deliver(snapshot(tasks=[]))
+
+                assert text_of(empty) == EMPTY_TASKS
+
+        drive(scenario)
+
+    def test_a_task_table_takes_its_own_starting_states(self):
+        tasks = next(spec for spec in BLOCKS if spec.key == "tasks")
+
+        class FinishedApp(App):
+            def compose(self) -> ComposeResult:
+                yield TaskTable(tasks, states={"Finished"})
+
+        async def scenario():
+            app = FinishedApp()
+            async with app.run_test() as pilot:
+                table = app.query_one(TaskTable)
+                table.show(snapshot(tasks=tasks_in_every_state()))
+                await pilot.pause()
+
+                assert [row[2] for row in rows_of_table(table)] == ["Finished"]
+
+        drive(scenario)
+
+
+def rows_of_table(block: BlockTable) -> list[list[str]]:
+    table = block.query_one(DataTable)
+    return [table.get_row(key) for key in table.rows]
+
+
 class TestFailedPoll:
     def test_it_is_reported_on_the_screen(self):
         async def scenario():
@@ -534,6 +707,8 @@ class TestLayout:
             ErrorLine,
             ProgressDisplay,
             BlockTable,
+            TaskTable,
+            TaskStateFilter,
             BlockPane,
             SwtopTabs,
             SnapshotPoller,

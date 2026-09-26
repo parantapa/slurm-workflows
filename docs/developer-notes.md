@@ -108,7 +108,7 @@ Paths are relative to `src/slurm_workflows/`.
 | `search_space.py` | Search spaces and the mapping to and from the unit cube. Imports no torch. |
 | `explore_space.py` | Sobol' explorations with no model behind them, and the results file format the optimizer also reads |
 | `optimize_space_botorch.py` | The botorch searches. Optional, behind the `botorch` extra. |
-| `monitors.py` | Host and cgroup sampling, and the threads that publish it |
+| `monitors.py` | Host, cgroup and GPU sampling, and the threads that publish it |
 | `swtop.py` | `swtop`, entry point the `swtop` command: reading a run from the server, and the text display. Imports no Textual, so the text display and its tests run without it. |
 | `swtop_widgets.py` | The Textual widgets and the poller that `swtop` and any embedding app lay out. Depends on `swtop`, never the reverse. |
 | `swtop_tui.py` | The Textual app `swtop` runs in: the layout of the widgets, and the keys |
@@ -156,6 +156,7 @@ This table says what each one is here for.
 | `textual` | `swtop_widgets`, `swtop_tui` | The `swtop` terminal UI, and the widgets other apps embed. |
 | `click` | `swtop`, `slurm_pilot_worker` | Both console entry points. |
 | `psutil` | `monitors` | Host and process sampling. |
+| `nvidia-ml-py` | `monitors` | GPU sampling through NVML, imported as `pynvml`. |
 | `platformdirs` | `slurm_pilot_executor` | Locating the per-user cache dir a run's `work_dir` defaults into. |
 | `typeguard` (>=3) | `slurm_pilot_executor` | `@typechecked` on the public surface. |
 | `numpy` | none in `src/` | Declared in `pyproject.toml`, but no module imports it. The Sobol' design `scipy` returns is a numpy array, and `explore_space` turns each row into a list. |
@@ -564,8 +565,8 @@ each against its own `patience`, floor and ceiling.
 
 **One worker per job per node samples, and a counter decides which.**
 `counter_get_next_value` hands out distinct, gap-free values.
-The worker told 1 for `host_monitor:<hostname>:<job-id>` takes the node
-and the part of its job on that node.
+The worker told 1 for `host_monitor:<hostname>:<job-id>` takes the node,
+the part of its job on that node, and the GPUs that part can see.
 A job's cgroup is local to each node,
 so the job series carry the hostname as well as the job id.
 `_start_monitors` says why the counter carries the job id.
@@ -574,6 +575,28 @@ Nothing hands a subject back when that worker dies:
 the series stops, and `swtop` marks it stale.
 `swtop` hides the Slurm job of a pilot job that published its exit.
 A re-election needs a heartbeat and a lease, and this design has neither.
+
+**GPUs come from NVML, through `nvidia-ml-py`, in a thread of their own.**
+`nvidia-ml-py` is NVIDIA's own binding, and it is pure Python.
+It loads the driver's library only when `nvmlInit` runs,
+so it installs on a CPU node and costs nothing there.
+It reads the GPUs in-process,
+where `nvidia-smi` would start a process every interval and need its text parsed.
+`start_gpu_monitor` starts an NVML session once, and starts nothing
+where that fails or finds no GPU.
+So a CPU node runs no GPU thread and logs no GPU errors.
+`GpuMonitor` runs apart from the job monitor,
+so a GPU read that stalls does not delay the job's readings.
+The GPU's type is text, which a time series cannot hold,
+so it goes in the map, under `GPU_INFO_PREFIX`.
+
+**GPU readings do not respect `CUDA_VISIBLE_DEVICES`.**
+That variable belongs to the CUDA runtime, and NVML ignores it.
+The monitor needs NVML's view anyway.
+Slurm sets the variable per task,
+so the elected worker would see its own GPU and not the job's others.
+Where Slurm constrains devices, NVML lists the GPUs of the job step on the node.
+Where it does not, NVML lists every GPU on the node.
 
 **Sampling threads are daemons that swallow their errors.**
 A monitor must not hold open a worker that Slurm kills at its time limit,
@@ -647,6 +670,16 @@ and no more.
 It gives each block its title, columns, empty message and row builder,
 and it sets their order.
 The text frames and the UI differ only in how they draw them.
+
+**The tasks tab filters in the widget, not in the collector.**
+`TaskTable` picks the tasks in its checked states
+out of a snapshot that holds every task.
+A change of states then redraws the last snapshot at once,
+with no poll to wait for.
+It also leaves the snapshot the same for every view,
+so the text frames, the summary line and an embedding app
+still see every task.
+The cost is that each poll still reads the state of every task.
 
 **The widgets bind no keys, and set no ids.**
 An app that embeds the widgets sets up its own keys,

@@ -91,6 +91,12 @@ A tab from `block_pane` has the id `swtop-` and the block key by default,
 such as `swtop-workers`.
 Pass `id=` to `block_pane` to choose another.
 
+The tasks tab from `block_pane` holds a `TaskTable`,
+which is a `BlockTable` with a row of state checkboxes above it.
+So `self.query(BlockTable)` finds it too.
+To start it on other states,
+yield `TaskTable(spec, states={"Failed"})` in place of a `BlockTable`.
+
 ## React to a poll in your own widgets
 
 The poller posts `SnapshotPoller.Polled` after each poll.

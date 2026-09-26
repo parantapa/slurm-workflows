@@ -49,6 +49,8 @@ The terminal UI shows these areas, from top to bottom:
 2. A summary line of task counts, and the time of the last reading.
 3. Five tabs, one for each block.
    Each tab label carries the block's row count, such as `workers (40)`.
+   The tasks tab also has a row of checkboxes, one for each task state.
+   See [Pick the task states the tasks tab shows](#pick-the-task-states-the-tasks-tab-shows).
 4. The progress of the wait the driver is in.
 5. The error line, shown only when the last poll failed.
 6. A footer that lists the keys.
@@ -92,6 +94,24 @@ eval-2   my-run.task.12  Ready
 `swtop` lists tasks running first, then ready and waiting,
 then failed, finished, canceled and undefined,
 and named before unnamed within each state.
+The text frames list the tasks in every state.
+
+### Pick the task states the tasks tab shows
+
+The tasks tab of the terminal UI shows only the tasks in the states that are checked.
+It has one checkbox for each state, in the order above.
+At start, `Waiting`, `Ready` and `Running` are checked,
+so the tab shows only the tasks that did not end.
+Click a checkbox to check or uncheck it.
+You can also move the focus to it with Tab, and press Space or Enter.
+The table changes at once, without a poll,
+and the choice stays in effect for the rest of the session.
+
+The tab label counts the tasks the tab shows,
+not every task on the server.
+The summary line counts every task.
+When the server holds tasks but none in a checked state,
+the tab says `no tasks in the chosen states`.
 
 The blocks come from different places:
 
@@ -254,9 +274,13 @@ To do that, see
 | `ProgressDisplay` | The progress bar. Hidden until a driver waits on something. |
 | `ErrorLine` | The error line. Hidden while polls succeed. |
 | `BlockTable` | The table of one block, or why the block is empty. It has no title. |
-| `block_pane(spec, *, id=None)` | A `TabPane` that holds a `BlockTable`, and keeps its count in the tab label. The id is `swtop-<key>` by default. |
+| `TaskTable(spec, states=DEFAULT_TASK_STATES)` | A `BlockTable` for the tasks block, with a `TaskStateFilter` above the rows. It shows only the tasks in `states`. |
+| `TaskStateFilter(states=DEFAULT_TASK_STATES)` | A checkbox for each task state. It posts `TaskStateFilter.Changed`, and `event.states` is the set of states now checked. |
+| `block_table(spec)` | A `TaskTable` for the tasks block, and a `BlockTable` for any other block. |
+| `block_pane(spec, *, id=None)` | A `TabPane` that holds the `block_table` of `spec`, and keeps its count in the tab label. The id is `swtop-<key>` by default. |
 | `SwtopTabs` | A `TabbedContent` with one `block_pane` for each block. |
 | `BLOCKS` | In `slurm_workflows.swtop`: one `BlockSpec` for each block, in screen order. Its `key` is `pilot-jobs`, `workers`, `hosts`, `jobs` or `tasks`. |
+| `DEFAULT_TASK_STATES` | In `slurm_workflows.swtop`: the states a `TaskTable` shows at start, `Waiting`, `Ready` and `Running`. |
 
 `SnapshotPoller` takes exactly one of these:
 
@@ -284,6 +308,7 @@ or when `interval` is not greater than 0.
 
 `BlockTable` posts `BlockTable.CountChanged` when its row count changes.
 `event.spec` is its block, and `event.count` is the new count.
+A `TaskTable` counts only the tasks it shows.
 
 A failed poll changes only the error line.
 The other widgets keep the last good reading.

@@ -86,6 +86,10 @@ STATE_ORDER = [
     "Undefined",
 ]
 
+# The states the tasks tab of the terminal UI shows until the viewer picks others:
+# the tasks still to finish.
+DEFAULT_TASK_STATES = frozenset({"Waiting", "Ready", "Running"})
+
 # What each block says when it has nothing to show.
 # Each says why it is empty, since an empty block is usually a question.
 EMPTY_PILOT_JOBS = (
@@ -95,6 +99,8 @@ EMPTY_WORKERS = "no workers have registered with this server, or all of them exi
 EMPTY_HOSTS = "no host is being monitored"
 EMPTY_JOBS = "no slurm job is being monitored"
 EMPTY_TASKS = "no tasks have been submitted to this server"
+# What the tasks tab says when the server holds tasks, but none in a state it shows.
+EMPTY_TASKS_IN_STATES = "no tasks in the chosen states"
 
 
 @dataclass

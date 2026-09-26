@@ -248,7 +248,7 @@ because rule 4 leaves no room for a second word for the same thing.
 | **`unit`** | What the count counts. It counts tasks, unless something else is one per task. | this library | item, measure |
 | **monitor** | A sampling thread in `monitors.py`. | `monitors.py` | watcher, sampler |
 | **sampler** | The callable a monitor calls. | `sample_host`, `CgroupSampler` | reader, probe |
-| **subject** | The node, or the job on one node, that a monitor samples. | `SubjectInfo` | target, entity, resource |
+| **subject** | The node, the job on one node, or one GPU of that job, that a monitor samples. | `SubjectInfo` | target, entity, resource |
 | **`swtop`** | The program. Call it by name. | the entry point | the monitor, the dashboard, the UI |
 | **block** | One of the five lists `swtop` shows: pilot jobs, workers, hosts, slurm jobs and tasks. | `swtop.BlockSpec`, `swtop_widgets.BlockTable` | panel, pane, table, widget |
 | **tab** | How the `swtop` terminal UI shows a block. | `swtop_widgets.block_pane` | pane, page |

@@ -10,11 +10,12 @@ import sys
 import signal
 import subprocess
 from pathlib import Path
-from types import FrameType
+from types import FrameType, SimpleNamespace
 from typing import Any, Callable, Generator, Iterator, NoReturn
 from dataclasses import dataclass
 from contextlib import AbstractContextManager, contextmanager
 
+import pynvml
 import pytest
 from ds_service_client import DsServiceClient, DsServiceServer
 
@@ -82,6 +83,117 @@ def _restore_environ() -> Generator[None]:
     yield
     os.environ.clear()
     os.environ.update(env)
+
+
+# --------------------------------------------------------------------------
+# GPUs
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class FakeGpu:
+    """One GPU as `FakeNvml` reports it.
+
+    A measurement set to None is one the GPU does not support.
+    """
+
+    name: str = "NVIDIA A100-SXM4-80GB"
+    uuid: str = "GPU-aaaa"
+    memory_total: int | None = 80 * 1024**3
+    memory_used: int = 1024**3
+    utilization: int | None = 45
+
+
+class FakeNvml:
+    """Stands in for the functions of `pynvml` that the GPU monitor calls.
+
+    It lists the GPUs in `gpus`, none until a test adds some,
+    which reads as a node whose driver finds no GPU.
+    With `no_driver` set, `nvmlInit` fails as it does on a node with no driver.
+    It raises the real `pynvml` errors.
+    """
+
+    FUNCTIONS = [
+        "nvmlInit",
+        "nvmlShutdown",
+        "nvmlDeviceGetCount",
+        "nvmlDeviceGetHandleByIndex",
+        "nvmlDeviceGetName",
+        "nvmlDeviceGetUUID",
+        "nvmlDeviceGetMemoryInfo",
+        "nvmlDeviceGetUtilizationRates",
+    ]
+
+    def __init__(self) -> None:
+        self.gpus: list[FakeGpu] = []
+        self.no_driver = False
+        # Open sessions: the `nvmlInit` calls minus the `nvmlShutdown` calls.
+        self.sessions = 0
+
+    def _check(self) -> None:
+        if self.sessions <= 0:
+            raise pynvml.NVMLError(pynvml.NVML_ERROR_UNINITIALIZED)
+
+    def nvmlInit(self) -> None:
+        if self.no_driver:
+            raise pynvml.NVMLError(pynvml.NVML_ERROR_LIBRARY_NOT_FOUND)
+        self.sessions += 1
+
+    def nvmlShutdown(self) -> None:
+        self._check()
+        self.sessions -= 1
+
+    def nvmlDeviceGetCount(self) -> int:
+        self._check()
+        return len(self.gpus)
+
+    # A handle is the index, which is all the fake needs.
+
+    def nvmlDeviceGetHandleByIndex(self, index: int) -> int:
+        self._check()
+        if not 0 <= index < len(self.gpus):
+            raise pynvml.NVMLError(pynvml.NVML_ERROR_INVALID_ARGUMENT)
+        return index
+
+    def nvmlDeviceGetName(self, handle: int) -> str:
+        self._check()
+        return self.gpus[handle].name
+
+    def nvmlDeviceGetUUID(self, handle: int) -> str:
+        self._check()
+        return self.gpus[handle].uuid
+
+    def nvmlDeviceGetMemoryInfo(self, handle: int) -> SimpleNamespace:
+        self._check()
+        gpu = self.gpus[handle]
+        if gpu.memory_total is None:
+            raise pynvml.NVMLError(pynvml.NVML_ERROR_NOT_SUPPORTED)
+        return SimpleNamespace(
+            total=gpu.memory_total,
+            used=gpu.memory_used,
+            free=gpu.memory_total - gpu.memory_used,
+        )
+
+    def nvmlDeviceGetUtilizationRates(self, handle: int) -> SimpleNamespace:
+        self._check()
+        gpu = self.gpus[handle]
+        if gpu.utilization is None:
+            raise pynvml.NVMLError(pynvml.NVML_ERROR_NOT_SUPPORTED)
+        return SimpleNamespace(gpu=gpu.utilization, memory=0)
+
+
+@pytest.fixture(autouse=True)
+def fake_nvml(monkeypatch: pytest.MonkeyPatch) -> FakeNvml:
+    """Stand in for NVML in every test, with no GPU until the test adds one.
+
+    So a machine that has GPUs runs the suite as one that has none.
+    It patches `pynvml` in this process only.
+    A worker process that a test starts reads the real NVML.
+    """
+    fake = FakeNvml()
+    for name in FakeNvml.FUNCTIONS:
+        monkeypatch.setattr(pynvml, name, getattr(fake, name))
+    return fake
 
 
 # --------------------------------------------------------------------------

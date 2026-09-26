@@ -21,7 +21,8 @@ from ds_service_client import DsServiceClient, NoTaskAvailable
 from .utils import gen_error_id, RemoteExecutionError, LOG_FORMAT, LOG_LEVEL
 from .monitors import (
     DEFAULT_MONITOR_INTERVAL_S,
-    Monitor,
+    BaseMonitor,
+    start_gpu_monitor,
     start_host_monitor,
     start_slurm_job_monitor,
 )
@@ -138,7 +139,7 @@ class PilotWorker:
         # has still said where it died.
         self._publish_identity(slurm_job_id, hostname, pid)
 
-        self.monitors: list[Monitor] = []
+        self.monitors: list[BaseMonitor] = []
         self._start_monitors(hostname, slurm_job_id, monitor_interval)
 
         self.actor_instance: Any | None
@@ -215,9 +216,10 @@ class PilotWorker:
     def _start_monitors(
         self, hostname: str, slurm_job_id: int, interval: float
     ) -> None:
-        """Monitor this node and this job on it, unless a peer here already does."""
+        """Monitor this node, the job and its GPUs on it, unless a peer does."""
         # The counter hands out distinct values,
-        # so exactly one worker per job per node sees 1 and takes both subjects.
+        # so exactly one worker per job per node sees 1,
+        # and takes the node, the job on it and the job's GPUs.
         # The counter key holds the job id,
         # because counters never reset while the server runs,
         # and a node that a later pilot job lands on would otherwise get no sampler.
@@ -238,6 +240,13 @@ class PilotWorker:
                 self.client, slurm_job_id, hostname, interval, self.logger
             )
         )
+        # None on a node where NVML finds no GPU for this job.
+        gpu_monitor = start_gpu_monitor(
+            self.client, slurm_job_id, hostname, interval, self.logger
+        )
+        if gpu_monitor is not None:
+            self.logger.info("Monitoring the GPUs of slurm job %s", slurm_job_id)
+            self.monitors.append(gpu_monitor)
 
     def _get_actor_ctor_arg(self, key: str, default: Any) -> Any:
         """Read one cloudpickled constructor argument from the map."""

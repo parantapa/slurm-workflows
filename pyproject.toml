@@ -25,6 +25,8 @@ dependencies = [
     "cloudpickle",
     "typeguard>=3",
     "psutil",
+    # NVIDIA's own NVML bindings, which the GPU monitor reads.
+    "nvidia-ml-py",
     "numpy",
     # The terminal UI `swtop` runs in.
     "textual",

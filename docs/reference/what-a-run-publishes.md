@@ -84,7 +84,8 @@ A worker that fails to build its actor publishes its exit too.
 A process that dies of SIGKILL, or with its node, publishes nothing.
 Nothing removes these keys either.
 
-Workers also sample the node they run on and the Slurm job they belong to.
+Workers also sample the node they run on, the Slurm job they belong to,
+and the GPUs that job can see.
 Every 5 seconds they append to these `ds-service` time series:
 
 - `host_free_memory:<hostname>`
@@ -94,12 +95,51 @@ Every 5 seconds they append to these `ds-service` time series:
 - `slurm_job_memory:<job-id>:<hostname>`
 - `slurm_job_cpu:<job-id>:<hostname>`
 
+On a node where the job can see a GPU,
+the same worker also samples each GPU it can see,
+and appends to these time series,
+where `<gpu>` is the index NVML gives the GPU, as `nvidia-smi` shows it:
+
+| Series | Value |
+| --- | --- |
+| `slurm_job_gpu_memory_used:<job-id>:<hostname>:<gpu>` | GPU memory in use, in bytes |
+| `slurm_job_gpu_memory_free:<job-id>:<hostname>:<gpu>` | GPU memory available, in bytes |
+| `slurm_job_gpu_utilization:<job-id>:<hostname>:<gpu>` | Percent of the driver's last sample period, 1/6 s to 1 s, in which a kernel ran on the GPU |
+
+The type of each GPU is text, which a time series cannot hold.
+So it goes in the map, under `slurm_job_gpu_info:<job-id>:<hostname>:<gpu>`,
+as a JSON object:
+
+| Field | Value |
+| --- | --- |
+| `name` | The GPU's type, such as `NVIDIA A100-SXM4-80GB` |
+| `uuid` | The GPU's UUID |
+| `memory_total` | The GPU's memory, in bytes, or `null` where the GPU does not report it |
+
+The worker writes this key when it first sees the GPU,
+and again only if a field changes.
+A measurement the GPU does not support,
+such as the utilization of a MIG instance,
+has no points in its series.
+
+The worker reads the GPUs through NVML, the NVIDIA driver's library,
+with the `nvidia-ml-py` package.
+A node with no NVIDIA driver, or where NVML lists no GPU,
+publishes none of these keys.
+NVML ignores `CUDA_VISIBLE_DEVICES`.
+On a cluster that constrains devices through cgroups,
+it lists the GPUs of the job's step on that node.
+On a cluster that does not, it lists every GPU on the node,
+including those of other jobs.
+
 One worker per job does this on each node the job runs on.
-It samples both the node and the part of the job on that node.
+It samples the node, the part of the job on that node,
+and the GPUs that part can see.
 The workers elect it with the `host_monitor:<hostname>:<job-id>` counter.
 Two pilot jobs that share a node therefore both sample it,
 into the same host series.
-[`swtop`](swtop.md) displays the result.
+[`swtop`](swtop.md) displays the host and job series.
+It does not display the GPU series yet.
 
 Why a run publishes in these two halves rather than one
 is in [The trail a run leaves](../explanation/the-trail-a-run-leaves.md).
