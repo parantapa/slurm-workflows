@@ -562,11 +562,13 @@ each against its own `patience`, floor and ceiling.
 
 ### Monitoring (`monitors.py`, `swtop.py`)
 
-**One worker per subject samples, and a counter decides which.**
+**One worker per job per node samples, and a counter decides which.**
 `counter_get_next_value` hands out distinct, gap-free values.
-The worker told 1 for `host_monitor:<hostname>:<job-id>` takes the node for its job,
-and the one told 1 for `slurm_job_monitor:<job-id>` takes the job.
-`_start_monitors` says why the host counter carries the job id.
+The worker told 1 for `host_monitor:<hostname>:<job-id>` takes the node
+and the part of its job on that node.
+A job's cgroup is local to each node,
+so the job series carry the hostname as well as the job id.
+`_start_monitors` says why the counter carries the job id.
 No lock, no designated rank, and no need for the workers to know each other.
 Nothing hands a subject back when that worker dies:
 the series stops, and `swtop` marks it stale.

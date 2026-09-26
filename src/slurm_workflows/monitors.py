@@ -1,4 +1,4 @@
-"""Background sampling of a compute node and of a Slurm job.
+"""Background sampling of a compute node and of the Slurm job on that node.
 
 Each thread appends to a `ds-service` time series,
 one series per measurement per subject.
@@ -28,7 +28,8 @@ CGROUP_ROOT = Path("/sys/fs/cgroup")
 HOST_FILESYSTEMS = {"dev_shm": "/dev/shm", "tmp": "/tmp"}
 
 # Time series keys, as `<prefix><subject>`.
-# The subject is the hostname for a host and the job id for a job.
+# The subject is the hostname for a host,
+# and `<job-id>:<hostname>` for the part of a job on one node.
 HOST_SERIES = {
     "free_memory": "host_free_memory:",  # bytes
     "load_average": "host_load_average:",  # 1-minute load average
@@ -36,10 +37,28 @@ HOST_SERIES = {
     "tmp_used": "host_tmp_used:",  # percent of /tmp in use
 }
 JOB_SERIES = {
-    # The cgroup's own total, or summed RSS where that cannot be read.
+    # The cgroup's own total on one node, or summed RSS where that cannot be read.
     "memory": "slurm_job_memory:",  # bytes
     "cpu": "slurm_job_cpu:",  # cores in use, averaged over the interval
 }
+
+# Splits the job id from the hostname in the subject of a job series.
+# A Slurm job id holds no colon, so the first one is the separator.
+JOB_SUBJECT_SEPARATOR = ":"
+
+
+def job_subject(slurm_job_id: str | int, hostname: str) -> str:
+    """The subject of the series that sample one job on one node."""
+    return f"{slurm_job_id}{JOB_SUBJECT_SEPARATOR}{hostname}"
+
+
+def split_job_subject(subject: str) -> tuple[str, str]:
+    """The job id and the hostname in `subject`.
+
+    The hostname is "" for a subject with no separator in it.
+    """
+    slurm_job_id, _, hostname = subject.partition(JOB_SUBJECT_SEPARATOR)
+    return slurm_job_id, hostname
 
 
 def sample_host() -> dict[str, float]:
@@ -261,16 +280,19 @@ def start_host_monitor(
 def start_slurm_job_monitor(
     client: DsServiceClient,
     slurm_job_id: str | int,
+    hostname: str,
     interval: float = DEFAULT_MONITOR_INTERVAL_S,
     logger: logging.Logger | None = None,
 ) -> Monitor:
-    """Start sampling this job's cgroup, and return the running thread.
+    """Start sampling this job's cgroup on this node, and return the running thread.
 
+    `hostname` must name this node.
+    The subject is `<job-id>:<hostname>`.
     `interval` is the time between readings, in seconds.
     """
     monitor = Monitor(
         client=client,
-        subject=str(slurm_job_id),
+        subject=job_subject(slurm_job_id, hostname),
         prefixes=JOB_SERIES,
         sampler=CgroupSampler().sample,
         interval=interval,

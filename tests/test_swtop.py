@@ -388,15 +388,19 @@ class TestCollectWorkerJobs:
         for name, _ in (exited, running):
             publish_pilot_job_event(ds_client, name, "start")
         for _, job in (exited, running):
-            ds_client.time_series_append(
-                f"slurm_job_memory:{job.job_id}", 1.0, _now_utc()
-            )
+            for hostname in ["node-1", "node-2"]:
+                ds_client.time_series_append(
+                    f"slurm_job_memory:{job.job_id}:{hostname}", 1.0, _now_utc()
+                )
 
         publish_pilot_job_event(ds_client, exited[0], "exit")
         snapshot = collector.snapshot()
 
         assert [j.name for j in snapshot.worker_jobs] == [running[0]]
-        assert [j.subject for j in snapshot.jobs] == [str(running[1].job_id)]
+        assert [j.subject for j in snapshot.jobs] == [
+            f"{running[1].job_id}:node-1",
+            f"{running[1].job_id}:node-2",
+        ]
 
 
 class TestCollectWorkers:
@@ -566,7 +570,9 @@ class TestCollectMonitored:
             lambda: bool(ds_client.time_series_get("host_free_memory:testhost"))
         )
         # The job monitor is a second thread, and starts after the host one.
-        assert wait_for(lambda: bool(ds_client.time_series_get("slurm_job_memory:42")))
+        assert wait_for(
+            lambda: bool(ds_client.time_series_get("slurm_job_memory:42:testhost"))
+        )
 
         snapshot = collector.snapshot()
 
@@ -576,7 +582,7 @@ class TestCollectMonitored:
         assert not host.stale
 
         (job,) = snapshot.jobs
-        assert job.subject == "42"
+        assert job.subject == "42:testhost"
         assert job.values["memory"] > 0
         worker.close()
 
@@ -686,8 +692,8 @@ class TestRender:
             ("host_load_average:node-1", 3.5),
             ("host_dev_shm_used:node-1", 12.25),
             ("host_tmp_used:node-1", 46.9),
-            ("slurm_job_memory:1846231", 1024**3),
-            ("slurm_job_cpu:1846231", 12.4),
+            ("slurm_job_memory:1846231:node-1", 1024**3),
+            ("slurm_job_cpu:1846231:node-1", 12.4),
         ]:
             ds_client.time_series_append(key, value, _now_utc())
 
@@ -709,6 +715,33 @@ class TestRender:
 
         assert "node-1 (stale)" in out
         assert "hosts (1)" in out
+
+    def test_each_node_of_a_job_is_a_row_of_its_own(self, collector, ds_client):
+        for hostname, memory in [("nodeone", 1024**3), ("nodetwo", 2 * 1024**3)]:
+            ds_client.time_series_append(
+                f"slurm_job_memory:1846231:{hostname}", memory, _now_utc()
+            )
+            ds_client.time_series_append(
+                f"slurm_job_cpu:1846231:{hostname}", 40.0, _now_utc()
+            )
+
+        out = render(collector.snapshot())
+
+        assert "slurm jobs (2)" in out
+        rows = [line.split() for line in out.splitlines() if line.startswith("1846231")]
+        assert rows == [
+            ["1846231", "nodeone", "1.0G", "40.0", "cores"],
+            ["1846231", "nodetwo", "2.0G", "40.0", "cores"],
+        ]
+
+    def test_a_stale_node_of_a_job_is_labelled(self, collector, ds_client):
+        old = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        ds_client.time_series_append("slurm_job_memory:1846231:nodeone", 5.0, old)
+
+        out = render(collector.snapshot())
+
+        row = next(line for line in out.splitlines() if line.startswith("1846231"))
+        assert row.split() == ["1846231", "(stale)", "nodeone", "-", "-"]
 
     def test_a_missing_measurement_is_a_dash(self, collector, ds_client):
         # A subject name without a dash of its own,

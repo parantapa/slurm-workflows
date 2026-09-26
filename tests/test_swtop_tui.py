@@ -109,7 +109,7 @@ def snapshot(**kwargs) -> Snapshot:
         hosts=[
             SubjectInfo("node-1", {"free_memory": 2 * 1024**3, "load_average": 3.5})
         ],
-        jobs=[SubjectInfo("42", {"memory": 1024**3, "cpu": 12.4})],
+        jobs=[SubjectInfo("42:node-1", {"memory": 1024**3, "cpu": 12.4})],
         tasks=[TaskInfo("run.task.0", "train-7", "Running", "run.job.cpu.0")],
     )
     return replace(filled, **kwargs)
@@ -254,7 +254,7 @@ class TestDisplay:
                     ]
                 ]
                 assert rows_of(app, "hosts")[0][:3] == ["node-1", "2.0G", "3.50"]
-                assert rows_of(app, "jobs") == [["42", "1.0G", "12.4 cores"]]
+                assert rows_of(app, "jobs") == [["42", "node-1", "1.0G", "12.4 cores"]]
                 assert rows_of(app, "tasks") == [
                     ["train-7", "run.task.0", "Running", "run.job.cpu.0"]
                 ]

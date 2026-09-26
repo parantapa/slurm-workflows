@@ -56,7 +56,7 @@ The terminal UI shows these areas, from top to bottom:
 The text frames show the same blocks one after another:
 
 ```
-tasks  waiting 0  ready 118  running 40  finished 240  failed 2  canceled 0  total 400
+tasks  waiting 0  ready 78  running 80  finished 240  failed 2  canceled 0  total 400
 
 explore  [###############---------]  242/400 point  60%  working
 
@@ -65,7 +65,7 @@ NAME              GROUP  JOB      SUBMITTED                  STARTED
 my-run.job.cpu.0  cpu    1846231  2026-01-30T10:58:12-05:00  2026-01-30T10:59:40-05:00
 my-run.job.cpu.1  cpu    1846232  2026-01-30T10:58:12-05:00  -
 
-workers (40)
+workers (80)
 NAME              GROUP  HOST      JOB      PID    STARTED
 my-run.job.cpu.0  cpu    udc-an28  1846231  31402  2026-01-30T10:59:52-05:00
 my-run.job.cpu.0  cpu    udc-an28  1846231  31403  2026-01-30T10:59:52-05:00
@@ -76,9 +76,10 @@ HOST      FREE MEM  LOAD   /dev/shm  /tmp
 udc-an28  212.4G    39.80  0.0%      12.5%
 udc-an29  9.1G      40.10  0.0%      98.2%
 
-slurm jobs (1)
-JOB      MEMORY  CPU
-1846231  148.2G  39.4 cores
+slurm jobs (2)
+JOB      HOST      MEMORY  CPU
+1846231  udc-an28  148.2G  39.4 cores
+1846231  udc-an29  364.7G  39.9 cores
 
 tasks (400)
 NAME     TASK ID         STATE    WORKER
@@ -154,7 +155,7 @@ A header line names the server and the time of the reading:
 ```
 swtop  10.0.0.1:5051  2026-01-30 11:04:57
 
-tasks  waiting 0  ready 118  running 40  finished 240  failed 2  canceled 0  total 400
+tasks  waiting 0  ready 78  running 80  finished 240  failed 2  canceled 0  total 400
 
 explore  [###############---------]  242/400 point  60%  working
 ...
@@ -205,14 +206,18 @@ The two blocks show these columns:
 | `FREE MEM` | Memory available on the node, including the cache the kernel can reclaim |
 | `LOAD` | The node's 1 minute load average, over all its cpus |
 | `/dev/shm`, `/tmp` | How full each node-local scratch filesystem is |
+| `HOST` | The node the reading comes from |
 | `MEMORY` | The job's cgroup total on that node: every process and thread of the job, not just the workers |
-| `CPU` | Cores the job used, averaged since the previous sample |
+| `CPU` | Cores the job used on that node, averaged since the previous sample |
 
 `LOAD` reads against the node's core count.
 `bii` has 40 cores,
 so 39.80 is a full node and 80 is oversubscribed twice over.
-`CPU` reads against what the job asked for,
-so `--nodes=1 --ntasks-per-node=40 --cpus-per-task=1` sits near 40.
+The slurm jobs block has one row for each node of each job.
+A job on 4 nodes shows 4 rows,
+and its total is the sum of their `MEMORY` or `CPU`.
+`CPU` reads against what the job asked for on each node,
+so `--ntasks-per-node=40 --cpus-per-task=1` sits near 40 on every row.
 The first reading of a job is 0,
 since the monitor has no earlier sample to difference against.
 A `/tmp` that climbs toward 100% takes the whole node down with it,
@@ -221,7 +226,7 @@ not only the job that filled it.
 A subject marked `(stale)` has no reading in the last minute.
 The worker that sampled it is gone:
 its job ended, or something killed it.
-The remaining workers do not take over the job,
+The remaining workers do not take over that node,
 so a run that scales down loses the readings for what it gave up.
 A node comes back to life when another pilot job lands on it,
 since each pilot job samples every node it runs on.

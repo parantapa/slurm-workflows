@@ -557,7 +557,7 @@ class TestMonitors:
     def test_the_first_worker_takes_on_both(self, ds_service_address, tmp_path):
         worker = make_worker(ds_service_address, tmp_path)
 
-        assert [m.subject for m in worker.monitors] == ["testhost", "42"]
+        assert [m.subject for m in worker.monitors] == ["testhost", "42:testhost"]
         worker.close()
 
     def test_a_peer_on_the_same_node_and_job_takes_on_neither(
@@ -576,8 +576,8 @@ class TestMonitors:
         first = make_worker(ds_service_address, tmp_path)
         second = make_worker(ds_service_address, tmp_path, hostname="othernode")
 
-        # Same job, so only the host is left to watch.
-        assert [m.subject for m in second.monitors] == ["othernode"]
+        # Same job, but each node samples its own part of it.
+        assert [m.subject for m in second.monitors] == ["othernode", "42:othernode"]
         first.close()
         second.close()
 
@@ -588,7 +588,7 @@ class TestMonitors:
         first = make_worker(ds_service_address, tmp_path)
         second = make_worker(ds_service_address, tmp_path, slurm_job_id=99)
 
-        assert [m.subject for m in second.monitors] == ["testhost", "99"]
+        assert [m.subject for m in second.monitors] == ["testhost", "99:testhost"]
         first.close()
         second.close()
 
@@ -619,7 +619,6 @@ class TestMonitors:
         second = make_worker(ds_service_address, tmp_path, name="w-2")
 
         assert ds_client.counter_get_current_value("host_monitor:testhost:42") == 2
-        assert ds_client.counter_get_current_value("slurm_job_monitor:42") == 2
         first.close()
         second.close()
 
@@ -632,7 +631,9 @@ class TestMonitors:
         assert wait_for(
             lambda: bool(ds_client.time_series_get("host_free_memory:testhost"))
         )
-        assert wait_for(lambda: bool(ds_client.time_series_get("slurm_job_memory:42")))
+        assert wait_for(
+            lambda: bool(ds_client.time_series_get("slurm_job_memory:42:testhost"))
+        )
         worker.close()
 
     def test_a_failed_actor_leaves_none_of_them_running(

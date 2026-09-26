@@ -21,7 +21,7 @@ from contextlib import asynccontextmanager
 import click
 from ds_service_client import DsServiceClientAsync, TaskState, TaskStateError
 
-from .monitors import HOST_SERIES, JOB_SERIES
+from .monitors import HOST_SERIES, JOB_SERIES, split_job_subject
 from .slurm_pilot_executor import (
     PROGRESS_DISPLAY_KEY,
     PROGRESS_SERIES_PREFIX,
@@ -141,7 +141,7 @@ class TaskInfo:
 
 @dataclass
 class SubjectInfo:
-    """The latest reading of one monitored host or job.
+    """The latest reading of one monitored host, or of one job on one node.
 
     `values` is empty when the subject's series exist but hold nothing recent.
     A dead monitor looks like this.
@@ -184,6 +184,7 @@ class ProgressInfo:
 class Snapshot:
     """One poll's worth of server state.
 
+    `jobs` holds one entry per Slurm job per node it runs on.
     `worker_jobs`, `workers` and `jobs` leave out
     the pilot jobs and the workers that published their exit,
     and the Slurm jobs of those pilot jobs.
@@ -277,7 +278,11 @@ class Collector:
             workers=[w for w in workers if w.worker_id not in exited_workers],
             tasks=tasks,
             hosts=hosts,
-            jobs=[j for j in jobs if j.subject not in exited_slurm_jobs],
+            jobs=[
+                j
+                for j in jobs
+                if split_job_subject(j.subject)[0] not in exited_slurm_jobs
+            ],
         )
 
     async def _exited(self, prefix: str) -> set[str]:
@@ -555,7 +560,7 @@ def _cell(values: dict[str, float], name: str, fmt: Callable[[float], str]) -> s
 PILOT_JOB_COLUMNS = ["NAME", "GROUP", "JOB", "SUBMITTED", "STARTED"]
 WORKER_COLUMNS = ["NAME", "GROUP", "HOST", "JOB", "PID", "STARTED"]
 HOST_COLUMNS = ["HOST", "FREE MEM", "LOAD", "/dev/shm", "/tmp"]
-JOB_COLUMNS = ["JOB", "MEMORY", "CPU"]
+JOB_COLUMNS = ["JOB", "HOST", "MEMORY", "CPU"]
 TASK_COLUMNS = ["NAME", "TASK ID", "STATE", "WORKER"]
 
 
@@ -629,18 +634,26 @@ def host_rows(snapshot: Snapshot) -> list[tuple[str, list[str]]]:
 
 
 def job_rows(snapshot: Snapshot) -> list[tuple[str, list[str]]]:
-    """One row per monitored Slurm job, keyed by its job id."""
-    return [
-        (
-            job.subject,
-            [
-                _subject(job),
-                _cell(job.values, "memory", _bytes),
-                _cell(job.values, "cpu", lambda v: f"{v:.1f} cores"),
-            ],
+    """One row per monitored Slurm job per node, keyed by `<job-id>:<hostname>`."""
+    rows = []
+    for job in snapshot.jobs:
+        slurm_job_id, hostname = split_job_subject(job.subject)
+        if job.stale:
+            slurm_job_id = f"{slurm_job_id} (stale)"
+        rows.append(
+            (
+                job.subject,
+                [
+                    slurm_job_id,
+                    # A subject with no hostname was written by a worker
+                    # from before the job series were per node.
+                    hostname or UNKNOWN,
+                    _cell(job.values, "memory", _bytes),
+                    _cell(job.values, "cpu", lambda v: f"{v:.1f} cores"),
+                ],
+            )
         )
-        for job in snapshot.jobs
-    ]
+    return rows
 
 
 def task_rows(snapshot: Snapshot) -> list[tuple[str, list[str]]]:

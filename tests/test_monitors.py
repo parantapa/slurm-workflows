@@ -24,6 +24,8 @@ from slurm_workflows.monitors import (
     sample_host,
     start_host_monitor,
     start_slurm_job_monitor,
+    job_subject,
+    split_job_subject,
 )
 
 
@@ -238,22 +240,44 @@ class TestStartHelpers:
         )
         monitor.stop()
 
-    def test_the_job_monitor_writes_the_job_series(self, ds_client):
-        monitor = start_slurm_job_monitor(ds_client, 12345, interval=60.0)
+    def test_the_job_monitor_writes_the_job_series_of_its_node(self, ds_client):
+        monitor = start_slurm_job_monitor(ds_client, 12345, "node-1", interval=60.0)
 
         assert wait_for(
-            lambda: bool(ds_client.time_series_get("slurm_job_memory:12345"))
+            lambda: bool(ds_client.time_series_get("slurm_job_memory:12345:node-1"))
         )
-        assert ds_client.time_series_get("slurm_job_cpu:12345")[-1].value == 0.0
+        assert ds_client.time_series_get("slurm_job_cpu:12345:node-1")[-1].value == 0.0
         monitor.stop()
 
     def test_a_numeric_job_id_keys_the_series_as_text(self, ds_client):
-        monitor = start_slurm_job_monitor(ds_client, 7, interval=60.0)
+        monitor = start_slurm_job_monitor(ds_client, 7, "node-1", interval=60.0)
         monitor.stop()
 
         assert ds_client.time_series_search_key("^slurm_job_memory:") == [
-            "slurm_job_memory:7"
+            "slurm_job_memory:7:node-1"
         ]
+
+    def test_two_nodes_of_one_job_write_series_of_their_own(self, ds_client):
+        first = start_slurm_job_monitor(ds_client, 7, "node-1", interval=60.0)
+        second = start_slurm_job_monitor(ds_client, 7, "node-2", interval=60.0)
+        first.stop()
+        second.stop()
+
+        assert sorted(ds_client.time_series_search_key("^slurm_job_memory:")) == [
+            "slurm_job_memory:7:node-1",
+            "slurm_job_memory:7:node-2",
+        ]
+
+
+class TestJobSubject:
+    def test_a_subject_splits_back_into_its_job_and_its_node(self):
+        assert split_job_subject(job_subject(1846231, "udc-an28")) == (
+            "1846231",
+            "udc-an28",
+        )
+
+    def test_a_subject_without_a_node_has_an_empty_hostname(self):
+        assert split_job_subject("1846231") == ("1846231", "")
 
 
 def test_the_two_series_maps_do_not_overlap():

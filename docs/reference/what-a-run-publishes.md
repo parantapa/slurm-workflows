@@ -91,13 +91,12 @@ Every 5 seconds they append to these `ds-service` time series:
 - `host_load_average:<hostname>`
 - `host_dev_shm_used:<hostname>`
 - `host_tmp_used:<hostname>`
-- `slurm_job_memory:<job-id>`
-- `slurm_job_cpu:<job-id>`
+- `slurm_job_memory:<job-id>:<hostname>`
+- `slurm_job_cpu:<job-id>:<hostname>`
 
-One worker per job does this for the job,
-and one worker per job does it for each node the job runs on.
-The workers elect them with the `host_monitor:<hostname>:<job-id>`
-and `slurm_job_monitor:<job-id>` counters.
+One worker per job does this on each node the job runs on.
+It samples both the node and the part of the job on that node.
+The workers elect it with the `host_monitor:<hostname>:<job-id>` counter.
 Two pilot jobs that share a node therefore both sample it,
 into the same host series.
 [`swtop`](swtop.md) displays the result.

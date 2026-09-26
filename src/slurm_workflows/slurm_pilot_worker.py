@@ -110,7 +110,8 @@ class PilotWorker:
         Puts this worker's identity in the environment,
         so the actor and every task it runs can read it.
         Publishes that identity on the server,
-        and starts each monitor that no other worker of this job has taken.
+        and starts the monitors of this node,
+        unless another worker of this job on this node has taken them.
         Whatever importing or constructing the actor raises propagates,
         after this worker publishes its exit
         and closes its own monitors and client.
@@ -214,30 +215,29 @@ class PilotWorker:
     def _start_monitors(
         self, hostname: str, slurm_job_id: int, interval: float
     ) -> None:
-        """Monitor this node and this job, unless another worker of this job already does."""
+        """Monitor this node and this job on it, unless a peer here already does."""
         # The counter hands out distinct values,
-        # so exactly one worker sees 1 and takes the subject.
-        # The host counter key holds the job id,
+        # so exactly one worker per job per node sees 1 and takes both subjects.
+        # The counter key holds the job id,
         # because counters never reset while the server runs,
         # and a node that a later pilot job lands on would otherwise get no sampler.
         # Two live jobs on one node both sample it,
-        # which only adds points to the same series.
+        # which only adds points to the same host series.
         # See the developer notes, Monitoring.
         counter = f"host_monitor:{hostname}:{slurm_job_id}"
-        if self.client.counter_get_next_value(counter) == 1:
-            self.logger.info("Monitoring host %s", hostname)
-            self.monitors.append(
-                start_host_monitor(self.client, hostname, interval, self.logger)
-            )
+        if self.client.counter_get_next_value(counter) != 1:
+            return
 
-        counter = f"slurm_job_monitor:{slurm_job_id}"
-        if self.client.counter_get_next_value(counter) == 1:
-            self.logger.info("Monitoring slurm job %s", slurm_job_id)
-            self.monitors.append(
-                start_slurm_job_monitor(
-                    self.client, slurm_job_id, interval, self.logger
-                )
+        self.logger.info("Monitoring host %s", hostname)
+        self.monitors.append(
+            start_host_monitor(self.client, hostname, interval, self.logger)
+        )
+        self.logger.info("Monitoring slurm job %s on %s", slurm_job_id, hostname)
+        self.monitors.append(
+            start_slurm_job_monitor(
+                self.client, slurm_job_id, hostname, interval, self.logger
             )
+        )
 
     def _get_actor_ctor_arg(self, key: str, default: Any) -> Any:
         """Read one cloudpickled constructor argument from the map."""
