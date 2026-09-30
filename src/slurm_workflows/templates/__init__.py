@@ -63,6 +63,8 @@ def parse_file(prefix: str, path: Path) -> dict[str, TemplateText]:
                 body_end = len(text)
             pos = body_end
 
+            # 3 is the length of `{#-` and of `-#}`.
+            # The header is a JSON5 object without its braces.
             header = text[head_start + 3 : head_end]
             header = "{" + header + "}"
             header = json5.loads(header)
@@ -153,6 +155,7 @@ def render_template(
     server_address: str,
     work_dir: str | Path,
     python_paths_json: str,
+    restart_exit_code: int,
 ) -> str: ...
 
 

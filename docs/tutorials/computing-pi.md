@@ -115,6 +115,24 @@ if __name__ == "__main__":
     main()
 ```
 
+Notice `executor.define_job_group(name="bii", ...)`.
+It names the job group `bii`,
+and gives it the `sbatch` arguments and the setup script.
+
+Notice `executor.scale_jobs("bii", 1)`.
+It asks for one pilot job of the `bii` job group.
+
+Notice that `executor.submit("bii", do_step_pi, ...)` returns a task at once.
+The task runs `do_step_pi` with the keyword arguments we pass.
+
+Notice `executor.set_task_name(task, f"task-{i:04d}")`.
+It gives each task a name, from `task-0000` up.
+
+Notice that `executor.wait(tasks, ...)` blocks until every task is back.
+
+Notice that `task.output` holds the task output of each task after `wait`.
+Here that is the partial sum that `do_step_pi` returned.
+
 ## Run it
 
 We run the program from the root of that clone:
@@ -149,6 +167,8 @@ Behind that one job, this happens, in order:
 Notice that the program submits the 800 tasks before a single worker exists.
 The tasks wait on the queue until a pilot job starts and its workers claim them.
 We time nothing by hand.
+When the last task is back, the program prints one line that starts with `pi = `,
+followed by the estimate.
 
 We ran a thousand-million-slice integration
 across 80 workers on two compute nodes,

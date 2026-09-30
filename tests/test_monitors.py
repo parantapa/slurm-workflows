@@ -123,7 +123,6 @@ class TestCgroupSampler:
 
         # `sleep` can overrun, so the measured interval is longer
         # and the rate lower than 2.
-        # The bound asks only that a busy cgroup reports cores in use.
         assert values["cpu"] > 0.5, "a busy cgroup reports cores in use"
 
     def test_a_counter_that_restarts_reports_no_time(self, tmp_path):
@@ -249,7 +248,8 @@ class TestMonitor:
             sampler=sample_host,
         )
 
-        monitor.stop()  # must not raise
+        # Must not raise.
+        monitor.stop()
 
         assert not monitor.is_alive()
 
@@ -331,6 +331,8 @@ class TestNvmlSession:
             with nvml_session():
                 pass
 
+        # `NVMLError` sets `value` in `__new__`, where pyright cannot see it,
+        # hence `getattr`.
         assert getattr(raised.value, "value") == pynvml.NVML_ERROR_LIBRARY_NOT_FOUND
 
 

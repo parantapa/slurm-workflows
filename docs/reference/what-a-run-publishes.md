@@ -7,20 +7,11 @@ The executor writes some of it, each worker writes some of it,
 and the monitors write the rest.
 [`swtop`](swtop.md) is what reads it back.
 
-## The environment a task sees
-
-Inside a task, these environment variables exist:
-
-- `PILOT_JOB_NAME`, the pilot job's name, for example `demo.job.cpu.0`
-- `PILOT_JOB_GROUP`, the job group name
-- `PILOT_WORKER_ID`, the id the worker claims tasks under
-- `DS_SERVER_ADDRESS`, the server address
-- plus the usual Slurm variables (`SLURM_JOB_ID`, ...)
-
-The worker sets the first four when it starts,
-before it builds its actor and before it claims a task.
+The environment variables a task sees are in [`SlurmPilotExecutor`](executor.md#the-environment-a-task-sees).
 
 ## Keys and time series
+
+### Pilot job and worker keys
 
 **The executor publishes each pilot job as it submits it**,
 under `pilot_job_info:<job-name>`, as a JSON object:
@@ -31,11 +22,6 @@ under `pilot_job_info:<job-name>`, as a JSON object:
 | `group` | The job group whose queue it will serve |
 | `slurm_job_id` | The job `sbatch` returned |
 | `submit_time` | When it was submitted, an ISO 8601 timestamp with an offset |
-
-**A `mapreduce` call publishes one task per item**,
-on a queue of its own, under `<executor-name>.mapreduce.`.
-Those tasks outlive the call.
-[`mapreduce`](mapreduce.md) covers the ids and what they hold.
 
 **Each worker publishes where it runs when it starts**,
 under `worker_info:<worker-id>`,
@@ -50,6 +36,7 @@ so anything can read it:
 | `slurm_job_id` | The job it is running in |
 | `hostname` | The compute node it landed on |
 | `pid` | Its process id on that node |
+| `restart_generation` | The value of the `restart_generation:<group>` counter when it started |
 | `start_time` | When it started, an ISO 8601 timestamp with an offset |
 
 The worker id is what the worker claims tasks under
@@ -80,9 +67,36 @@ A pilot job or a worker that Slurm cancels
 or that reaches its time limit still publishes its exit.
 Slurm sends it SIGTERM first,
 and it publishes before Slurm sends SIGKILL.
-A worker that fails to build its actor publishes its exit too.
+A worker that fails to build its actor publishes its exit too,
+and so does a worker that restarts.
 A process that dies of SIGKILL, or with its node, publishes nothing.
 Nothing removes these keys either.
+
+### `mapreduce` tasks
+
+**A `mapreduce` call publishes one task per item**,
+on a queue of its own, under `<executor-name>.mapreduce.`.
+Those tasks outlive the call.
+[`mapreduce`](mapreduce.md) covers the ids and what they hold.
+
+### The restart counter
+
+**The executor counts the restarts of each job group**
+in the counter `restart_generation:<group>`.
+[`restart_jobs`](executor.md#restart_jobs) adds one to it,
+and returns the new value.
+A counter that does not exist reads as 0.
+Each worker reads it when it starts,
+before it publishes `worker_info:<worker-id>`,
+and records the value there as `restart_generation`.
+A worker that sees the counter move past that value
+publishes its exit after its current task, and exits.
+The worker script then starts a new worker in its place.
+The new worker has a new pid,
+so it publishes a `worker_info:` key of its own,
+under a new worker id.
+
+### Host, job and GPU series
 
 Workers also sample the node they run on, the Slurm job they belong to,
 and the GPUs that job can see.
@@ -135,9 +149,13 @@ including those of other jobs.
 One worker per job does this on each node the job runs on.
 It samples the node, the part of the job on that node,
 and the GPUs that part can see.
-The workers elect it with the `host_monitor:<hostname>:<job-id>` counter.
+The workers elect it with the `host_monitor:<hostname>:<job-id>:<generation>` counter,
+where `<generation>` is the worker's `restart_generation`.
 Two pilot jobs that share a node therefore both sample it,
 into the same host series.
+After a restart, the new workers elect a new monitor.
+Until the worker that won the old election restarts,
+it samples the node as well, into the same series.
 [`swtop`](swtop.md) displays the host and job series.
 It does not display the GPU series yet.
 
@@ -179,9 +197,9 @@ and the attribute `executor.work_dir` holds it:
 
 | File | Contents |
 | --- | --- |
-| `executor.log` | Pilot job submission and cancellation from the executor's side, a line for each `mapreduce` call, and each liveness check that could not run `squeue` |
+| `executor.log` | Pilot job submission and cancellation from the executor's side, a line for each `mapreduce` call, a line for each `restart_jobs` call and for the end of its wait, and each liveness check that could not run `squeue` |
 | `<job-name>.sh`, `<job-name>.sbatch` | The generated scripts |
-| `<job-name>-<job-id>-<rank>.out` | One per worker: setup-script output, task-by-task progress, full tracebacks |
+| `<job-name>-<job-id>-<rank>.out` | One per Slurm task, shared by each worker a restart starts in it: setup-script output, task-by-task progress, full tracebacks |
 | `<job-name>-<job-id>.out` | The pilot job's own output, and the worker's log too when the job holds a single Slurm task or runs a batch worker |
 
 `<job-name>` is `<executor-name>.job.<group>.<index>`,
@@ -211,7 +229,7 @@ Which of the two holds a worker's log depends on the job group's definition:
     and still gets four per-Slurm-task files.
 
     The batch file records which way a job went.
-    It opens with the Slurm task count the job decided on (`Num Slurm tasks: 4`),
+    It records the Slurm task count the job decided on (`Num Slurm tasks: 4`),
     says so when it redirects,
     and traces the `srun` command it ran.
 - **`is_batch_worker=True`** runs one worker directly on the batch host,

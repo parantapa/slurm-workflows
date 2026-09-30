@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 from pathlib import Path
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cache
 
@@ -69,7 +70,7 @@ def get_running_jobids() -> set[int]:
 
 
 def cancel_jobs(
-    job_ids: list[int],
+    job_ids: Sequence[int],
     term: bool = False,
     batch: bool = False,
     full: bool = False,

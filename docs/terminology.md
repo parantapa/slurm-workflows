@@ -74,6 +74,7 @@ so they are worth stating before the tables:
 | **partition** | Slurm's `--partition`. | Slurm | queue, pool |
 | **allocation** | What a running job holds. | Slurm | reservation, the job's resources |
 | **actor** | The object a worker builds once at startup. One worker, one actor. | this library | handler, service, model |
+| **restart generation** | The value of the `restart_generation:<group>` counter. `restart_jobs` adds one to it, and each worker records the value it read at startup. A restart replaces the worker, so a new worker has a new worker id. | this library | epoch, version, restart count |
 | **pool** | Every worker of one job group, or of the run. Say which. | this library | pool of nodes, slots |
 
 ### Driver against executor
@@ -188,7 +189,7 @@ One process, one name.
 | **the `ds-service` server**, short form **the server** | The one process everything talks through. | queue server, task queue server, task-queue server, pilot server, DS server, the queue |
 | **the map** | The key value datastructure, reached by `map_set` and `map_get`. | key value store, the store, key space |
 | **time series** | The datastructure `time_series_append` writes. | series alone, metric, stream |
-| **counter** | What `counter_get_next_value` hands out, which is how a monitor is elected. | sequence, ticket, lock |
+| **counter** | What `counter_get_next_value` hands out, which is how the workers elect a monitor and how `restart_jobs` requests a restart. | sequence, ticket, lock |
 | **key** | One entry in the map, quoted with its prefix. | field, entry, record |
 
 `ds-service` also has **journal** and **mutex** datastructures
@@ -248,7 +249,7 @@ because rule 4 leaves no room for a second word for the same thing.
 | **`unit`** | What the count counts. It counts tasks, unless something else is one per task. | this library | item, measure |
 | **monitor** | A sampling thread in `monitors.py`. | `monitors.py` | watcher, sampler |
 | **sampler** | The callable a monitor calls. | `sample_host`, `CgroupSampler` | reader, probe |
-| **subject** | The node, the job on one node, or one GPU of that job, that a monitor samples. | `SubjectInfo` | target, entity, resource |
+| **subject** | The node, the job on one node, or one GPU of that job, that a monitor samples. | `SubjectInfo`, `gpu_subject` | target, entity, resource |
 | **`swtop`** | The program. Call it by name. | the entry point | the monitor, the dashboard, the UI |
 | **block** | One of the five lists `swtop` shows: pilot jobs, workers, hosts, slurm jobs and tasks. | `swtop.BlockSpec`, `swtop_widgets.BlockTable` | panel, pane, table, widget |
 | **tab** | How the `swtop` terminal UI shows a block. | `swtop_widgets.block_pane` | pane, page |
@@ -288,10 +289,12 @@ or a results file written before the change.
 `PILOT_WORKER_ID` did not change.
 It holds a worker id, which is what it always held.
 
-Two identifiers kept a retired word.
+Some identifiers kept a retired word.
 The worker's logger is still named `worker_process`,
 and that name appears in every worker log line.
 `swtop.Snapshot` still holds the pilot jobs in its `worker_jobs` field.
+The test suite keeps more of them in its test names,
+such as `TestDefineWorker` and `TestScaleWorkers`.
 
 ## Applying this
 

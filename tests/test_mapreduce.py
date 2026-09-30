@@ -30,7 +30,7 @@ from worker_harness import make_worker, run_worker
 # --------------------------------------------------------------------------
 
 
-def identity(x):
+def identity[T](x: T) -> T:
     return x
 
 
@@ -47,7 +47,7 @@ def add_mod(acc: int, x: int, modulus: int = 1000) -> int:
     return (acc + x) % modulus
 
 
-def wrap(x):
+def wrap[T](x: T) -> list[T]:
     """Map one item to a one-item list, so `add` concatenates."""
     return [x]
 
@@ -62,7 +62,7 @@ def explode(x: int) -> NoReturn:
     raise ValueError(f"no good: {x}")
 
 
-def count_hits(path, threshold):
+def count_hits(path: str, threshold: float) -> int:
     """The map function the how-to guide shows."""
     with open(path) as fobj:
         return sum(1 for line in fobj if float(line.split(",")[2]) > threshold)
@@ -112,6 +112,8 @@ def worker_thread(
     yield start
 
     for worker, thread in started:
+        # Well inside the 60 s alarm on every test,
+        # so a stuck worker fails here, not at the alarm.
         thread.join(timeout=30)
         worker.close()
 
@@ -568,6 +570,7 @@ class TestQueuesAndIds:
 
         queues = {i.split(".item.")[0] for i in item_ids(ds_client)}
         assert len(queues) == 2
+        # A queue is `<name>.mapreduce.<index>.<token>`, so field 2 is the index.
         assert {q.split(".")[2] for q in queues} == {"0", "1"}
 
     def test_it_publishes_progress(

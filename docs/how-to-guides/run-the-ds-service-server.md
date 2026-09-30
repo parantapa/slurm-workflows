@@ -27,6 +27,8 @@ which is well before that process accepts a connection.
 
 `DsServiceServer` comes from the `ds-service-client` package.
 Omit `port` to get an arbitrary free one.
+If something already holds the port you name,
+the constructor raises `OSError`.
 
 ## Choose an interface the compute nodes can reach
 

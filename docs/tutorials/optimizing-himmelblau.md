@@ -27,7 +27,16 @@ the `sbatch` arguments, and the setup of an exploration.
 Run this program from a Rivanna login node.
 Follow
 [How to install slurm-workflows on Rivanna](../how-to-guides/install-on-rivanna.md)
-first.
+first,
+and in [step 3](../how-to-guides/install-on-rivanna.md#3-install-slurm-workflows)
+install the `botorch` extra.
+Unlike the two pi tutorials, this one needs botorch in two places:
+
+- On the login node, which imports the optimizer.
+- In the environment of the workers that run the model fit.
+
+The `botorch` extra covers both.
+
 Next, we clone this repository:
 
 ```sh
@@ -35,15 +44,42 @@ git clone https://github.com/parantapa/slurm-hpc-workflows.git
 cd slurm-hpc-workflows
 ```
 
-Unlike the two pi tutorials, this one needs botorch in two places:
+## Run it
 
-- On the login node, which imports the optimizer.
-- In the environment of the workers that run the model fit.
+We run the program from the root of that clone:
 
-So in
-[step 3 of the install guide](../how-to-guides/install-on-rivanna.md#3-install-slurm-workflows),
-we install the `botorch` extra.
-It covers both.
+```sh
+module load miniforge/26.3.2
+conda activate slurm-workflows
+python examples/example_optimize_himmelblau.py
+```
+
+Either phase names every task it submits on the server.
+So [`swtop`](../how-to-guides/watch-a-run-with-swtop.md) shows
+`himmelblau-explore-00` through `himmelblau-search-<round>-<index>`
+as the run works through them.
+Each search round also runs one `himmelblau-fit-<round>` task,
+which fits the model and proposes that round's points.
+
+The program does not print the server address `swtop` needs.
+The worker script `himmelblau.job.eval.0.sh`
+in the work directory the executor prints
+carries it after `--server-address`.
+We open another shell on the login node
+and start `swtop` there with that address:
+
+```sh
+swtop <server-address>
+```
+
+We watch a round go by.
+
+The run takes a while.
+The rest of this tutorial reads the program while it works.
+The program prints `=== exploration: 64 points, one batch ===`
+when phase 1 starts,
+and `=== search: up to 30 rounds of 80 points ===`
+when phase 2 starts.
 
 ## What the search minimizes
 
@@ -63,7 +99,7 @@ Each round has three steps:
 
 1. Fit a model to everything measured so far.
 2. Propose a whole batch of points.
-3. Evaluate that batch across the pool.
+3. Evaluate that batch across the `eval` pool.
 
 The next round fits the model again.
 [Batch Bayesian optimization](../explanation/batch-bayesian-optimization.md)
@@ -222,32 +258,6 @@ if __name__ == "__main__":
     main()
 ```
 
-## Run it
-
-We run the program from the root of that clone:
-
-```sh
-module load miniforge/26.3.2
-conda activate slurm-workflows
-python examples/example_optimize_himmelblau.py
-```
-
-Either phase names every task it submits on the server.
-So [`swtop`](../how-to-guides/watch-a-run-with-swtop.md) shows
-`himmelblau-explore-00` through `himmelblau-search-<round>-<index>`
-as the run works through them.
-Each search round also runs one `himmelblau-fit-<round>` task,
-which fits the model and proposes that round's points.
-We start it in another shell now,
-and watch a round go by.
-The program does not print the server address `swtop` needs.
-The worker script `himmelblau.job.eval.0.sh`
-in the work directory the executor prints
-carries it after `--server-address`.
-
-The run takes a while.
-The rest of this tutorial reads the program while it works.
-
 ## Two job groups
 
 ```python
@@ -268,12 +278,11 @@ That is why there are two job groups and two queue arguments.
 [Batch Bayesian optimization](../explanation/batch-bayesian-optimization.md)
 gives the reason.
 
-The two job groups also have their own setup scripts.
-`opt` is the job group that imports botorch on a compute node.
-So `OPTIMIZER_SETUP_SCRIPT` must activate an environment that has it.
-The example aliases it to `EVAL_SETUP_SCRIPT`.
-Both are empty there,
+The two job groups have their own setup scripts.
+Both are empty,
 because on Rivanna a compute node imports botorch with no setup.
+Elsewhere, `OPTIMIZER_SETUP_SCRIPT` must activate an environment that has botorch,
+because `opt` is the job group that imports it on a compute node.
 [Where the work runs](../reference/optimize-space.md#where-the-work-runs)
 says what each job group needs.
 
@@ -290,7 +299,7 @@ It draws 64 Sobol' points over the space.
 The `eval` pool evaluates them in one batch.
 The model then has something to fit before it makes any decision.
 
-Notice that `EXPLORATION_POINTS = 64` is a literal, not the pool size of 80.
+Notice that `EXPLORATION_POINTS = 64` is a literal, not the size of the `eval` pool, 80.
 The exploration truncates the count to the nearest lower power of two.
 A pool of 80 that asks for 80 points evaluates 64 anyway.
 A request for 64 says what will happen.
@@ -318,7 +327,7 @@ So the study's `name` must be the name the exploration ran under.
 
 The two queue arguments after it are the `eval` and `opt` job groups
 we defined above.
-`SEARCH_PARALLELISM` is the batch size, matched to the pool.
+`SEARCH_PARALLELISM` is the batch size, matched to the `eval` pool.
 Here it is exactly `NUM_NODES * NTASKS_PER_NODE`, so 80.
 [`OptimizeSpaceBotorch`](../reference/optimize-space.md)
 has the rest of the signature.
@@ -346,7 +355,11 @@ So this is an ordinary local value.
 `opt.best_output(RUN_NAME)` is the whole mapping the objective returned there,
 `distance_from_origin` included.
 
-The program then reports which of the four known minima it landed nearest.
+The program ends with a line `best f = ... (true minimum is 0)`,
+then the full result, the point where it was found,
+and the nearest known minimum.
+
+So the program reports which of the four known minima it landed nearest.
 Which one that is depends on the seed.
 All four are equally good.
 The search settles on whichever its batches reached first.

@@ -78,9 +78,15 @@ pyright                     # type-check
 pytest                      # test suite
 ```
 
+To build the sdist and the wheel into `dist/`,
+run `python -m build`, then `python -m twine check dist/*`.
+`scripts/pb-dev.sh build-python-package` runs both.
+Neither `build` nor `twine` is in an extra,
+so install them first.
+`scripts/pb-dev.sh upload-python-package` uploads the sdist and the wheel in `dist/`
+with `twine`.
+
 `pyproject.toml` configures `black` and `pyright`.
-`[tool.black]` pins `target-version` to the `requires-python` floor,
-so formatting does not drift with whichever interpreter happens to run it.
 `[tool.pyright]` sets the include paths and `pythonVersion`.
 For this reason, run `pyright` bare.
 **Do not pass paths to `pyright`**, or it ignores that configuration.
@@ -92,6 +98,11 @@ and users never call it directly.
 `swtop` is for users.
 The [`swtop` reference](reference/swtop.md) describes it.
 
+To run the library, start a `ds-service` server
+(`DsServiceServer` can launch one),
+then run a driver script, such as one under `examples/`,
+on a node that can call `sbatch`.
+
 Deploy to clusters with `cpush`.
 See `.cpush.json5` for the `rivanna` remote.
 
@@ -102,15 +113,15 @@ Paths are relative to `src/slurm_workflows/`.
 | Module | Holds |
 | --- | --- |
 | `__init__.py` | The public API of the library. Loads the botorch module lazily. An app that embeds `swtop` imports from `swtop` and `swtop_widgets` instead. |
-| `slurm_pilot_executor.py` | The driver side, entry point `SlurmPilotExecutor`: job groups, submitting tasks, waiting on them, and `mapreduce`. Depends on `slurm_utils`, `templates/` and `utils`, and on `slurm_pilot_worker` for `current_actor`. |
+| `slurm_pilot_executor.py` | The driver side, entry point `SlurmPilotExecutor`: job groups, submitting tasks, waiting on them, and `mapreduce`. Depends on `slurm_utils`, `templates/` and `utils`, and on `slurm_pilot_worker` for the worker's actor and its shared constants. |
 | `slurm_pilot_worker.py` | The worker side, entry point the `slurm-pilot-worker` command that generated scripts run on compute nodes. Starts the monitors. |
 | `slurm_utils.py` | Calls to the Slurm commands, and the environment `sbatch` runs in |
 | `search_space.py` | Search spaces and the mapping to and from the unit cube. Imports no torch. |
 | `explore_space.py` | Sobol' explorations with no model behind them, and the results file format the optimizer also reads |
 | `optimize_space_botorch.py` | The botorch searches. Optional, behind the `botorch` extra. |
-| `monitors.py` | Host, cgroup and GPU sampling, and the threads that publish it |
+| `monitors.py` | Host, cgroup and GPU sampling, and the threads that publish it. The worker starts the monitors, and `swtop` imports the host and job series prefixes. `swtop` reads no GPU series. |
 | `swtop.py` | `swtop`, entry point the `swtop` command: reading a run from the server, and the text display. Imports no Textual, so the text display and its tests run without it. |
-| `swtop_widgets.py` | The Textual widgets and the poller that `swtop` and any embedding app lay out. Depends on `swtop`, never the reverse. |
+| `swtop_widgets.py` | The Textual widgets and the poller that `swtop` and any embedding app lay out. Depends on `swtop`. `swtop.py` imports none of it at the top, and reaches it only through the lazy import of `swtop_tui` in `watch`. |
 | `swtop_tui.py` | The Textual app `swtop` runs in: the layout of the widgets, and the keys |
 | `templates/` | Jinja templates for the generated scripts, and their loader |
 | `utils.py` | Helpers shared across modules: the remote error record, ids, the check on an objective's result, and formatting |
@@ -120,6 +131,8 @@ Paths are relative to `src/slurm_workflows/`.
 `examples/` holds the scripts the tutorials walk through.
 `extra/` holds the README's banner image
 and a FoxyProxy configuration for Rivanna.
+`scripts/pb-dev.sh` is the author's own wrapper for building and uploading the package.
+Nothing else depends on it.
 `MANIFEST.in` decides what the sdist ships:
 the `.py` and `.jinja` files under `src/slurm_workflows`,
 the README, the license and `pyproject.toml`.
@@ -158,7 +171,7 @@ This table says what each one is here for.
 | `psutil` | `monitors` | Host and process sampling. |
 | `nvidia-ml-py` | `monitors` | GPU sampling through NVML, imported as `pynvml`. |
 | `platformdirs` | `slurm_pilot_executor` | Locating the per-user cache dir a run's `work_dir` defaults into. |
-| `typeguard` (>=3) | `slurm_pilot_executor` | `@typechecked` on the public surface. |
+| `typeguard` | `slurm_pilot_executor` | `@typechecked` on the public surface. |
 | `numpy` | none in `src/` | Declared in `pyproject.toml`, but no module imports it. The Sobol' design `scipy` returns is a numpy array, and `explore_space` turns each row into a list. |
 | `botorch` | `optimize_space_botorch` | The Gaussian process fit and the acquisition optimization, and `torch` underneath it. **Optional**, behind the `botorch` extra, and imported lazily so `import slurm_workflows` works without it. |
 
@@ -171,6 +184,8 @@ Development tooling, behind the `dev` and `test` extras:
 | `black` | `dev` | Formatting. Configured in `pyproject.toml`. |
 | `pyright` | `dev` | Type checking. Configured in `pyproject.toml`. Run it bare. |
 | `setuptools_scm` | build | Deriving the version from git tags, with a `1.0.0-dev` fallback. |
+| `build` | none, installed by hand | Building the sdist and the wheel. See `scripts/pb-dev.sh`. |
+| `twine` | none, installed by hand | Checking and uploading the sdist and the wheel. |
 | `cpush` | external | Deploying to clusters. See `.cpush.json5`. |
 
 There is no linter beyond `pyright`.
@@ -227,14 +242,6 @@ so the cost does not grow with the batch.
 A wait appends the final count even when it raises,
 since the exception says nothing about how far it got.
 
-**Only `wait` can defer.**
-`as_completed` yields results as they arrive,
-so there is no point at which it finished but the caller did not.
-For this reason, `RAISE_AFTER_COMPLETED` collapses to `RAISE_ON_FIRST_ERROR` there.
-`wait` therefore drives `_as_completed` itself,
-and does not go through `as_completed`.
-A route through `as_completed` rewrites the policy.
-
 **A worker marks a task that raised as `Failed`.**
 It calls `task_done` with `failed=True`,
 so the server fails every task that waits on it.
@@ -253,7 +260,8 @@ has to be the one that claimed the task in `task_get`.
 A server's queues, its `pilot_job_info:`, `pilot_job_start:`,
 `pilot_job_exit:`, `worker_info:`, `worker_exit:`, `task_name:`,
 `actor_class_args:`, `actor_class_kwargs:` and `progress_display` keys,
-its progress series and its monitor counters
+its progress series, its monitor series and `slurm_job_gpu_info:` keys,
+its monitor counters and its `restart_generation:` counters
 are one flat namespace with no executor in it.
 For this reason, the design assumes a server belongs to a single executor.
 Two executors on one server share queues by group name
@@ -349,6 +357,111 @@ unlike the actor arguments beside it.
 The reason is that a name is a string,
 and something other than this library has to read it.
 
+### Restarting workers
+
+`SlurmPilotExecutor.restart_jobs` advances the counter `restart_generation:<group>`.
+Each worker reads it at startup and checks it between tasks.
+A worker that sees it move returns from `main()`.
+Then `close()` publishes its exit,
+and the entry point exits with `RESTART_EXIT_CODE` (75).
+The worker script runs the entry point again on that status,
+and the new process imports the code from disk.
+The executor and the worker share nothing else,
+so the restart travels through the server like everything else.
+
+**The worker reads the counter before it publishes its identity.**
+`PilotWorker.__init__` reads it before it imports the actor class
+or writes `worker_info:`.
+The worker imports task functions later still, as each task unpickles.
+The generation a worker records is therefore never newer
+than the actor and task code it loaded.
+If the worker reads it later, a restart requested between the import and the read
+is lost on that worker.
+That worker records the new generation on the old code,
+so it never restarts, and the wait counts it as new.
+
+The same order makes `restart_generation` in `worker_info:` safe to wait on.
+A worker that published an old generation is one that must still exit.
+The entry point imports `slurm_workflows` itself before that read.
+A restart requested in that short window
+reaches the worker's actor and tasks, but not the library.
+
+**The first check comes before the first claim.**
+The `wait=True` guarantee rests on this order.
+The wait scans `worker_info:` keys, and it returns once no old worker is live.
+
+A worker that read the old generation
+but did not publish `worker_info:` yet is invisible to that scan.
+The wait can return before that worker publishes.
+That worker then checks before it claims anything,
+sees the new generation, and exits without running a task.
+So every task that a worker claims after the wait returns runs on a new worker.
+For this reason, `main()` claims no task until one read of the counter succeeds.
+A failed first read leads to a sleep and another read, not a claim.
+The rate limit does not apply until a read succeeds.
+
+**A worker checks right after each task, and at most once a second while idle.**
+The check right after a task keeps a busy worker
+from claiming one more task on the old code.
+
+The rate limit, `RESTART_CHECK_INTERVAL_S`, bounds what idle workers cost the server.
+An idle worker asks for a task every `NEXT_TASK_RETRY_TIME_S` (0.1 s).
+A counter read on each of those polls doubles the load of idle workers.
+A read once a second adds a tenth.
+Without `wait`, this interval is the window
+in which a worker can still claim a task or two on the old code.
+
+**Only the worker process is inside the shell loop.**
+The worker script sources `/etc/profile`, runs the setup script,
+and only then loops over `slurm-pilot-worker`.
+The setup script runs once per Slurm task,
+and once more for each pilot job start and exit the batch script publishes,
+each time in a bash of its own.
+
+Nothing makes a setup script safe to run twice.
+For a batch worker, the batch shell sources the worker script,
+so a second run stacks its effects in that shell.
+A new worker therefore inherits the environment the setup script built.
+A change to the setup script or to `sbatch_args` needs new pilot jobs.
+
+The loop reads the status with `|| status=$?`,
+because otherwise `set -e` ends the script on status 75.
+Any other status, including 143 from SIGTERM, leaves the loop,
+and the worker script exits with it.
+75 is `EX_TEMPFAIL` from `sysexits.h`.
+It collides with none of the statuses a worker already exits with.
+Those are 1 for an uncaught exception, 2 for a click usage error,
+and 143 for SIGTERM.
+
+**The restart generation is part of the monitor election key.**
+Counters never reset while the server runs.
+A restart replaces every worker of a job, the elected one included,
+and the elected worker's monitors stop in `close()`.
+With `host_monitor:<hostname>:<job-id>` alone,
+the counter tells every new worker a value past 1,
+and the job has no monitor after its first restart.
+With the generation in the key, the new workers hold a fresh election.
+
+During a restart, an old and a new worker can both sample one node.
+Two workers of one job that read different generations do the same.
+Either way, the second worker only adds points to the same series.
+
+**The wait tracks worker ids, not pilot jobs.**
+`_wait_for_restart` sorts each `worker_info:` key once:
+a new worker, an old one to wait on,
+or one in a pilot job this job group does not track.
+`_wait_for_restart` matches on the job name, not on the worker id,
+since a hostname can hold dots.
+
+An old worker is done when its `worker_exit:` key exists,
+or when `squeue` no longer lists its Slurm job.
+A worker killed with SIGKILL publishes no exit,
+so the `squeue` check is what ends the wait for it.
+A failed `squeue` keeps the last answer and does not call the job dead,
+as in the liveness checks of a wait.
+A timeout raises but leaves the counter where it is,
+since the executor cannot lower the counter again.
+
 ### Mapreduce
 
 **`mapreduce` puts every item task on the item queue
@@ -379,7 +492,7 @@ Both look at the queues of the tasks handed to the wait,
 never at the item queue.
 
 **A map task resolves a method name once, not once per item.**
-A worker builds its actor at startup and keeps it for the pilot job.
+A worker builds its actor at startup and keeps it until the worker exits.
 The bound method is therefore the same for every item the map task folds.
 `reduce_fn` takes no method name at all,
 because the driver folds the partial results with it
@@ -395,7 +508,7 @@ A test that drives that class gets them,
 and one that calls the task function directly sets them itself.
 
 A `with` block closes the client.
-A worker runs many tasks over the life of its pilot job.
+A worker runs many tasks over its life.
 A leaked gRPC channel per task therefore accumulates for all of it.
 
 **A map task marks its item task done after it folds the value in, not before,
@@ -446,6 +559,9 @@ for example `"slurm_pilot:worker_script"`.
 `render_template` carries `@overload` signatures
 that document each template's required keyword arguments.
 **Keep those overloads in sync when you change a template variable.**
+`restart_exit_code` is one of those template variables.
+The executor passes `RESTART_EXIT_CODE` from `slurm_pilot_worker`,
+so the worker and the shell loop agree on one constant.
 The environment uses `StrictUndefined`, so a missing variable is a hard error.
 
 `{#-` is also how a template body ends,
@@ -478,8 +594,6 @@ are different spaces to a model fit on one of them.
 `ExploreSpaceSobolQMC` draws with `scipy.stats.qmc.Sobol`,
 so an exploration needs neither torch nor botorch,
 and `tests/test_explore_space.py` runs without them.
-`rng=` is the seed argument (`seed=` is the older spelling),
-which is what the `scipy>=1.15` floor in `pyproject.toml` is for.
 
 **`run` submits every task before it waits for any of them.**
 This order is what "simultaneously" means here:
@@ -563,13 +677,18 @@ each against its own `patience`, floor and ceiling.
 
 ### Monitoring (`monitors.py`, `swtop.py`)
 
-**One worker per job per node samples, and a counter decides which.**
+**One worker per job per node per restart generation samples, and a counter decides which.**
 `counter_get_next_value` hands out distinct, gap-free values.
-The worker told 1 for `host_monitor:<hostname>:<job-id>` takes the node,
+The worker told 1 for `host_monitor:<hostname>:<job-id>:<generation>` takes the node,
 the part of its job on that node, and the GPUs that part can see.
+`<generation>` is the restart generation the worker read at startup.
 A job's cgroup is local to each node,
 so the job series carry the hostname as well as the job id.
-`_start_monitors` says why the counter carries the job id.
+The key carries the job id because counters never reset while the server runs.
+Without it, a node that a later pilot job lands on gets no monitor.
+Two live jobs on one node both sample it,
+and only add points to the same series.
+Restarting workers says why the key carries the generation.
 No lock, no designated rank, and no need for the workers to know each other.
 Nothing hands a subject back when that worker dies:
 the series stops, and `swtop` marks it stale.
@@ -582,8 +701,9 @@ It loads the driver's library only when `nvmlInit` runs,
 so it installs on a CPU node and costs nothing there.
 It reads the GPUs in-process,
 where `nvidia-smi` would start a process every interval and need its text parsed.
-`start_gpu_monitor` starts an NVML session once, and starts nothing
-where that fails or finds no GPU.
+`start_gpu_monitor` counts the GPUs in a short NVML session of its own,
+and starts nothing where that fails or finds no GPU.
+The thread then holds one session for as long as it runs.
 So a CPU node runs no GPU thread and logs no GPU errors.
 `GpuMonitor` runs apart from the job monitor,
 so a GPU read that stalls does not delay the job's readings.
@@ -739,11 +859,6 @@ so `worker.close()` runs and publishes the worker's exit.
 The worker's constructor catches `BaseException` around the actor
 for the same reason.
 
-**The worker must not redirect `sys.stdout` or `sys.stderr`.**
-Slurm writes those files itself via `--output`,
-and `logging.basicConfig` leaves the streams on the inherited handles.
-A second redirect leaves the Slurm-written files empty.
-
 **`sbatch` gets an environment with no Slurm variables in it.**
 Every submission passes the `get_clean_environ` result to `sbatch`,
 so a driver inside a Slurm job submits the same jobs as one on a login node.
@@ -768,8 +883,6 @@ so a driver inside a Slurm job submits the same jobs as one on a login node.
   (see `as_executor` in `tests/test_optimize_space_botorch.py`).
   Do not silence it with a bare `# type: ignore`.
   If `pyright` objects to something in `src/`, fix the annotation instead.
-  The `SearchSpace = Mapping[...]` alias exists because `dict[...]`
-  is invariant and made a correct call fail to type-check.
 - **Deprecation warnings are errors in the test suite**
   (`filterwarnings` in `pyproject.toml`).
   They are how a dependency announces a break one release ahead,
@@ -811,5 +924,7 @@ so a driver inside a Slurm job submits the same jobs as one on a login node.
   so a name carries the same word the prose does.
   Where a concept has no row there, add one
   rather than coin a second word for something the tables already name.
-- Cleanup is per-class.
+- Each class releases what it holds in its own method:
+  `close()` on `SlurmPilotExecutor` and `PilotWorker`,
+  and `stop()` on a monitor thread.
   There is no shared base class for it.

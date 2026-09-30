@@ -1,8 +1,4 @@
-"""The terminal UI `swtop` runs in, built with Textual.
-
-The widgets come from `swtop_widgets.py`.
-This module lays them out, and binds the keys.
-"""
+"""The terminal UI `swtop` runs in, built with Textual."""
 
 from __future__ import annotations
 
@@ -22,8 +18,7 @@ from .swtop_widgets import (
 
 # The key that shows each tab, by block key.
 # Each is a letter of the block's title, and none is `q` or `r`.
-# The keys are the app's, not the block's,
-# so an app that embeds the tabs picks its own.
+# See "The widgets bind no keys, and set no ids" in the developer notes.
 TAB_KEYS = {
     "pilot-jobs": "p",
     "workers": "w",

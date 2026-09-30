@@ -56,15 +56,16 @@ Generated scripts and all logs land there.
 
 | Method | What it does |
 | --- | --- |
-| `define_job_group(name, sbatch_args, ...)` | Register a job group. Submits nothing. The job group name is also the queue name. A second identical definition registers nothing new, and only rewrites any actor arguments it passes. A definition that differs raises `AssertionError`. |
-| `scale_jobs(name, count)` | Submit or cancel pilot jobs so the job group has `count` jobs. The count includes every job the group submitted and did not cancel, even one that already left the cluster, so calling it again with the same count submits nothing. `stop()` forgets the jobs, so a later call submits `count` new ones. A job group `define_job_group` did not register raises `AssertionError`. |
-| `submit(queue, fn, *args, task_parents=None, task_priority=0.0, **kwargs) -> Task` | Enqueue one task and return a `Task` straight away. `queue` is a job group name or a list of them. `fn` is a callable, or a method name (`str`) for actor workers. `task_parents` is a list of the `Task`s this one waits on. `task_priority` orders the queue. See [`submit` options](#submit-options). |
-| [`mapreduce(desc, queue, ...)`](mapreduce.md) | Map an iterable across the pool and fold the results into one value. Blocks. `init` must be the identity of `reduce_fn`. |
-| `as_completed(tasks, desc, unit="task", raise_on_error=...)` | Yield tasks as their results arrive. `desc` and `unit` label the progress `swtop` draws. Raises `RuntimeError` rather than blocking forever on a task whose queues have no worker. |
+| `define_job_group(name, sbatch_args, ...)` | Registers a job group. Submits nothing. The job group name is also the queue name. A second identical definition registers nothing new, and only rewrites any actor arguments it passes. A definition that differs raises `AssertionError`. |
+| `scale_jobs(name, count)` | Submits or cancels pilot jobs so the job group has `count` jobs. The count includes every job the group submitted and did not cancel, even one that already left the cluster, so calling it again with the same count submits nothing. `stop()` forgets the jobs, so a later call submits `count` new ones. A job group `define_job_group` did not register raises `AssertionError`. |
+| [`restart_jobs(group, wait=True, timeout=None) -> int`](#restart_jobs) | Restarts the workers of a job group inside its running pilot jobs, so they run the code on disk now. Cancels and submits no Slurm job. Returns the job group's new restart generation. See [`restart_jobs`](#restart_jobs). |
+| `submit(queue, fn, *args, task_parents=None, task_priority=0.0, **kwargs) -> Task` | Enqueues one task and returns a `Task` straight away. `queue` is a job group name or a list of them. `fn` is a callable, or a method name (`str`) for actor workers. `task_parents` is a list of the `Task`s this one waits on. `task_priority` orders the queue. See [`submit` options](#submit-options). |
+| [`mapreduce(desc, queue, ...)`](mapreduce.md) | Maps an iterable across the pool and folds the results into one value. Blocks. `init` must be the identity of `reduce_fn`. |
+| `as_completed(tasks, desc, unit="task", raise_on_error=...)` | Yields tasks as their results arrive. `desc` and `unit` label the progress `swtop` draws. Raises `RuntimeError` rather than blocking forever on a task whose queues have no worker. |
 | `wait(tasks, desc, unit="task", raise_on_error=...)` | Same, but discards the iterator. Blocks until all are done. |
-| `set_task_name(task, name)` | Name a task, on the server as well as locally. |
-| `stop()` | Cancel all pilot jobs, keep the executor usable. |
-| `close()` | Cancel all pilot jobs and close the server connection. |
+| `set_task_name(task, name)` | Names a task, on the server as well as locally. |
+| `stop()` | Cancels all pilot jobs and keeps the executor usable. |
+| `close()` | Cancels all pilot jobs and closes the server connection. |
 
 It is also a context manager.
 On leaving the block, Python calls `close()`.
@@ -100,14 +101,14 @@ they wait on the queue until a worker claims them.
 
 | Argument | Default | Meaning |
 | --- | --- | --- |
-| `setup_script` | `""` | Shell snippet run on the compute node before the worker starts. The text, not a path. Must be a `str`. An omitted value (or `""`) leaves each worker with what `/etc/profile`, which is always sourced, gives it. |
+| `setup_script` | `""` | Shell snippet run on the compute node before the worker starts. The text, not a path. Must be a `str`. An omitted value (or `""`) leaves each worker with the environment `sbatch` passes on, plus what `/etc/profile`, which is always sourced, gives it. |
 | `worker_exe` | `"slurm-pilot-worker"` | Worker entry point, for a wrapped or renamed one. |
 | `is_batch_worker` | `False` | See [One worker per pilot job, or one per Slurm task](#one-worker-per-pilot-job-or-one-per-slurm-task). |
 | `actor_class_name` | `None` | Fully qualified class name to instantiate once per worker. |
 | `actor_class_args` | `None` | Positional arguments for that class's constructor. Only valid with `actor_class_name`. |
 | `actor_class_kwargs` | `None` | Keyword arguments for that class's constructor. Only valid with `actor_class_name`. |
 | `python_paths` | `None` | Extra paths prepended to the workers' `sys.path`. |
-| `add_cwd_to_python_path` | `True` | Also add the driver's cwd. |
+| `add_cwd_to_python_path` | `True` | Also adds the driver's cwd to the workers' `sys.path`. |
 
 The executor passes `sbatch_args` straight through to `sbatch`,
 so any Slurm option works.
@@ -126,29 +127,20 @@ so a later call can redefine a job group with different ones.
 `sbatch_args` are part of it, and a different value asserts.
 Only the workers started after that call read the new values.
 A worker constructs its actor once, when it starts.
+[`restart_jobs`](#restart_jobs) starts new workers in the running pilot jobs,
+so they read the new values.
+
+Slurm ends a pilot job, at its time limit or through `scancel`,
+with SIGTERM, and with SIGKILL a little later.
+The worker turns the SIGTERM into `SystemExit` and calls its own `close()`,
+so the actor's `close()` runs too.
+The SIGKILL can cut a slow `close()` short.
+A SIGKILL on its own, or a node failure, skips it.
 
 For the task-side view of actors, see
 [How to keep per-worker state with actors](../how-to-guides/keep-per-worker-state-with-actors.md).
 
-## The `slurm-pilot-worker` entry point
-
-`pyproject.toml` installs `slurm-pilot-worker`,
-which the generated worker script, `<job-name>.sh`, invokes on the compute node.
-It takes six required options: the server address, the pilot job's name,
-its job group, its actor class name, the work dir and the worker `sys.path`.
-With `--pilot-job-event start` or `--pilot-job-event exit`,
-it publishes that the pilot job started or exited, and starts no worker.
-The generated batch script runs the worker script with that option
-when the job starts and when it exits.
-The worker script passes its own arguments on to the entry point.
-A wrapper named by `worker_exe` must pass them on too.
-It is what the `worker_exe` argument
-of [`define_job_group`](#define_job_group-options) names.
-A driver never calls it.
-A wrapper that sets an environment or a profiler around it
-is what `worker_exe` is for.
-
-## One worker per pilot job, or one per Slurm task
+### One worker per pilot job, or one per Slurm task
 
 `is_batch_worker` controls how many workers each pilot job starts:
 
@@ -162,6 +154,111 @@ gives 8 workers from a single `scale_jobs(..., 1)` call.
 `is_batch_worker=True` gives a single worker
 that owns the pilot job's whole allocation,
 which is what a multi-node (MPI or UPC++) task needs.
+
+## `restart_jobs`
+
+```python
+generation = executor.restart_jobs(group, wait=True, timeout=None)
+```
+
+`restart_jobs` restarts the workers of the job group `group`,
+and keeps its pilot jobs.
+Each worker exits, and a new one starts in its place,
+inside the same pilot job.
+The job keeps its allocation and its place against its time limit.
+The call cancels no Slurm job, and submits none.
+
+The new worker is a new Python process.
+It imports the code afresh from disk,
+and it reads the actor arguments that `define_job_group` last wrote.
+The setup script does not run again,
+and the sbatch arguments do not change.
+A function defined in the driver's `__main__` travels by value
+with each task, so it needs no restart.
+
+A worker restarts between tasks, never during one.
+A running task finishes on the code it started with.
+A pilot job that Slurm did not start yet needs no restart,
+since its workers start on the code on disk anyway.
+
+| Argument | Default | Meaning |
+| --- | --- | --- |
+| `group` | required | A job group that `define_job_group` registered. Any other name raises `AssertionError`. |
+| `wait` | `True` | Block until every worker that was running exits, or its Slurm job ends. |
+| `timeout` | `None` | With `wait`, the most seconds to block. `None` waits without limit. A negative value raises `ValueError`. |
+
+**With `wait`**, the call returns once every older worker exits.
+An older worker is one that started before the call,
+in a pilot job this executor submitted for the job group.
+It counts as exited once it published its exit,
+or once its Slurm job left `squeue`.
+Every task claimed after that point runs on a new worker.
+The call can take as long as the longest-running task.
+A worker that dies without publishing its exit
+makes the wait last until its Slurm job ends or the timeout expires.
+
+When the timeout expires, the call raises `TimeoutError`
+and names up to five of the workers it still waits on.
+The restart request stays in place,
+so those workers still restart after their current task.
+
+At the end of the wait, the call warns on stderr
+about any new worker that already exited.
+That exit usually means the new code fails to start.
+The worker's log in the work dir holds the traceback.
+
+**Without `wait`**, the call returns at once.
+A worker can then claim a task or two on the old code before it restarts.
+
+The call returns the job group's new restart generation.
+The executor keeps it on the server,
+under the counter `restart_generation:<group>`.
+Each call adds one to it.
+A worker that sees the counter move past the value it read at startup restarts.
+See [What a run publishes](what-a-run-publishes.md#keys-and-time-series).
+
+In [`swtop`](swtop.md), each restarted worker leaves the workers block,
+and a new worker takes its place with a new `PID` and a new `STARTED` time.
+
+For the steps of a restart, see
+[How to update worker code without resubmitting](../how-to-guides/update-worker-code-without-resubmitting.md).
+
+## The `slurm-pilot-worker` entry point
+
+`pyproject.toml` installs `slurm-pilot-worker`,
+which the generated worker script, `<job-name>.sh`, invokes on the compute node.
+It takes six required options: the server address, the pilot job's name,
+its job group, its actor class name, the work dir and the worker `sys.path`.
+With `--pilot-job-event start` or `--pilot-job-event exit`,
+it publishes that the pilot job started or exited, and starts no worker.
+The generated batch script runs the worker script with that option
+when the job starts and when it exits.
+The worker script passes its own arguments on to the entry point.
+A driver never calls it.
+The `worker_exe` argument
+of [`define_job_group`](#define_job_group-options) names it,
+or names a wrapper that sets an environment or a profiler around it.
+A wrapper named by `worker_exe` must pass the arguments on too.
+
+A worker that [`restart_jobs`](#restart_jobs) asked to exit ends with status 75.
+The worker script reads that status as a request to start the worker again.
+It then runs the entry point once more,
+in the same pilot job and on the same node.
+On any other status, the worker script exits with that status.
+A wrapper named by `worker_exe` must pass the status on unchanged.
+
+### The environment a task sees
+
+Inside a task, these environment variables exist:
+
+- `PILOT_JOB_NAME`, the pilot job's name, for example `demo.job.cpu.0`
+- `PILOT_JOB_GROUP`, the job group name
+- `PILOT_WORKER_ID`, the id the worker claims tasks under
+- `DS_SERVER_ADDRESS`, the server address
+- plus the usual Slurm variables (`SLURM_JOB_ID`, ...)
+
+The worker sets the first four when it starts,
+before it builds its actor and before it claims a task.
 
 ## `submit` options
 
@@ -231,8 +328,9 @@ unless `raise_on_error` is `RAISE_NEVER`.
 They check this twice.
 
 **Before the first wait**, and without a call to Slurm,
-they require a `scale_jobs` call
-for at least one of each pending task's queues.
+they require at least one of each pending task's queues
+to have a pilot job that `scale_jobs` submitted
+and that `stop()` has not canceled since.
 `submit` does not check queue names,
 so this check is where a mistyped queue name appears.
 Under `RAISE_ON_FIRST_ERROR`, they raise the error before they yield any result.
@@ -319,3 +417,11 @@ never_ran = [t for t in tasks if t.output is NoOutput]
 is unknown to the server,
 or was still pending on queues with no pilot job to run it.
 
+## Related
+
+- [`mapreduce`](mapreduce.md)
+- [What a run publishes](what-a-run-publishes.md)
+- [`swtop`](swtop.md)
+- [How to keep per-worker state with actors](../how-to-guides/keep-per-worker-state-with-actors.md)
+- [How to update worker code without resubmitting](../how-to-guides/update-worker-code-without-resubmitting.md)
+- [How to troubleshoot a failing run](../how-to-guides/troubleshoot-a-failing-run.md)

@@ -1,8 +1,4 @@
-"""The executor: job groups, pilot jobs, and the tasks they run.
-
-One executor per `ds-service` server.
-`docs/explanation/pilot-job-model.md` explains the model.
-"""
+"""The executor: job groups, pilot jobs, and the tasks they run."""
 
 from __future__ import annotations
 
@@ -42,7 +38,13 @@ from .utils import (
 
 from .templates import render_template
 
-from .slurm_pilot_worker import current_actor
+from .slurm_pilot_worker import (
+    current_actor,
+    RESTART_EXIT_CODE,
+    RESTART_GENERATION_PREFIX,
+    WORKER_EXIT_PREFIX,
+    WORKER_INFO_PREFIX,
+)
 
 # What a `Task`'s `output` holds until the task finishes.
 # A task that was canceled, is unknown to the server,
@@ -138,6 +140,18 @@ POLL_INTERVAL_S: float = 0.1
 # each check costs an `squeue` call.
 LIVE_QUEUE_CHECK_INTERVAL_S: float = 60.0
 
+# How long `restart_jobs` sleeps between two looks at the workers it waits on.
+RESTART_POLL_INTERVAL_S: float = 1.0
+
+# How often `restart_jobs` asks `squeue` which pilot jobs are still live.
+# The interval is above RESTART_POLL_INTERVAL_S,
+# since each check costs an `squeue` call.
+RESTART_LIVE_CHECK_INTERVAL_S: float = 10.0
+
+# How many workers a restart timeout or a restart warning names
+# before it stops listing them.
+MAX_REPORTED_WORKERS = 5
+
 
 @dataclass
 class Task:
@@ -187,6 +201,8 @@ class JobGroup:
     actor_class_name: str
     setup_script: str
     python_paths: list[str]
+    # Runtime state, left out of the equality
+    # that `define_job_group` checks a redefinition with.
     jobs: dict[str, SlurmJob] = field(default_factory=dict, compare=False)
     next_job_index: int = field(default=0, compare=False)
 
@@ -234,10 +250,10 @@ def _mapreduce_task(
     map_fn: Callable | str,
     reduce_fn: Callable,
     init: Any,
-    map_args: tuple,
-    map_kwargs: dict,
-    reduce_args: tuple,
-    reduce_kwargs: dict,
+    map_args: tuple[Any, ...],
+    map_kwargs: dict[str, Any],
+    reduce_args: tuple[Any, ...],
+    reduce_kwargs: dict[str, Any],
 ) -> Any:
     """Map and fold every item this task claims from `mr_queue`."""
     # The id of the worker that runs this task, from the environment.
@@ -276,6 +292,7 @@ def _mapreduce_task(
             client.task_done(item_task.task_id, worker_id, NO_TASK_OUTPUT)
 
 
+# `docs/explanation/pilot-job-model.md` explains the model this class implements.
 class SlurmPilotExecutor:
     """Runs Python callables on a Slurm cluster through a pool of workers.
 
@@ -444,6 +461,7 @@ class SlurmPilotExecutor:
             python_paths_json=json.dumps(group.python_paths),
             setup_script=group.setup_script,
             actor_class_name=group.actor_class_name,
+            restart_exit_code=RESTART_EXIT_CODE,
         )
         worker_script_path = self.work_dir / f"{job_name}.sh"
         worker_script_path.write_text(worker_script)
@@ -546,6 +564,156 @@ class SlurmPilotExecutor:
             except Exception:
                 raise RuntimeError("Failed to cancel slurm jobs")
 
+    @typechecked
+    def restart_jobs(
+        self, group: str, wait: bool = True, timeout: float | None = None
+    ) -> int:
+        """Restart the workers of a job group, and keep its pilot jobs.
+
+        Each worker exits and a new one starts in its place,
+        inside the same pilot job.
+        So the job keeps its allocation and its place against its time limit.
+        The new worker imports the code afresh from disk,
+        and reads the actor arguments that `define_job_group` last wrote.
+        The setup script does not run again,
+        and the sbatch arguments do not change.
+        A function defined in the driver's `__main__` travels by value
+        with each task, so it needs no restart.
+
+        A worker restarts between tasks, never during one,
+        so a task in progress finishes on the code it started with.
+        A pilot job that has not started yet needs no restart,
+        since its workers start on the code on disk anyway.
+
+        With `wait`, the call returns once every worker
+        that ran at the time of the call exits,
+        or its Slurm job ends.
+        Every task claimed after that point runs on a new worker.
+        The wait can take as long as the longest-running task.
+
+        `timeout` bounds the wait, in seconds, and `None` waits without limit.
+        A timeout raises `TimeoutError`.
+        The restart request stays in place,
+        so the remaining workers still restart after their current task.
+        A worker that dies without saying so keeps the wait going
+        until its Slurm job ends or the timeout expires.
+
+        The call reports on stderr the new workers that exited by the end of the wait.
+        An exit that early usually means that the new code fails to start.
+        Such a worker does not come back,
+        so its pilot job serves the queue with fewer workers, or none.
+
+        Without `wait`, the call returns at once,
+        and a worker can claim a task or two on the old code before it restarts.
+
+        Returns the new restart generation of the job group.
+        Raises `AssertionError` for a job group
+        that `define_job_group` did not register,
+        and `ValueError` for a negative `timeout`.
+        """
+        assert group in self.groups, "Unknown job group"
+        if timeout is not None and timeout < 0:
+            raise ValueError(f"timeout must not be negative, not {timeout}")
+
+        generation = self.client.counter_get_next_value(
+            f"{RESTART_GENERATION_PREFIX}{group}"
+        )
+        self.logger.info(
+            "Restarting the workers of %s, generation %d", group, generation
+        )
+
+        if wait:
+            self._wait_for_restart(self.groups[group], generation, timeout)
+        return generation
+
+    def _wait_for_restart(
+        self, group: JobGroup, generation: int, timeout: float | None
+    ) -> None:
+        """Block until no worker of `group` older than `generation` is live."""
+        deadline = None if timeout is None else time.monotonic() + timeout
+
+        # A worker's info never changes, and an exit is final.
+        # So the loop reads each worker id once, or until it exits.
+        # `old` maps a worker id to its Slurm job id.
+        old: dict[str, int] = {}
+        new: set[str] = set()
+        done: set[str] = set()
+
+        # None until the first `squeue` answers.
+        # Until then, every job counts as live.
+        live_job_ids: set[int] | None = None
+        next_live_check = time.monotonic()
+
+        while True:
+            for key in self.client.map_search_key(f"^{WORKER_INFO_PREFIX}"):
+                worker_id = key[len(WORKER_INFO_PREFIX) :]
+                if worker_id in old or worker_id in new or worker_id in done:
+                    continue
+                info = json.loads(self.client.map_get(key))
+                # The job name, not the worker id, since a hostname can hold dots.
+                # The call does not wait on a job that this executor stopped tracking.
+                if info["name"] not in group.jobs:
+                    done.add(worker_id)
+                elif info.get("restart_generation", 0) >= generation:
+                    new.add(worker_id)
+                else:
+                    old[worker_id] = info["slurm_job_id"]
+
+            for worker_id in list(old):
+                if self._has_exited(worker_id):
+                    del old[worker_id]
+                    done.add(worker_id)
+
+            if old and time.monotonic() >= next_live_check:
+                try:
+                    live_job_ids = get_running_jobids()
+                except (subprocess.SubprocessError, OSError):
+                    # Unknown, not dead: keep the previous answer.
+                    self.logger.warning(
+                        "Could not check which pilot jobs are still live; "
+                        "will retry at the next interval",
+                        exc_info=True,
+                    )
+                next_live_check = time.monotonic() + RESTART_LIVE_CHECK_INTERVAL_S
+            if live_job_ids is not None:
+                for worker_id, job_id in list(old.items()):
+                    if job_id not in live_job_ids:
+                        del old[worker_id]
+                        done.add(worker_id)
+
+            if not old:
+                break
+
+            if deadline is not None and time.monotonic() >= deadline:
+                shown = ", ".join(sorted(old)[:MAX_REPORTED_WORKERS])
+                if len(old) > MAX_REPORTED_WORKERS:
+                    shown += f", and {len(old) - MAX_REPORTED_WORKERS} more"
+                raise TimeoutError(
+                    f"{len(old)} workers of job group {group.name!r} "
+                    f"had not restarted after {timeout}s: {shown}. "
+                    f"They still restart after their current task."
+                )
+
+            time.sleep(RESTART_POLL_INTERVAL_S)
+
+        failed = sorted(w for w in new if self._has_exited(w))
+        if failed:
+            self._warn(
+                f"{len(failed)} restarted workers of job group {group.name!r} "
+                f"have already exited, so the new code may fail to start. "
+                f"See the worker logs in {self.work_dir}: "
+                f"{', '.join(failed[:MAX_REPORTED_WORKERS])}"
+            )
+        self.logger.info("Workers of %s restarted", group.name)
+
+    def _has_exited(self, worker_id: str) -> bool:
+        """Whether the worker `worker_id` published its exit."""
+        try:
+            self.client.map_get(f"{WORKER_EXIT_PREFIX}{worker_id}")
+        except KeyError:
+            return False
+        return True
+
     def _submit(
         self,
         queue: list[str],
@@ -604,9 +772,6 @@ class SlurmPilotExecutor:
         fn: Callable | str,
         *args: Any,
         task_parents: list[Task] | None = None,
-        # 0.0 for every task keeps submission order,
-        # since equal priorities are served oldest first.
-        # A priority taken from a rising clock would serve the newest task first.
         task_priority: float = 0.0,
         **kwargs: Any,
     ) -> Task:
@@ -624,6 +789,7 @@ class SlurmPilotExecutor:
 
         The server dispatches the highest `task_priority` first,
         and tasks of equal priority on one queue oldest first.
+        A priority taken from a rising clock therefore serves the newest task first.
         `fn` cannot take keyword arguments
         named `task_parents` or `task_priority`,
         because this method keeps them.
@@ -675,11 +841,10 @@ class SlurmPilotExecutor:
     ) -> Any:
         """Map an iterable across the pool, fold the results, and return one value.
 
-        The call puts every item of `iterable` on a queue of its own.
-        Tasks on `queue` drain that queue,
-        and the call blocks until all of them are back.
-        Each of those tasks folds what it claims into a partial result,
-        and this call folds the partial results into the value it returns.
+        Tasks on `queue` claim the items,
+        and each one folds what it claims into a partial result.
+        This call blocks until every task is back,
+        and folds the partial results into the value it returns.
 
         For every item it claims, a task computes:
 
@@ -770,6 +935,7 @@ class SlurmPilotExecutor:
 
         # Every item is on the queue by now,
         # which is what lets a task read an empty queue as a finished one.
+        # See Mapreduce in the developer notes.
         # No more tasks than items: another one can only return `init`.
         tasks: list[Task] = []
         for index in range(min(num_tasks, len(items))):
@@ -963,7 +1129,8 @@ class SlurmPilotExecutor:
         """
         tasks = list(tasks)
         progress = self._publish_progress(desc, unit, len(tasks))
-        # Not through `as_completed`, which cannot defer an exception.
+        # Not through `as_completed`, which cannot defer an exception:
+        # a generator has no point at which it finished but its caller did not.
         for _ in self._counted(self._as_completed(tasks, raise_on_error), progress):
             pass
 

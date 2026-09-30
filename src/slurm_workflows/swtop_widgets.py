@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from contextlib import AsyncExitStack
 from dataclasses import replace
 from datetime import datetime
@@ -41,13 +41,14 @@ class SnapshotView(Protocol):
     """A widget that shows what it can of one snapshot."""
 
     def show(self, snapshot: Snapshot) -> None:
-        """Draw what the view can of `snapshot`,
-        which may be a failed poll with `error` set and every reading empty.
+        """Draw what the view can of `snapshot`.
+
+        `snapshot` may be a failed poll, with `error` set and every reading empty.
         """
         ...
 
 
-def sync_table(table: DataTable, rows: list[tuple[str, list[str]]]) -> None:
+def sync_table(table: DataTable, rows: Sequence[tuple[str, list[str]]]) -> None:
     """Bring one table to `rows`, and change only what differs.
 
     Each row keeps the key it carries in `rows`.

@@ -5,6 +5,9 @@
 A search that ran out of its time limit does not have to start again.
 You construct `OptimizeSpaceBotorch` from results files.
 So the state that must survive is a file, not an object.
+Only a run that reached its `save` call leaves a file.
+The points of a run stopped before `save` are lost,
+and the next run starts from the files saved before it.
 
 ## Give every run its own results file
 
@@ -20,7 +23,7 @@ EXPLORE_RESULTS = Path("explore.pkl.gz")
 SEARCH_RESULTS = Path(f"search-{run_number}.pkl.gz")
 ```
 
-## Save the exploration and the search
+## Save the exploration and the first search
 
 ```python
 with SlurmPilotExecutor("search", address) as executor:

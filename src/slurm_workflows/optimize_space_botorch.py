@@ -18,8 +18,7 @@ import torch
 from botorch.models import SingleTaskGP
 from botorch.models.transforms import Standardize
 
-# The tests monkeypatch `fit_gpytorch_mll`, `optimize_acqf`
-# and `qLogNoisyExpectedImprovement` as module globals.
+# Imported by name, so the tests can patch them.
 # See the developer notes, Batch Bayesian optimization.
 from botorch.fit import fit_gpytorch_mll
 from botorch.optim import optimize_acqf
@@ -47,8 +46,12 @@ ObjectiveFunction = Callable[..., ObjectiveOutput]
 
 # How far outside the unit cube a saved point can land
 # before this module takes it for a point from another space.
+# 1e-9 is well above the round-off of a float64 trip
+# through `to_params` and `to_unit`,
+# and well below a real change of range.
 SAVED_POINT_TOLERANCE = 1e-9
 
+# The keys of the mapping `fit_and_propose` returns.
 CANDIDATES_KEY = "candidates"
 FIT_SECONDS_KEY = "fit_seconds"
 PROPOSE_SECONDS_KEY = "propose_seconds"
@@ -99,8 +102,7 @@ class OptimizationStudy:
         A timeout is not an error.
         The step returns the best candidates so far.
 
-    extra_objective_kwargs: extra keyword arguments for the objective.
-        Must not shadow a parameter of the space.
+    extra_objective_kwargs: must not shadow a parameter of the space.
     priority: the priority of every task this study submits,
         the fits as well as the evaluations.
         The server dispatches the highest priority first.
@@ -327,6 +329,9 @@ class OptimizeSpaceBotorch:
                 f"{study.name}: acqf_timeout_s must be > 0, got {study.acqf_timeout_s}"
             )
 
+        # A copy of the space as well,
+        # so a later change to the caller's mapping
+        # cannot move the columns of a unit point.
         return replace(study, space=dict(study.space), search_parallelism=parallelism)
 
     @staticmethod
@@ -441,6 +446,8 @@ class OptimizeSpaceBotorch:
         It raises `RuntimeError` if a fit fails or proposes a malformed batch,
         or if an evaluation fails.
         On an evaluation failure it first records every result that came back.
+        Otherwise, a result it cannot rank raises at once,
+        and the round keeps only the results before it in submission order.
         """
         active = list(self.studies)
         stalled = {study.name: 0 for study in self.studies}
@@ -480,10 +487,9 @@ class OptimizeSpaceBotorch:
 
                 stalled[study.name] += 1
 
-                # The streak counts from round 1,
-                # and `min_search_rounds` gates the stop, not the counting.
-                # So the gap is whichever bound is further away:
-                # the streak reaching `patience`, or the rounds reaching the floor.
+                # Stalled rounds count from round 1,
+                # and `min_search_rounds` gates only the stop.
+                # So the rounds left are whichever bound is further away.
                 # A bare `stalled`/`patience` ratio overshoots
                 # when the floor is further.
                 remaining = max(
@@ -756,7 +762,7 @@ class OptimizeSpaceBotorch:
         return dict(known.points[best]), known.values[best]
 
     def best_output(self, name: str) -> dict[str, Any]:
-        """The objective's whole result at a study's best point so far."""
+        """The objective's whole result at a study's best point, files included."""
         known = self._all(self._study(name).name)
         best = min(range(len(known.values)), key=known.values.__getitem__)
         return dict(known.outputs[best])

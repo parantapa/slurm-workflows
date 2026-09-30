@@ -12,9 +12,12 @@ from slurm_workflows.slurm_pilot_worker import PilotWorker
 # A BaseException, not an Exception, because `main()` catches every Exception.
 # See docs/how-to-run-tests.md, "Notes for future changes".
 class StopWorker(BaseException):
-    """Breaks the worker's otherwise-infinite main loop."""
+    """Breaks the worker's main loop, which otherwise runs until a restart request."""
 
 
+# Both wrappers forward everything they do not override,
+# so each satisfies the worker's use of the client without subclassing it.
+# The helpers below cast them to `DsServiceClient` for that reason.
 class _StoppingClient:
     """Wraps a real client, and raises StopWorker after N calls to `task_done`."""
 
@@ -92,8 +95,6 @@ def run_worker(worker: PilotWorker, expect_tasks: int) -> None:
     so a worker that never gets `expect_tasks` tasks
     spins until the hang guard ends the test.
     """
-    # `_StoppingClient` forwards everything it does not override,
-    # so it satisfies the worker's use of the client without subclassing it.
     worker.client = cast(DsServiceClient, _StoppingClient(worker.client, expect_tasks))
     try:
         worker.main()
@@ -115,4 +116,23 @@ def poll_worker(worker: PilotWorker, polls: int) -> int:
     except StopWorker:
         pass
     # The last call raised `StopWorker` instead of fetching.
+    # A worker that returns for a restart makes no such call,
+    # so the count is then one short.
     return client.polls - 1
+
+
+def run_until_restart(worker: PilotWorker, max_polls: int) -> int:
+    """Run the worker's real main loop until a restart, and count its fetches.
+
+    A worker that makes more than `max_polls` fetches
+    fails the test rather than spin until the hang guard ends it.
+    """
+    client = _IdlingClient(worker.client, max_polls)
+    worker.client = cast(DsServiceClient, client)
+    try:
+        worker.main()
+    except StopWorker:
+        raise AssertionError(
+            f"the worker did not return for a restart within {max_polls} fetches"
+        ) from None
+    return client.polls

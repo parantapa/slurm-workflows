@@ -30,8 +30,8 @@ You can start `swtop` before the server is up.
 `swtop` waits, and fills the tabs once there is something to read.
 
 Each block is a tab.
-Press `p`, `w`, `h`, `j` or `t` to show the pilot jobs, workers, hosts,
-slurm jobs or tasks tab.
+To switch tabs, press `p`, `w`, `h`, `j` or `t`
+for the pilot jobs, workers, hosts, slurm jobs or tasks tab.
 
 ## Make the tasks tab readable
 
@@ -66,12 +66,12 @@ and redirect the output to a file:
 swtop 10.0.0.1:5051 --plain > swtop.log
 ```
 
-`--plain` prints one frame of text per poll, rather than the live UI.
-Redirected to a file, each poll adds one more frame,
+Each poll adds one more frame to the file,
 rather than replacing the last one.
 The file has the same blocks and columns as the tabs,
-one block after another,
-and you can read it later.
+one block after another.
+For the frame format, see
+[Frames of text instead of a UI](../reference/swtop.md#frames-of-text-instead-of-a-ui).
 
 ## Poll less often on a long run
 

@@ -43,7 +43,8 @@ def objective_value(
 
     Raises `RuntimeError` if the result is not a mapping,
     if it lacks `objective_key`,
-    or if the value there is not a float or is not finite.
+    or if the value there does not convert to a float
+    or is not finite.
     The message names what came back and at which point.
     """
     if not isinstance(output, Mapping):
@@ -89,7 +90,7 @@ def index_width(count: int) -> int:
     return len(str(max(count - 1, 0)))
 
 
-def format_param(value: Any) -> str:
+def format_param(value: object) -> str:
     """Render one value for a progress line, floats to six significant digits."""
     return f"{value:.6g}" if isinstance(value, float) else str(value)
 

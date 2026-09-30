@@ -1,8 +1,7 @@
-"""Tests for the worker.
+"""Tests for the worker."""
 
-How these tests run a real worker and stop it
-is in how-to-run-tests.md, under "Notes for future changes".
-"""
+# How these tests run a real worker and stop it:
+# see docs/how-to-run-tests.md, "Notes for future changes".
 
 from __future__ import annotations
 
@@ -14,11 +13,11 @@ import signal
 import threading
 from pathlib import Path
 from datetime import datetime
-from typing import Generator, NoReturn
+from typing import Any, Callable, Generator, NoReturn, cast
 
 import pytest
 import click
-from ds_service_client import TaskState
+from ds_service_client import DsServiceClient, TaskState
 
 import support_actor
 from slurm_workflows import slurm_pilot_worker as worker_mod
@@ -26,7 +25,7 @@ from slurm_workflows.slurm_pilot_executor import RaiseOnError
 from slurm_workflows.slurm_pilot_worker import current_actor, slurm_pilot_worker
 from slurm_workflows.utils import RemoteExecutionError
 from conftest import FakeGpu
-from worker_harness import make_worker, poll_worker, run_worker
+from worker_harness import make_worker, poll_worker, run_until_restart, run_worker
 from test_monitors import wait_for
 
 
@@ -45,9 +44,26 @@ def boom() -> NoReturn:
     raise ValueError("task blew up")
 
 
+def restart_own_group(value: int) -> int:
+    """Ask the group of the worker running this task to restart, then return."""
+    # The worker put the server address and its group in the environment.
+    with DsServiceClient() as client:
+        client.counter_get_next_value(
+            f"{worker_mod.RESTART_GENERATION_PREFIX}{os.environ['PILOT_JOB_GROUP']}"
+        )
+    return value
+
+
+def request_restart(client: DsServiceClient, group: str = "cpu") -> int:
+    """What `SlurmPilotExecutor.restart_jobs` does to the server."""
+    return client.counter_get_next_value(
+        f"{worker_mod.RESTART_GENERATION_PREFIX}{group}"
+    )
+
+
 class TestTaskExecution:
     @pytest.fixture(autouse=True)
-    def _pilot_jobs(self, pilot_jobs):
+    def _pilot_jobs(self, pilot_jobs: Callable[..., None]) -> None:
         pilot_jobs("cpu", "gpu")
 
     def test_runs_a_task_and_posts_the_result(
@@ -130,7 +146,7 @@ class TestTaskExecution:
 
 class TestRemoteErrors:
     @pytest.fixture(autouse=True)
-    def _pilot_jobs(self, pilot_jobs):
+    def _pilot_jobs(self, pilot_jobs: Callable[..., None]) -> None:
         pilot_jobs("cpu")
 
     def test_exception_is_captured_not_propagated(
@@ -208,7 +224,7 @@ class TestRemoteErrors:
 
 class TestActors:
     @pytest.fixture(autouse=True)
-    def _pilot_jobs(self, pilot_jobs):
+    def _pilot_jobs(self, pilot_jobs: Callable[..., None]) -> None:
         pilot_jobs("cpu")
 
     def test_actor_is_instantiated_once_at_startup(self, ds_service_address, tmp_path):
@@ -475,8 +491,23 @@ class TestWorkerIdentity:
             "slurm_job_id": 42,
             "hostname": "testhost",
             "pid": 4242,
+            "restart_generation": 0,
         }
         assert datetime.fromisoformat(start_time).tzinfo is not None
+        worker.close()
+
+    def test_the_identity_carries_the_restart_generation(
+        self, ds_service_address, ds_client, tmp_path
+    ):
+        """How `restart_jobs` tells a worker that restarted from one that did not."""
+        request_restart(ds_client)
+        request_restart(ds_client)
+
+        worker = make_worker(ds_service_address, tmp_path, group="cpu", name="w-1")
+
+        published = json.loads(ds_client.map_get(f"worker_info:{worker.worker_id}"))
+        assert worker.restart_generation == 2
+        assert published["restart_generation"] == 2
         worker.close()
 
     def test_the_identity_is_one_key_not_one_per_field(
@@ -619,9 +650,27 @@ class TestMonitors:
         first = make_worker(ds_service_address, tmp_path, name="w-1")
         second = make_worker(ds_service_address, tmp_path, name="w-2")
 
-        assert ds_client.counter_get_current_value("host_monitor:testhost:42") == 2
+        # The last part is the restart generation, 0 before any restart.
+        assert ds_client.counter_get_current_value("host_monitor:testhost:42:0") == 2
         first.close()
         second.close()
+
+    def test_a_restarted_worker_samples_again(
+        self, ds_service_address, ds_client, tmp_path
+    ):
+        """The same job and node as before, but a new election counter."""
+        first = make_worker(ds_service_address, tmp_path, name="w-1")
+        first.close()
+        request_restart(ds_client)
+
+        second = make_worker(ds_service_address, tmp_path, name="w-1")
+        third = make_worker(ds_service_address, tmp_path, name="w-2")
+
+        assert [m.subject for m in second.monitors] == ["testhost", "42:testhost"]
+        # A peer at the same generation still leaves the node to the first.
+        assert third.monitors == []
+        second.close()
+        third.close()
 
     def test_a_first_reading_is_published_at_startup(
         self, ds_service_address, ds_client, tmp_path
@@ -690,6 +739,231 @@ class TestMonitors:
         assert worker.monitors == []
 
 
+# Both doubles below forward every call they do not override to the real client,
+# so a test casts them to `DsServiceClient` to put them on `worker.client`.
+class _RestartingClient:
+    """Wraps a real client, and requests a restart on the Nth `task_get` call."""
+
+    def __init__(self, inner: DsServiceClient, group: str, at_poll: int) -> None:
+        self._inner = inner
+        self._group = group
+        self._at_poll = at_poll
+        self.polls = 0
+
+    def task_get(self, worker_id: str, queue: str | list[str]):
+        self.polls += 1
+        if self.polls == self._at_poll:
+            # The request comes before this call reaches the server.
+            request_restart(self._inner, self._group)
+        return self._inner.task_get(worker_id, queue)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+
+class _FailingCounterClient:
+    """Wraps a real client, and fails the counter reads that `fail` picks."""
+
+    def __init__(self, inner: DsServiceClient, fail: Callable[[int], bool]) -> None:
+        self._inner = inner
+        self._fail = fail
+        self.reads = 0
+        # Each read and each fetch, in order.
+        self.events: list[str] = []
+
+    def counter_get_current_value(self, key: str) -> int:
+        self.reads += 1
+        # `fail` gets the number of the read, counting from 1.
+        if self._fail(self.reads):
+            self.events.append("read-failed")
+            raise TimeoutError("server unreachable")
+        self.events.append("read")
+        return self._inner.counter_get_current_value(key)
+
+    def task_get(self, worker_id: str, queue: str | list[str]):
+        self.events.append("fetch")
+        return self._inner.task_get(worker_id, queue)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+
+class TestRestart:
+    """A worker returns from `main()` once its group's restart counter moves.
+
+    The worker checks between tasks, never during one.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _pilot_jobs(self, pilot_jobs: Callable[..., None]) -> None:
+        pilot_jobs("cpu", "gpu")
+
+    @pytest.fixture
+    def check_every_time(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Read the counter at every turn of the loop, not once per interval.
+
+        As a result, the count of fetches before `main()` returns is exact.
+        """
+        monkeypatch.setattr(worker_mod, "RESTART_CHECK_INTERVAL_S", 0.0)
+
+    @pytest.fixture
+    def check_rarely(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Leave only the checks that the interval does not limit.
+
+        These checks are the first check and the one right after a task.
+        """
+        monkeypatch.setattr(worker_mod, "RESTART_CHECK_INTERVAL_S", 60.0)
+
+    def test_an_idle_worker_returns_after_a_restart_request(
+        self, check_every_time, ds_service_address, tmp_path, time_limit
+    ):
+        worker = make_worker(ds_service_address, tmp_path)
+        worker.client = cast(
+            DsServiceClient, _RestartingClient(worker.client, "cpu", at_poll=3)
+        )
+
+        with time_limit(10, "the worker never returned for a restart"):
+            polls = run_until_restart(worker, max_polls=10)
+
+        worker.close()
+        # The third fetch still went out, since the request came right before it.
+        assert polls == 3
+
+    def test_an_idle_worker_sees_the_request_within_the_interval(
+        self, monkeypatch, ds_service_address, tmp_path, time_limit
+    ):
+        """The rate limit delays the return of an idle worker, but does not drop it."""
+        monkeypatch.setattr(worker_mod, "RESTART_CHECK_INTERVAL_S", 0.3)
+        worker = make_worker(ds_service_address, tmp_path)
+        worker.client = cast(
+            DsServiceClient, _RestartingClient(worker.client, "cpu", at_poll=2)
+        )
+
+        with time_limit(10, "the worker never returned for a restart"):
+            polls = run_until_restart(worker, max_polls=50)
+
+        worker.close()
+        assert polls >= 2
+
+    def test_a_request_older_than_the_worker_is_not_for_it(
+        self, check_every_time, ds_service_address, ds_client, tmp_path
+    ):
+        """A worker that started at generation N already runs the new code."""
+        request_restart(ds_client)
+        request_restart(ds_client)
+
+        worker = make_worker(ds_service_address, tmp_path)
+        polls = poll_worker(worker, polls=3)
+
+        worker.close()
+        assert worker.restart_generation == 2
+        assert polls == 3, "the worker restarted for a request made before it started"
+
+    def test_the_first_check_comes_before_the_first_claim(
+        self, check_rarely, executor, ds_service_address, ds_client, tmp_path
+    ):
+        """A worker older than the request must not run a task on the old code."""
+        worker = make_worker(ds_service_address, tmp_path)
+        task = executor.submit("cpu", square, 3)
+        request_restart(ds_client)
+
+        polls = run_until_restart(worker, max_polls=5)
+
+        worker.close()
+        assert polls == 0
+        assert ds_client.task_get_status(task.task_id) == TaskState.Ready
+
+    def test_a_running_task_completes_before_the_restart(
+        self, check_rarely, executor, ds_service_address, ds_client, tmp_path
+    ):
+        """The task itself requests the restart, so the request lands mid-task."""
+        first = executor.submit("cpu", restart_own_group, 7)
+        worker = make_worker(ds_service_address, tmp_path)
+
+        # One fetch claims the task,
+        # and `main()` returns at the check right after the task.
+        polls = run_until_restart(worker, max_polls=5)
+        second = executor.submit("cpu", square, 3)
+
+        worker.close()
+        assert polls == 1
+        assert ds_client.task_get_status(first.task_id) == TaskState.Finished
+        executor.wait([first], desc="test")
+        assert first.output == 7
+        # Nothing claimed a task after the worker saw the restart.
+        assert ds_client.task_get_status(second.task_id) == TaskState.Ready
+
+    def test_a_failed_task_also_counts_as_a_finished_one(
+        self, check_rarely, executor, ds_service_address, ds_client, tmp_path
+    ):
+        """The check right after a task does not depend on how the task ended."""
+        task = executor.submit("cpu", boom)
+        worker = make_worker(ds_service_address, tmp_path)
+        worker.client = cast(
+            DsServiceClient, _RestartingClient(worker.client, "cpu", at_poll=1)
+        )
+
+        polls = run_until_restart(worker, max_polls=5)
+
+        worker.close()
+        assert polls == 1
+        assert ds_client.task_get_status(task.task_id) == TaskState.Failed
+
+    def test_a_restart_of_one_group_leaves_another_alone(
+        self, check_every_time, ds_service_address, ds_client, tmp_path
+    ):
+        worker = make_worker(ds_service_address, tmp_path, group="gpu")
+        request_restart(ds_client, "cpu")
+
+        polls = poll_worker(worker, polls=3)
+
+        worker.close()
+        assert polls == 3, "the worker restarted for another group's request"
+
+    def test_a_failed_counter_read_does_not_end_the_worker(
+        self, check_every_time, ds_service_address, tmp_path, caplog
+    ):
+        """A server problem is not a restart request."""
+        worker = make_worker(ds_service_address, tmp_path)
+        # The first read succeeds, and every later one fails.
+        worker.client = cast(
+            DsServiceClient,
+            _FailingCounterClient(worker.client, fail=lambda n: n > 1),
+        )
+
+        with caplog.at_level(logging.ERROR, logger="worker_process"):
+            polls = poll_worker(worker, polls=3)
+
+        worker.close()
+        assert polls == 3
+        assert "Failed to read the restart counter" in caplog.text
+
+    def test_no_claim_before_a_read_of_the_counter_succeeds(
+        self, check_rarely, ds_service_address, tmp_path, time_limit
+    ):
+        """A failed first read leaves the worker idle, not on the old code.
+
+        A claim then could run a task after `restart_jobs` returned.
+        """
+        worker = make_worker(ds_service_address, tmp_path)
+        client = _FailingCounterClient(worker.client, fail=lambda n: n <= 3)
+        worker.client = cast(DsServiceClient, client)
+
+        with time_limit(10, "the worker never read the counter again"):
+            polls = poll_worker(worker, polls=2)
+
+        worker.close()
+        assert polls == 2
+        # The rate limit did not apply to the reads that failed.
+        assert client.events[:5] == [
+            "read-failed",
+            "read-failed",
+            "read-failed",
+            "read",
+            "fetch",
+        ]
+
+
 class TestCli:
     """The console entry point.
 
@@ -698,7 +972,7 @@ class TestCli:
     """
 
     @pytest.fixture(autouse=True)
-    def _restore_process_state(self):
+    def _restore_process_state(self) -> Generator[None]:
         """Restore `sys.path`, the SIGTERM handler and the environment."""
         # The command prepends to `sys.path` and installs a SIGTERM handler,
         # and undoes neither, because in production the process is the worker.
@@ -716,7 +990,7 @@ class TestCli:
 
     @pytest.fixture
     def captured(self, monkeypatch):
-        """Replace the worker so main() returns instead of looping."""
+        """Replace the worker so `main()` returns at once, as it does for a restart."""
         seen = {}
 
         class FakeWorker:
@@ -759,9 +1033,10 @@ class TestCli:
             return exc.exit_code
 
     def test_runs_and_closes_the_worker(self, captured, tmp_path):
+        """`main()` returns only for a restart, so the command asks for one."""
         exit_code = self.invoke(tmp_path)
 
-        assert exit_code == 0
+        assert exit_code == worker_mod.RESTART_EXIT_CODE
         assert captured["closed"] is True
 
     def test_prepends_python_paths(self, captured, tmp_path):
@@ -772,7 +1047,7 @@ class TestCli:
     def test_leaves_the_process_streams_alone(self, captured, tmp_path):
         """A redirect empties the file Slurm writes.
 
-        See the developer notes, "Slurm interaction".
+        See the logging comment in `slurm_pilot_worker.slurm_pilot_worker`.
         """
         before = (sys.stdout, sys.stderr)
 

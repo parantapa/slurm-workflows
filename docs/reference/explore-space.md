@@ -53,10 +53,10 @@ see [Failures](objective.md#failures).
 | --- | --- |
 | `design(name)` | The points a study will evaluate, without evaluating them. |
 | `dim(name)` | How many dimensions a study's space has. |
-| `run()` | Submit every point of every study and block until all are back. |
+| `run()` | Submits every point of every study and blocks until all are back. |
 | `best_point(name)` | `(params, value)` of the lowest value the study measured. |
 | `best_output(name)` | The objective's whole result at that point. |
-| `save(path)` | Write the points, values and outputs to a gzipped pickle. |
+| `save(path)` | Writes the points, values and outputs to a gzipped pickle. |
 
 ```python
 exploration = ExploreSpaceSobolQMC(
@@ -77,7 +77,7 @@ A different seed draws a different design.
 
 | Attribute | What it holds |
 | --- | --- |
-| `results[name]` | Four index-aligned lists, in submission order: the `points` evaluated, the `values` ranked, the whole `outputs`, and `unit_points`, the points in the unit cube. |
+| `results[name]` | Four index-aligned lists, in submission order: the `points` evaluated, the `values` the points are ranked by, the whole `outputs`, and `unit_points`, the points in the unit cube. |
 | `studies` | The study list with the point count and seed filled in. `ExploreSpaceSobolQMC` leaves the caller's own `ExplorationStudy` objects alone. |
 
 ## The results file
@@ -100,3 +100,9 @@ results["demo"]["points"]     # the parameters of each evaluation
 
 `unit_points` is not in the file: only the space can place a point
 in the unit cube.
+
+## Related
+
+- [Search spaces](search-space.md)
+- [The objective](objective.md)
+- [`SlurmPilotExecutor`](executor.md)

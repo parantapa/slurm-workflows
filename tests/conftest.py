@@ -23,7 +23,7 @@ from slurm_workflows import slurm_utils
 from slurm_workflows.slurm_pilot_executor import SlurmPilotExecutor
 
 # Test-support modules (for example, support_actor) must be importable by name,
-# both for `import` here
+# both for `import` in the test modules
 # and for the worker's importlib-based actor lookup.
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -47,8 +47,6 @@ def _time_limit(seconds: float, message: str) -> Iterator[None]:
         yield
     finally:
         # This disarms any outer alarm as well.
-        # A `time_limit` block inside a test ends the 60s hang guard,
-        # so the rest of that test runs unguarded.
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous)
 
@@ -58,6 +56,8 @@ def time_limit() -> Callable[[float, str], AbstractContextManager[None]]:
     """Bound a block that can spin forever if the code under test regresses.
 
     The block raises `TimeoutError(message)` once `seconds` pass.
+    The end of the block also ends the 60s hang guard,
+    so the rest of the test runs unguarded.
     """
 
     return _time_limit
@@ -226,7 +226,10 @@ def srun_lines() -> Callable[[str], list[str]]:
 
 @pytest.fixture
 def ds_service_address() -> Generator[str]:
-    """Run a private ds-service for one test and yield its address."""
+    """Run a private ds-service for one test and yield its address.
+
+    The test skips when no `ds-service` executable is found.
+    """
     # A fresh in-memory server per test starts in about 10ms.
     # Why `DsServiceServer` owns the lifecycle and why it binds `lo`:
     # see docs/how-to-run-tests.md, "Notes for future changes".

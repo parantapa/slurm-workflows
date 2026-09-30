@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import re
 import json
 import uuid
 import itertools
 import logging
 import subprocess
+import threading
 from pathlib import Path
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 
 import pytest
 import cloudpickle
@@ -46,7 +48,7 @@ def num_workers(ex: SlurmPilotExecutor, detail: bool = False) -> int | dict[str,
 def drain(ds_client: DsServiceClient, queue: str, count: int) -> list[str]:
     """Act as a worker: pull `count` tasks and post their real results."""
 
-    task_ids = []
+    task_ids: list[str] = []
     for _ in range(count):
         task = ds_client.task_get("test-worker", queue)
         fn = cloudpickle.loads(task.function)
@@ -186,7 +188,7 @@ class TestProgressDisplay:
     """What a wait publishes for `swtop` to draw."""
 
     @pytest.fixture(autouse=True)
-    def _pilot_jobs(self, pilot_jobs):
+    def _pilot_jobs(self, pilot_jobs: Callable[..., None]) -> None:
         pilot_jobs("cpu")
 
     def published(self, ds_client: DsServiceClient) -> dict:
@@ -423,7 +425,9 @@ class TestDefineWorker:
 
 class TestScaleWorkers:
     @pytest.fixture
-    def defined(self, executor, setup_script):
+    def defined(
+        self, executor: SlurmPilotExecutor, setup_script: str
+    ) -> SlurmPilotExecutor:
         executor.define_job_group(
             name="cpu",
             sbatch_args=["-A alloc", "-t 01:00:00"],
@@ -574,10 +578,8 @@ class TestScaleWorkers:
         batch_cmds = srun_lines(batch_script.script_text)
         fanout_cmds = srun_lines(fanout_script.script_text)
         assert batch_cmds == []
-        # Two, because the choice is the job's to make when it starts.
-        # A one-task job writes to the batch file.
-        # Anything larger takes a file per task
-        # instead of interleaving them all into that one.
+        # Two, because the job picks one when it starts.
+        # See the developer notes, "Slurm interaction".
         assert len(fanout_cmds) == 2
         assert all(cmd.endswith(".sh'") for cmd in fanout_cmds)
         assert "--output" not in fanout_cmds[0]
@@ -597,6 +599,291 @@ class TestScaleWorkers:
         assert (
             f"--output '{executor.work_dir}/testex.job.fanout.0-%j-%t.out'" in per_task
         )
+
+
+# --------------------------------------------------------------------------
+# restart_jobs
+# --------------------------------------------------------------------------
+
+
+# The restart tests play the workers' part with map keys,
+# written the way `PilotWorker` writes them,
+# rather than launch a worker.
+def publish_worker(
+    client: DsServiceClient,
+    job_name: str,
+    slurm_job_id: int,
+    generation: int = 0,
+    pid: int = 1,
+) -> str:
+    """Act as a worker that started: publish its info and return its id."""
+
+    worker_id = f"{job_name}.{slurm_job_id}.node1.{pid}"
+    # Job names are `<executor>.job.<group>.<index>`.
+    info = {
+        "group": job_name.split(".")[2],
+        "name": job_name,
+        "slurm_job_id": slurm_job_id,
+        "hostname": "node1",
+        "pid": pid,
+        "restart_generation": generation,
+        "start_time": datetime.now().astimezone().isoformat(),
+    }
+    client.map_set(f"worker_info:{worker_id}", json.dumps(info).encode("utf-8"))
+    return worker_id
+
+
+def publish_exit(client: DsServiceClient, worker_id: str) -> None:
+    """Act as a worker that exited: publish its exit."""
+
+    exit_time = datetime.now().astimezone().isoformat()
+    client.map_set(
+        f"worker_exit:{worker_id}",
+        json.dumps({"exit_time": exit_time}).encode("utf-8"),
+    )
+
+
+def later(delay: float, action: Callable[[], None]) -> threading.Timer:
+    """Run `action` on another thread after `delay` seconds."""
+
+    timer = threading.Timer(delay, action)
+    timer.start()
+    return timer
+
+
+class TestRestartJobs:
+    @pytest.fixture(autouse=True)
+    def fast_polls(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Poll often, so a wait ends soon after what it waits on happens."""
+        monkeypatch.setattr(spe, "RESTART_POLL_INTERVAL_S", 0.01)
+        monkeypatch.setattr(spe, "RESTART_LIVE_CHECK_INTERVAL_S", 0.02)
+
+    @pytest.fixture
+    def defined(self, executor: SlurmPilotExecutor) -> SlurmPilotExecutor:
+        executor.define_job_group("cpu", [])
+        return executor
+
+    def jobs(self, ex: SlurmPilotExecutor, group: str) -> list[tuple[str, int]]:
+        """The job names and Slurm job ids the executor tracks for `group`."""
+
+        return [(name, job.job_id) for name, job in ex.groups[group].jobs.items()]
+
+    def exit_later(self, address: str, worker_id: str, delay: float) -> threading.Timer:
+        """Publish the exit of `worker_id` after `delay`, on its own client."""
+
+        def run() -> None:
+            client = DsServiceClient(address)
+            try:
+                publish_exit(client, worker_id)
+            finally:
+                client.close()
+
+        return later(delay, run)
+
+    def test_without_wait_it_returns_increasing_generations(self, defined):
+        assert defined.restart_jobs("cpu", wait=False) == 1
+        assert defined.restart_jobs("cpu", wait=False) == 2
+
+    def test_each_group_counts_its_own_generations(self, defined):
+        defined.define_job_group("gpu", [])
+
+        assert defined.restart_jobs("cpu", wait=False) == 1
+        assert defined.restart_jobs("cpu", wait=False) == 2
+        assert defined.restart_jobs("gpu", wait=False) == 1
+
+    def test_unknown_group_is_rejected(self, executor):
+        with pytest.raises(AssertionError, match="Unknown job group"):
+            executor.restart_jobs("nope")
+
+    def test_a_negative_timeout_is_rejected(self, defined):
+        with pytest.raises(ValueError, match="must not be negative"):
+            defined.restart_jobs("cpu", timeout=-1)
+
+    def test_with_no_workers_the_wait_returns_at_once(self, defined, time_limit):
+        with time_limit(5, "restart_jobs waited with no worker to wait on"):
+            assert defined.restart_jobs("cpu", timeout=1) == 1
+
+    def test_the_wait_ends_once_every_old_worker_has_exited(
+        self, defined, ds_client, ds_service_address, time_limit, capsys
+    ):
+        defined.scale_jobs("cpu", 2)
+        workers = [
+            publish_worker(ds_client, name, job_id)
+            for name, job_id in self.jobs(defined, "cpu")
+        ]
+        # One exits at once, and the other a little later,
+        # so the wait has to see both.
+        publish_exit(ds_client, workers[0])
+        timer = self.exit_later(ds_service_address, workers[1], 0.3)
+
+        try:
+            with time_limit(10, "restart_jobs never saw the workers exit"):
+                assert defined.restart_jobs("cpu") == 1
+        finally:
+            timer.join()
+
+        # Only the exit ends the wait, so both exits are in place by then.
+        assert all(defined._has_exited(w) for w in workers)
+        # The exit of the old workers is the point, not a failure to report.
+        assert "warning:" not in capsys.readouterr().err
+
+    def test_a_worker_already_at_the_new_generation_is_not_waited_on(
+        self, defined, ds_client
+    ):
+        defined.scale_jobs("cpu", 1)
+        ((name, job_id),) = self.jobs(defined, "cpu")
+        # The first restart makes generation 1,
+        # and this worker started on it already.
+        publish_worker(ds_client, name, job_id, generation=1)
+
+        # A finite timeout turns a wrong wait into a TimeoutError, not a hang.
+        assert defined.restart_jobs("cpu", timeout=1) == 1
+
+    def test_a_worker_of_another_group_is_not_waited_on(self, defined, ds_client):
+        defined.define_job_group("gpu", [])
+        defined.scale_jobs("gpu", 1)
+        ((name, job_id),) = self.jobs(defined, "gpu")
+        publish_worker(ds_client, name, job_id)
+
+        assert defined.restart_jobs("cpu", timeout=1) == 1
+
+    def test_a_worker_of_an_untracked_job_is_not_waited_on(
+        self, defined, ds_client, fake_slurm
+    ):
+        defined.scale_jobs("cpu", 2)
+        before = self.jobs(defined, "cpu")
+        defined.scale_jobs("cpu", 1)
+        (dropped,) = set(before) - set(self.jobs(defined, "cpu"))
+        # Keep the dropped job in `squeue`,
+        # so the wait ends only because the executor no longer tracks it.
+        fake_slurm.running_job_ids.append(dropped[1])
+        publish_worker(ds_client, *dropped)
+
+        assert defined.restart_jobs("cpu", timeout=1) == 1
+
+    def test_a_worker_whose_slurm_job_ended_is_no_longer_waited_on(
+        self, defined, ds_client, fake_slurm, time_limit
+    ):
+        """A worker killed with SIGKILL, or with its node, never publishes an exit."""
+        defined.scale_jobs("cpu", 1)
+        ((name, job_id),) = self.jobs(defined, "cpu")
+        publish_worker(ds_client, name, job_id)
+        timer = later(0.3, lambda: fake_slurm.running_job_ids.remove(job_id))
+
+        try:
+            with time_limit(10, "restart_jobs never saw the Slurm job end"):
+                assert defined.restart_jobs("cpu") == 1
+        finally:
+            timer.join()
+
+    def test_a_failing_squeue_does_not_count_a_worker_as_dead(
+        self, defined, ds_client, fake_slurm
+    ):
+        defined.scale_jobs("cpu", 1)
+        ((name, job_id),) = self.jobs(defined, "cpu")
+        worker_id = publish_worker(ds_client, name, job_id)
+        # If `squeue` answers, its list does not hold the job.
+        fake_slurm.running_job_ids.clear()
+        fake_slurm.fail_command("squeue")
+
+        with pytest.raises(TimeoutError, match=re.escape(worker_id)):
+            defined.restart_jobs("cpu", timeout=0.3)
+
+    def test_a_failing_squeue_keeps_its_previous_answer(
+        self, defined, ds_client, fake_slurm
+    ):
+        """A job that `squeue` listed stays live while `squeue` fails."""
+        defined.scale_jobs("cpu", 1)
+        ((name, job_id),) = self.jobs(defined, "cpu")
+        worker_id = publish_worker(ds_client, name, job_id)
+
+        def break_squeue() -> None:
+            fake_slurm.running_job_ids.clear()
+            fake_slurm.fail_command("squeue")
+
+        # The first `squeue` runs at once and lists the job.
+        timer = later(0.1, break_squeue)
+        try:
+            with pytest.raises(TimeoutError, match=re.escape(worker_id)):
+                defined.restart_jobs("cpu", timeout=0.5)
+        finally:
+            timer.join()
+
+    def test_the_wait_resumes_once_squeue_answers_again(
+        self, defined, ds_client, fake_slurm, time_limit
+    ):
+        defined.scale_jobs("cpu", 1)
+        ((name, job_id),) = self.jobs(defined, "cpu")
+        publish_worker(ds_client, name, job_id)
+        fake_slurm.running_job_ids.clear()
+        fake_slurm.fail_command("squeue")
+        timer = later(0.3, lambda: fake_slurm.fail.pop("squeue"))
+
+        try:
+            with time_limit(10, "restart_jobs never retried squeue"):
+                assert defined.restart_jobs("cpu") == 1
+        finally:
+            timer.join()
+
+    def test_a_timeout_names_the_remaining_workers(self, defined, ds_client):
+        defined.scale_jobs("cpu", 2)
+        first, second = [
+            publish_worker(ds_client, name, job_id)
+            for name, job_id in self.jobs(defined, "cpu")
+        ]
+        publish_exit(ds_client, first)
+
+        with pytest.raises(TimeoutError) as raised:
+            defined.restart_jobs("cpu", timeout=0.2)
+
+        message = str(raised.value)
+        assert "1 workers of job group 'cpu'" in message
+        assert second in message
+        assert first not in message
+
+    def test_a_timeout_keeps_the_new_generation(self, defined, ds_client):
+        """The restart request stays,
+        so the next restart continues the count from it.
+        """
+        defined.scale_jobs("cpu", 1)
+        ((name, job_id),) = self.jobs(defined, "cpu")
+        publish_worker(ds_client, name, job_id)
+
+        with pytest.raises(TimeoutError):
+            defined.restart_jobs("cpu", timeout=0.1)
+
+        assert defined.restart_jobs("cpu", wait=False) == 2
+
+    def test_a_zero_timeout_raises_at_once(
+        self, defined, ds_client, monkeypatch, time_limit
+    ):
+        defined.scale_jobs("cpu", 1)
+        ((name, job_id),) = self.jobs(defined, "cpu")
+        worker_id = publish_worker(ds_client, name, job_id)
+        # A single sleep outlasts the time limit,
+        # so the call raises before its first sleep.
+        monkeypatch.setattr(spe, "RESTART_POLL_INTERVAL_S", 30.0)
+
+        with time_limit(5, "a zero timeout still slept"):
+            with pytest.raises(TimeoutError, match=re.escape(worker_id)):
+                defined.restart_jobs("cpu", timeout=0)
+
+    def test_a_new_worker_that_already_exited_is_reported(
+        self, defined, ds_client, capsys
+    ):
+        defined.scale_jobs("cpu", 2)
+        first, second = self.jobs(defined, "cpu")
+        crashed = publish_worker(ds_client, *first, generation=1)
+        publish_exit(ds_client, crashed)
+        healthy = publish_worker(ds_client, *second, generation=1)
+
+        assert defined.restart_jobs("cpu", timeout=1) == 1
+
+        err = capsys.readouterr().err
+        assert err.startswith("warning: ")
+        assert "1 restarted workers of job group 'cpu'" in err
+        assert crashed in err
+        assert healthy not in err
 
 
 # --------------------------------------------------------------------------
@@ -679,7 +966,7 @@ class TestSubmit:
 
 class TestTaskParents:
     @pytest.fixture(autouse=True)
-    def _pilot_jobs(self, pilot_jobs):
+    def _pilot_jobs(self, pilot_jobs: Callable[..., None]) -> None:
         pilot_jobs("cpu")
 
     def test_a_task_has_no_parents_by_default(self, executor):
@@ -797,7 +1084,7 @@ class TestTaskName:
 
 class TestAsCompleted:
     @pytest.fixture(autouse=True)
-    def _pilot_jobs(self, pilot_jobs):
+    def _pilot_jobs(self, pilot_jobs: Callable[..., None]) -> None:
         pilot_jobs("cpu")
 
     def test_yields_results(self, executor, ds_client):
@@ -905,7 +1192,7 @@ class TestAsCompleted:
 
 class TestRemoteErrors:
     @pytest.fixture(autouse=True)
-    def _pilot_jobs(self, pilot_jobs):
+    def _pilot_jobs(self, pilot_jobs: Callable[..., None]) -> None:
         pilot_jobs("cpu")
 
     def test_a_worker_exception_comes_back_as_the_output(self, executor, ds_client):
@@ -1246,7 +1533,7 @@ class TestNoWorkerStarted:
 
 
 @pytest.fixture
-def check_immediately(monkeypatch):
+def check_immediately(monkeypatch: pytest.MonkeyPatch) -> None:
     """Collapse the liveness interval so one poll triggers a check."""
 
     # The real interval lets a submit come before its `scale_jobs` call.

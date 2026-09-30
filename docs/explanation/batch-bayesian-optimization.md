@@ -152,3 +152,5 @@ and every acquisition value lives in that negated space too.
     for the objective contract
 - [How to resume a search](../how-to-guides/resume-a-search.md)
 - [Optimizing Himmelblau's function](../tutorials/optimizing-himmelblau.md)
+- [The pilot-job model](pilot-job-model.md),
+    for the pool, the queues and the driver

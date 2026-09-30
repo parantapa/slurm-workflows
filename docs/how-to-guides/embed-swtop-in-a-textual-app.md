@@ -5,7 +5,7 @@
 Your own Textual app can show what `swtop` shows,
 next to views of its own.
 You can put any of the `swtop` tabs among your own tabs,
-and put the summary line, the progress bar and the error line
+and put the summary line, the progress display and the error line
 anywhere in your layout.
 
 For every widget and its arguments, see
@@ -56,10 +56,8 @@ class MyApp(App):
 MyApp().run()
 ```
 
-The poller opens its own client on the app's event loop,
-and closes it when the app exits.
-Each tab keeps its row count in its label,
-in your `TabbedContent` as in `swtop`.
+You need not open or close a client yourself,
+because the poller does both on the app's event loop.
 
 To take all five tabs as they are,
 compose `SwtopTabs()` in place of your own `TabbedContent`.
@@ -91,11 +89,13 @@ A tab from `block_pane` has the id `swtop-` and the block key by default,
 such as `swtop-workers`.
 Pass `id=` to `block_pane` to choose another.
 
-The tasks tab from `block_pane` holds a `TaskTable`,
-which is a `BlockTable` with a row of state checkboxes above it.
-So `self.query(BlockTable)` finds it too.
-To start it on other states,
-yield `TaskTable(spec, states={"Failed"})` in place of a `BlockTable`.
+If you want the tasks tab to start on other states,
+yield `TaskTable(spec, states={"Failed"})` in place of the tasks `block_pane`,
+inside a `TabPane` of your own.
+`block_pane` takes no `states`.
+A `TaskTable` is a `BlockTable` with a row of state checkboxes above it,
+so `self.query(BlockTable)` still finds it.
+See [`TaskTable`](../reference/swtop.md#slurm_workflowsswtop_widgets).
 
 ## React to a poll in your own widgets
 

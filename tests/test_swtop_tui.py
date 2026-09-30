@@ -1,9 +1,8 @@
-"""Tests for the `swtop` terminal UI.
+"""Tests for the `swtop` terminal UI."""
 
-The tests assert on the state of the widgets rather than on pixels.
-How they drive the app headlessly, and why they wait on `app.workers`,
-is in how-to-run-tests.md, under "Notes for future changes".
-"""
+# The tests assert on the state of the widgets rather than on pixels.
+# How they drive the app headlessly, and why they wait on `app.workers`:
+# see docs/how-to-run-tests.md, under "Notes for future changes".
 
 from __future__ import annotations
 

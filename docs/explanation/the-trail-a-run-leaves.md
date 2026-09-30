@@ -124,7 +124,7 @@ or every reading arrives forty times over.
 
 The election uses a `ds-service` counter.
 `counter_get_next_value` returns distinct, gap-free values.
-The worker told 1 for `host_monitor:<hostname>:<job-id>` takes the node,
+The worker told 1 for `host_monitor:<hostname>:<job-id>:<generation>` takes the node,
 the part of the job on that node, and the GPUs that part can see.
 Slurm accounts a job in a separate cgroup on each node,
 so no single worker can read the whole of a job that spans nodes.
@@ -143,7 +143,16 @@ Two jobs that share a node both sample it,
 and their readings land in the same series,
 since they measure the same machine.
 
-Nothing hands a subject back when that worker dies.
+The host counter also carries the job group's restart generation,
+for the same reason.
+[`restart_jobs`](../reference/executor.md#restart_jobs) replaces every worker of a job,
+and the sampler exits with the rest.
+Keyed on the job id alone,
+the counter is already past 1 when the new workers ask.
+As a result, the job has no sampler after its first restart.
+
+Nothing hands a subject back when that worker dies,
+until a restart of its job group holds a new election.
 The series stops,
 and a reader that sees no point in the last minute
 calls the subject `(stale)`.
@@ -167,7 +176,7 @@ usually at the least convenient moment.
 So `swtop` reports an unreachable server and keeps polling.
 The terminal UI reports it below the blocks,
 with the last good reading left on screen.
-The same behavior lets you start `swtop` before the server exists.
+The same behavior lets `swtop` start before the server exists.
 There is no meaningful difference between a server that is not up yet
 and one that is briefly away.
 
@@ -185,3 +194,7 @@ That is a property of the server, not a gap to work around.
 
 - [`swtop` reference](../reference/swtop.md)
 - [How to watch a run with `swtop`](../how-to-guides/watch-a-run-with-swtop.md)
+- [What a run publishes](../reference/what-a-run-publishes.md),
+    for the keys and fields
+- [The pilot-job model](pilot-job-model.md),
+    for the processes that leave this trail

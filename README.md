@@ -102,9 +102,10 @@ They wait on the queue until a worker starts and claims them.
 | [How to embed `swtop` in a Textual app](docs/how-to-guides/embed-swtop-in-a-textual-app.md) | Putting the `swtop` tabs, summary line, progress bar and error line in your own Textual app. |
 | [How to troubleshoot a failing run](docs/how-to-guides/troubleshoot-a-failing-run.md) | Finding the right log, and what each `RuntimeError` means. |
 | [How to resume a search](docs/how-to-guides/resume-a-search.md) | Carrying a search on across a Slurm time limit. |
-| [`SlurmPilotExecutor`](docs/reference/executor.md) | The executor, `Task`, `RaiseOnError`, the job group options, and the worker entry point. |
+| [How to update worker code without resubmitting](docs/how-to-guides/update-worker-code-without-resubmitting.md) | Restarting the workers in running pilot jobs, so they run new code without a second wait in Slurm's queue. |
+| [`SlurmPilotExecutor`](docs/reference/executor.md) | The executor, `Task`, `RaiseOnError`, the job group options, restarting workers, and the worker entry point. |
 | [`mapreduce`](docs/reference/mapreduce.md) | Mapping an iterable across the pool, the fold contract, and what the call creates on the server. |
-| [What a run publishes](docs/reference/what-a-run-publishes.md) | The environment a task sees, the keys and series a run writes, and the logs. |
+| [What a run publishes](docs/reference/what-a-run-publishes.md) | The keys and series a run writes, and the logs. |
 | [`ExploreSpaceSobolQMC`](docs/reference/explore-space.md) | The Sobol' exploration, its study fields, and the results file. |
 | [`OptimizeSpaceBotorch`](docs/reference/optimize-space.md) | The batch Bayesian search, its study fields, and its stopping rule. |
 | [Search spaces](docs/reference/search-space.md) | `IntRange`, `FloatRange` and `CategoricalRange`. |

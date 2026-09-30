@@ -37,15 +37,12 @@ class ExplorationStudy:
     objective: its argument names must match the keys of `space`,
         and it returns a mapping carrying `objective_key`.
     objective_queue: the queue, or queues, every evaluation goes to.
-    num_exploration_points: number of points to sample.
-        The exploration truncates it to the nearest lower power of two.
+    num_exploration_points: truncated to the nearest lower power of two.
         When None, the count comes from the exploration.
-    seed: seed for this study's design.
-        When None, the exploration draws a random one and prints it.
+    seed: when None, the exploration draws a random one and prints it.
     objective_key: the key of the result to rank points by, lower first.
         The exploration records every other key and does not rank it.
-    extra_objective_kwargs: extra keyword arguments for the objective.
-        Must not shadow a parameter of the space.
+    extra_objective_kwargs: must not shadow a parameter of the space.
     priority: the priority of every task this study submits.
         The server dispatches the highest priority first.
     """
@@ -211,6 +208,9 @@ class ExploreSpaceSobolQMC:
         # a Sobol' sequence is only balanced on a power-of-two prefix.
         return replace(
             study,
+            # A copy of the space as well,
+            # so a later change to the caller's mapping
+            # cannot move the columns of a unit point.
             space=dict(study.space),
             num_exploration_points=floor_power_of_two(points),
             seed=seed,
@@ -255,6 +255,9 @@ class ExploreSpaceSobolQMC:
         It prints each study's best point when done.
         If any evaluation fails,
         it records every result that came back, then raises `RuntimeError`.
+        Otherwise, if an objective returns a result it cannot rank,
+        it raises `RuntimeError` at that result,
+        and records only the results before it in submission order.
         """
         # Every submit comes before the one wait.
         # See the developer notes, Sobol' exploration.

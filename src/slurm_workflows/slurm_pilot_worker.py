@@ -44,6 +44,19 @@ WORKER_EXIT_PREFIX = "worker_exit:"
 PILOT_JOB_START_PREFIX = "pilot_job_start:"
 PILOT_JOB_EXIT_PREFIX = "pilot_job_exit:"
 
+# One counter per job group, which `SlurmPilotExecutor.restart_jobs` advances.
+# A worker that sees it move exits with `RESTART_EXIT_CODE`,
+# and the worker script starts it again on that status.
+# 75 is `EX_TEMPFAIL` from `sysexits.h`.
+# See the developer notes, Restarting workers.
+RESTART_GENERATION_PREFIX = "restart_generation:"
+RESTART_EXIT_CODE = 75
+
+# How often an idle worker reads the restart counter.
+# A worker that just finished a task reads it at once,
+# and so does a worker about to claim its first task.
+RESTART_CHECK_INTERVAL_S: float = 1.0
+
 # The actor of the worker running in this process, or None.
 # A task reads it through `current_actor()`,
 # which is how a task dispatches a method name of its own.
@@ -111,8 +124,7 @@ class PilotWorker:
         Puts this worker's identity in the environment,
         so the actor and every task it runs can read it.
         Publishes that identity on the server,
-        and starts the monitors of this node,
-        unless another worker of this job on this node has taken them.
+        and may start the monitors of this node.
         Whatever importing or constructing the actor raises propagates,
         after this worker publishes its exit
         and closes its own monitors and client.
@@ -126,6 +138,9 @@ class PilotWorker:
         # `<job-name>.<job-id>.<hostname>.<pid>`.
         # The job name carries the job group.
         self.worker_id = "%s.%s.%s.%s" % (name, slurm_job_id, hostname, pid)
+        # `worker_process` is a retired word,
+        # kept because every worker log line carries it.
+        # See docs/terminology.md, Names that changed.
         self.logger = logging.getLogger("worker_process")
         self._exit_published = False
 
@@ -134,6 +149,18 @@ class PilotWorker:
         self._publish_environment()
 
         self.client = DsServiceClient(self.server_address)
+
+        # Before this worker imports the actor and publishes its identity,
+        # so a restart requested from here on reaches this worker too.
+        # See the developer notes, Restarting workers.
+        # A counter that does not exist reads as 0.
+        self.restart_generation = self.client.counter_get_current_value(
+            f"{RESTART_GENERATION_PREFIX}{self.group}"
+        )
+        # False until `main()` reads the counter once.
+        # Until then, `main()` claims no task.
+        self._restart_counter_read = False
+        self._next_restart_check = 0.0
 
         # Before the actor is built, so a worker that dies building one
         # has still said where it died.
@@ -192,6 +219,7 @@ class PilotWorker:
             "slurm_job_id": slurm_job_id,
             "hostname": hostname,
             "pid": pid,
+            "restart_generation": self.restart_generation,
             "start_time": _timestamp(),
         }
         self.client.map_set(
@@ -217,16 +245,10 @@ class PilotWorker:
         self, hostname: str, slurm_job_id: int, interval: float
     ) -> None:
         """Monitor this node, the job and its GPUs on it, unless a peer does."""
-        # The counter hands out distinct values,
-        # so exactly one worker per job per node sees 1,
+        # Exactly one worker per job, node and restart generation sees 1,
         # and takes the node, the job on it and the job's GPUs.
-        # The counter key holds the job id,
-        # because counters never reset while the server runs,
-        # and a node that a later pilot job lands on would otherwise get no sampler.
-        # Two live jobs on one node both sample it,
-        # which only adds points to the same host series.
-        # See the developer notes, Monitoring.
-        counter = f"host_monitor:{hostname}:{slurm_job_id}"
+        # See the developer notes, Monitoring, for why the key holds each part.
+        counter = f"host_monitor:{hostname}:{slurm_job_id}:{self.restart_generation}"
         if self.client.counter_get_next_value(counter) != 1:
             return
 
@@ -240,7 +262,7 @@ class PilotWorker:
                 self.client, slurm_job_id, hostname, interval, self.logger
             )
         )
-        # None on a node where NVML finds no GPU for this job.
+        # None on a node where NVML finds no GPU for this job, or cannot start.
         gpu_monitor = start_gpu_monitor(
             self.client, slurm_job_id, hostname, interval, self.logger
         )
@@ -266,6 +288,27 @@ class PilotWorker:
                 f"but job group {self.group!r} has no actor"
             )
         return getattr(self.actor_instance, name)
+
+    def _restart_requested(self, now: bool = False) -> bool:
+        """Whether the restart counter moved past this worker's generation."""
+        clock = time.monotonic()
+        # At most one read per `RESTART_CHECK_INTERVAL_S`,
+        # unless `now` is set or no read has succeeded yet.
+        if not now and self._restart_counter_read and clock < self._next_restart_check:
+            return False
+        self._next_restart_check = clock + RESTART_CHECK_INTERVAL_S
+
+        try:
+            current = self.client.counter_get_current_value(
+                f"{RESTART_GENERATION_PREFIX}{self.group}"
+            )
+        # A failed read counts as no request,
+        # so a server problem cannot end the worker.
+        except Exception:
+            self.logger.exception("Failed to read the restart counter")
+            return False
+        self._restart_counter_read = True
+        return current > self.restart_generation
 
     def _stop_monitors(self) -> None:
         """Stop whatever monitoring this worker still runs."""
@@ -295,10 +338,12 @@ class PilotWorker:
             self.actor_instance = None
 
     def main(self) -> None:
-        """Pull tasks from the group's queue and run them, forever.
+        """Run tasks from the job group's queue until a restart is requested.
 
-        Never returns of its own accord:
-        a worker lives until its Slurm job ends.
+        Returns only when `SlurmPilotExecutor.restart_jobs`
+        asked this worker's job group to restart.
+        The worker checks for that between tasks, never during one.
+        Otherwise a worker lives until its Slurm job ends.
         The command line entry point turns the SIGTERM
         that ends the job into a `SystemExit`,
         which this loop does not catch.
@@ -310,7 +355,24 @@ class PilotWorker:
         """
         self.logger.info("Starting worker: %s" % self.worker_id)
 
+        # Set after a task, so the rate limit does not skip the check that follows it.
+        task_finished = False
         while True:
+            # Outside the `try`, so nothing here is mistaken for a task failure.
+            # See the developer notes, Restarting workers,
+            # for why the first check must come before the first claim.
+            if self._restart_requested(now=task_finished):
+                self.logger.info("Restart requested: %s", self.worker_id)
+                return
+            task_finished = False
+
+            # A claim before any read succeeds can run a task on the old code
+            # after `restart_jobs` returned.
+            # See the developer notes, Restarting workers.
+            if not self._restart_counter_read:
+                time.sleep(NEXT_TASK_RETRY_TIME_S)
+                continue
+
             try:
                 try:
                     task = self.client.task_get(self.worker_id, self.group)
@@ -350,6 +412,7 @@ class PilotWorker:
                     self.client.task_done(
                         task.task_id, self.worker_id, output, failed=True
                     )
+                task_finished = True
             except Exception:
                 self.logger.exception("Unexpected exception")
 
@@ -408,8 +471,8 @@ def slurm_pilot_worker(
     hostname = socket.gethostname()
     pid = os.getpid()
 
-    # Logs to the inherited stderr, which Slurm writes to a file.
-    # See the developer notes, Slurm interaction.
+    # Logs to the inherited stderr, which Slurm writes to the `--output` file.
+    # Redirecting `sys.stdout` or `sys.stderr` here would leave that file empty.
     logging.basicConfig(format=LOG_FORMAT, level=LOG_LEVEL)
 
     python_paths: list[str] = json.loads(python_paths_json)
@@ -435,3 +498,7 @@ def slurm_pilot_worker(
         worker.main()
     finally:
         worker.close()
+
+    # `main()` returns only for a restart,
+    # and the worker script starts a new worker on this status.
+    sys.exit(RESTART_EXIT_CODE)

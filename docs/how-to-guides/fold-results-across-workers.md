@@ -2,16 +2,14 @@
 
 [<- back to the main README](../../README.md)
 
-Some work produces one number, not one task output per item.
-Counting the rows that match a filter, across ten thousand files, is one.
-Totaling the events a whole set of runs recorded is another.
-One task per item does the job, and it costs twice.
-The driver holds every task output,
-and each item pays a task's overhead.
-
-`mapreduce` does the summing on the workers instead.
-It hands out the items and folds them on the worker that mapped them.
-Each map task brings back one partial result.
+If your work produces one number, not one task output per item,
+such as counting the rows that match a filter across ten thousand files,
+or totaling the events a whole set of runs recorded,
+use `mapreduce` rather than one task per item.
+One task per item makes the driver hold every task output,
+and makes each item pay a task's overhead.
+`mapreduce` hands out the items and folds them on the worker that mapped them,
+so each map task brings back one partial result.
 
 ## Write a function that maps one item
 
@@ -52,10 +50,8 @@ which is how `threshold` gets there.
 
 The call blocks until every map task is back,
 so scale the job group up before you call it.
-Unlike `submit`, it checks for pilot jobs first.
-If no job group named in `queue` has a pilot job from `scale_jobs`,
-it raises `RuntimeError`, unless `iterable` is empty.
-A pilot job that is still pending is enough.
+If no job group named in `queue` has a pilot job, the call raises `RuntimeError`.
+See [What it refuses](../reference/mapreduce.md#what-it-refuses).
 
 ## Pick a `reduce_fn` and an `init` that go together
 
@@ -94,7 +90,7 @@ give `map_fn` the name of one of its methods instead of a callable:
 map_fn="predict", reduce_fn=add, init=0
 ```
 
-The model loads once per worker, whatever the number of items,
+The actor's expensive load runs once per worker, whatever the number of items,
 because each map task resolves the name against the actor
 its worker built at startup.
 For the rules, and for what a job group without an actor raises, see

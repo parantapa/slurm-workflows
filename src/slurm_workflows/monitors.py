@@ -2,8 +2,9 @@
 
 Each thread appends to a `ds-service` time series,
 one series per measurement per subject.
-`docs/reference/swtop.md` says what the readings mean.
-`docs/reference/what-a-run-publishes.md` lists every key they write.
+`docs/reference/swtop.md` says what the host and job readings mean.
+`docs/reference/what-a-run-publishes.md` lists every key they write,
+and says what the GPU readings mean.
 """
 
 from __future__ import annotations
@@ -23,6 +24,8 @@ import pynvml
 
 from ds_service_client import DsServiceClient
 
+# `swtop.STALE_AFTER_S` counts twelve readings at this interval,
+# so a change here needs one there.
 DEFAULT_MONITOR_INTERVAL_S: float = 5.0
 
 # Where the cgroup v2 files of the current process live.
@@ -36,28 +39,36 @@ HOST_FILESYSTEMS = {"dev_shm": "/dev/shm", "tmp": "/tmp"}
 # The subject is the hostname for a host,
 # and `<job-id>:<hostname>` for the part of a job on one node.
 HOST_SERIES = {
-    "free_memory": "host_free_memory:",  # bytes
-    "load_average": "host_load_average:",  # 1-minute load average
-    "dev_shm_used": "host_dev_shm_used:",  # percent of /dev/shm in use
-    "tmp_used": "host_tmp_used:",  # percent of /tmp in use
+    # Bytes.
+    "free_memory": "host_free_memory:",
+    # The 1-minute load average.
+    "load_average": "host_load_average:",
+    # Percent of /dev/shm in use.
+    "dev_shm_used": "host_dev_shm_used:",
+    # Percent of /tmp in use.
+    "tmp_used": "host_tmp_used:",
 }
 JOB_SERIES = {
-    # The cgroup's own total on one node, or summed RSS where that cannot be read.
-    "memory": "slurm_job_memory:",  # bytes
-    "cpu": "slurm_job_cpu:",  # cores in use, averaged over the interval
+    # Bytes: the cgroup's own total on one node,
+    # or summed RSS where that cannot be read.
+    "memory": "slurm_job_memory:",
+    # Cores in use, averaged over the interval.
+    "cpu": "slurm_job_cpu:",
 }
 
 # The subject of a GPU series is `<job-id>:<hostname>:<gpu-index>`.
 GPU_SERIES = {
-    "memory_used": "slurm_job_gpu_memory_used:",  # bytes
-    "memory_free": "slurm_job_gpu_memory_free:",  # bytes
+    # Both in bytes.
+    "memory_used": "slurm_job_gpu_memory_used:",
+    "memory_free": "slurm_job_gpu_memory_free:",
     # Percent of the driver's last sample period, 1/6 s to 1 s,
     # in which one or more kernels ran on the GPU.
     "utilization": "slurm_job_gpu_utilization:",
 }
 
 # A map key per GPU, as `<prefix><job-id>:<hostname>:<gpu-index>`,
-# with what a time series cannot hold: the GPU's type, as text.
+# with what a time series does not hold:
+# the GPU's type, its UUID and its total memory, as JSON.
 GPU_INFO_PREFIX = "slurm_job_gpu_info:"
 
 # Splits the job id from the hostname in the subject of a job series,
@@ -130,7 +141,7 @@ def nvml_session() -> Iterator[None]:
         pynvml.nvmlShutdown()
 
 
-def _if_supported(read: Callable[[Any], Any], handle: Any) -> Any | None:
+def _if_supported(read: Callable[[Any], Any], handle: object) -> Any | None:
     """What `read` returns for the GPU `handle`, or None where it is not supported."""
     try:
         return read(handle)
@@ -146,13 +157,13 @@ def _if_supported(read: Callable[[Any], Any], handle: Any) -> Any | None:
 def query_gpus() -> list[GpuReading]:
     """One reading of every GPU NVML lists for this process.
 
-    Call it inside an `nvml_session`.
+    It needs an open `nvml_session`.
     NVML ignores `CUDA_VISIBLE_DEVICES`.
     Where Slurm constrains devices, it lists the GPUs of the job step on this node.
     Elsewhere it lists every GPU on the node.
     Raises `pynvml.NVMLError` if NVML cannot read a GPU.
     """
-    readings = []
+    readings: list[GpuReading] = []
     for index in range(pynvml.nvmlDeviceGetCount()):
         handle = pynvml.nvmlDeviceGetHandleByIndex(index)
         gpu = GpuReading(
@@ -320,8 +331,7 @@ class BaseMonitor(threading.Thread):
         interval: float = DEFAULT_MONITOR_INTERVAL_S,
         logger: logging.Logger | None = None,
     ) -> None:
-        # A daemon, so a monitor never holds open a worker
-        # that Slurm kills at its time limit.
+        # A daemon, for the reason under "Monitoring" in the developer notes.
         super().__init__(daemon=True, name=f"monitor:{subject}")
         self.client = client
         self.subject = subject
@@ -394,9 +404,9 @@ class GpuMonitor(BaseMonitor):
 
     `subject` is the job's subject, `<job-id>:<hostname>`.
     Each GPU gets series of its own, under `<job-id>:<hostname>:<gpu-index>`.
-    The GPU's type goes in the map under `GPU_INFO_PREFIX`,
+    The GPU's type, UUID and total memory go in the map under `GPU_INFO_PREFIX`,
     written when the monitor first sees the GPU,
-    and again only if it changes.
+    and again only if one of them changes.
     The thread holds an `nvml_session` for as long as it runs.
     A call to `append_sample` from outside the thread needs a session of its own.
     """

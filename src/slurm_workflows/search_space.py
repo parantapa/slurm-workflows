@@ -118,7 +118,8 @@ class CategoricalRange:
 
 ParameterRange = IntRange | FloatRange | CategoricalRange
 
-# `Mapping` and not `dict`, for the reason under Conventions in the developer notes.
+# `Mapping` and not `dict`: `dict` is invariant,
+# and a correct call failed to type-check.
 SearchSpace = Mapping[str, ParameterRange]
 
 
@@ -128,7 +129,7 @@ def space_dim(space: SearchSpace) -> int:
 
 
 def to_params(space: SearchSpace, unit: Sequence[float]) -> dict[str, Any]:
-    """Unit cube coordinates -> objective keyword arguments.
+    """Map a unit point to the objective's keyword arguments.
 
     The coordinates follow the order of the space.
     `to_unit` produces them in that same order.
@@ -140,5 +141,5 @@ def to_params(space: SearchSpace, unit: Sequence[float]) -> dict[str, Any]:
 
 
 def to_unit(space: SearchSpace, params: Mapping[str, Any]) -> list[float]:
-    """Objective keyword arguments -> unit cube coordinates."""
+    """Map the objective's keyword arguments to a unit point."""
     return [range_.standardize(params[name]) for name, range_ in space.items()]

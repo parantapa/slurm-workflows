@@ -1,10 +1,4 @@
-"""HPC workflow helpers for Slurm clusters.
-
-The names in `__all__` are importable from here.
-`NoOutput` is not among them, and lives in `slurm_pilot_executor`.
-`OptimizeSpaceBotorch` and `OptimizationStudy` resolve on first use,
-so `import slurm_workflows` works without botorch installed.
-"""
+"""HPC workflow helpers for Slurm clusters."""
 
 from typing import TYPE_CHECKING, Any
 
@@ -25,6 +19,8 @@ if TYPE_CHECKING:
 
 _BOTORCH_NAMES = ("OptimizationStudy", "OptimizeSpaceBotorch")
 
+# `NoOutput` is not exported here.
+# It lives in `slurm_pilot_executor`.
 __all__ = [
     "SlurmPilotExecutor",
     "RaiseOnError",

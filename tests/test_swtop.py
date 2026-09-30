@@ -38,7 +38,7 @@ class LoopBound:
         wrap: Callable[[DsServiceClientAsync], Any] = lambda client: client,
     ) -> None:
         # One loop for the whole test, because the client binds to it.
-        # See how-to-run-tests.md, under "Notes for future changes".
+        # See docs/how-to-run-tests.md, under "Notes for future changes".
         self.loop = asyncio.new_event_loop()
         self.client = self.run(_make_client(address))
         self.collector = Collector(wrap(self.client), address)

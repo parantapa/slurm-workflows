@@ -7,7 +7,7 @@ a model, a database connection or a large table.
 A load that runs once per task wastes most of the run.
 Register an **actor class** instead.
 Each worker creates it once at startup,
-and you dispatch **method names** (as strings) instead of functions.
+and you submit **method names** (as strings) instead of functions.
 
 ## Write the actor class
 
@@ -27,17 +27,17 @@ class Model:
         self.model.release()
 ```
 
-Slurm ends a pilot job, at its time limit or through `scancel`,
-with SIGTERM, and with SIGKILL a little later.
-The worker turns the SIGTERM into `SystemExit` and calls its own `close()`,
-so the actor's `close()` runs too.
-The SIGKILL can cut a slow `close()` short.
-A SIGKILL on its own, or a node failure, skips it.
+If the actor has a `close()` method,
+the worker calls it when Slurm ends the pilot job,
+but a SIGKILL or a node failure can cut it short or skip it.
 Keep `close()` short,
 and do not rely on it for anything the next run needs.
+For when `close()` runs, see
+[`define_job_group` options](../reference/executor.md#define_job_group-options).
 
 The class must be importable on the compute node.
-By default, each worker adds the executor's current working directory
+By default, each worker adds the driver's current working directory,
+as it is when you call `define_job_group`,
 to its own `sys.path`.
 Add more paths with `python_paths=[...]`.
 
@@ -100,7 +100,9 @@ exactly as for the actor class itself.
 Each worker creates its actor once, at startup.
 You can redefine a job group with different actor arguments,
 but only the workers that start after that call read the new values.
-Scale the job group down and back up to rebuild the actors.
+To rebuild the actors in the running pilot jobs,
+call [`restart_jobs`](../reference/executor.md#restart_jobs).
+See [How to update worker code without resubmitting](update-worker-code-without-resubmitting.md).
 A redefinition with different `sbatch_args` raises an `AssertionError` instead.
 
 ## Related

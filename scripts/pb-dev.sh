@@ -23,6 +23,8 @@ run_build-python-package() {
 # Upload the sdist and the wheel in dist/ with twine.
 run_upload-python-package() {
     set -x
+    # Nothing cleans dist/, so the globs also pick up files
+    # that earlier builds left there.
     python -m twine upload dist/*.tar.gz dist/*.whl
 }
 

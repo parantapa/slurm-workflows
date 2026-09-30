@@ -2,7 +2,7 @@
 
 # Why most tests run on LocalExecutor,
 # and where the thresholds of TestSearchBehaviour come from:
-# see how-to-run-tests.md, Notes for future changes.
+# see docs/how-to-run-tests.md, Notes for future changes.
 
 from __future__ import annotations
 
@@ -109,16 +109,12 @@ class LocalExecutor:
         unit: str = "task",
         raise_on_error: RaiseOnError = RaiseOnError.RAISE_ON_FIRST_ERROR,
     ) -> None:
-        """The real `wait`'s contract, minus the waiting.
-
-        The callables ran in `submit`.
-        So all this has left to do is the raise policy.
-        That policy is what the optimizer relies on
-        to turn a failed evaluation into an exception.
-        """
+        """Apply the real `wait`'s raise policy to tasks that already ran in `submit`."""
         self.waits.append(desc)
         self.batch_sizes.append(len(tasks))
 
+        # The callables ran in `submit`, so only the raise policy is left.
+        # The optimizer relies on it to turn a failed evaluation into an exception.
         if raise_on_error is RaiseOnError.RAISE_NEVER:
             return
 
@@ -142,7 +138,7 @@ def as_executor(executor: LocalExecutor) -> SlurmPilotExecutor:
     return cast(SlurmPilotExecutor, executor)
 
 
-def sphere(x, y):
+def sphere(x: float, y: float) -> dict[str, Any]:
     """Convex, minimum f = 0 at the origin.
 
     The extra "note" key checks that the optimizer carries a whole output through.
@@ -161,13 +157,10 @@ def constant(x: float, y: float) -> dict[str, float]:
 
 
 def benign(**params: float) -> dict[str, float]:
-    """An objective for the *prior* file, whatever the space.
-
-    Tests of a broken objective still need observations to start from.
-    The file records each value,
-    but not the objective or the key that produced it.
-    The search's own key and objective are therefore free to differ from this.
-    """
+    """A prior-file objective for any space, for tests whose own objective fails."""
+    # The file records each value,
+    # but not the objective or the key that produced it.
+    # The search's own key and objective are therefore free to differ from this.
     return {"objective": float(sum(params.values()))}
 
 
@@ -186,12 +179,10 @@ def explored(
     seed: int = SEED,
     filename: str | None = None,
 ) -> Path:
-    """A results file that a real exploration wrote.
-
-    The optimizer starts from what `ExploreSpaceSobolQMC.save` wrote,
-    so the tests start from that too rather than from a hand-built file.
-    """
+    """A results file that a real exploration wrote."""
     space = BOX_2D if space is None else space
+    # The optimizer starts from what `ExploreSpaceSobolQMC.save` wrote,
+    # so the tests start from that too rather than from a hand-built file.
     exploration = ExploreSpaceSobolQMC(
         [ExplorationStudy(name, space, objective, "cpu", points, seed)],
         as_executor(LocalExecutor()),
@@ -1416,10 +1407,11 @@ class TestSaveAndResume:
 
 
 class TestTaskNames:
-    """The round is in every name because the batches look alike:
-    a queue full of evaluations otherwise says nothing
-    about where the search stands.
-    """
+    """Every task name carries its study, its kind and its round."""
+
+    # The round is in every name because the batches look alike:
+    # a queue full of evaluations otherwise says nothing
+    # about where the search stands.
 
     def test_the_fit_is_named_after_the_round_it_belongs_to(self, tmp_path):
         opt, executor = make_opt(tmp_path, rounds=2)
@@ -1474,7 +1466,7 @@ class TestSearchBehaviour:
     def test_search_moves_toward_the_minimum(self, tmp_path):
         # f(x) = x on [0, 1]: a flipped sign sends the search to 1.0 instead.
         # Why the median, not the max or the best point:
-        # see how-to-run-tests.md, Notes for future changes.
+        # see docs/how-to-run-tests.md, Notes for future changes.
         space = {"x": FloatRange(0.0, 1.0)}
         opt, _ = make_opt(
             tmp_path,
@@ -1799,6 +1791,8 @@ class TestRealExecutor:
             )
             opt.run()
         finally:
+            # Well inside the 60 s alarm on every test,
+            # so a stuck worker fails here, not at the alarm.
             thread.join(timeout=30)
             worker.close()
 

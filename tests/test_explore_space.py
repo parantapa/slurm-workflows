@@ -729,6 +729,8 @@ class TestRealExecutor:
         try:
             exploration.run()
         finally:
+            # Well inside the 60 s alarm on every test,
+            # so a stuck worker fails here, not at the alarm.
             thread.join(timeout=30)
             worker.close()
 

@@ -4,7 +4,7 @@
 
 ## The problem it solves
 
-One Slurm job per unit of work makes you pay Slurm's queue
+One Slurm job per unit of work pays Slurm's queue
 once per unit of work.
 On a busy cluster that latency dominates everything else
 as soon as the individual tasks are small.
@@ -15,7 +15,7 @@ The pilot-job model inverts that.
 The executor submits a few long-lived pilot jobs once,
 and each job starts workers that stay alive.
 The executor then dispatches the actual work to those workers over a queue.
-You pay Slurm's latency once per worker instead of once per task.
+A run pays Slurm's latency once per worker instead of once per task.
 The cluster sees a handful of ordinary jobs.
 The program sees something
 close to [`concurrent.futures`](https://docs.python.org/3/library/concurrent.futures.html).
@@ -44,9 +44,13 @@ because a worker only ever asks its own queue for work.
 
 `scale_jobs` renders a shell script and an sbatch wrapper
 from Jinja templates and submits them.
-Each job runs your setup script inline and launches `slurm-pilot-worker`.
-That worker loops forever: claim a task from its group's queue,
+Each job runs the job group's setup script inline and launches `slurm-pilot-worker`.
+That worker loops: claim a task from its group's queue,
 cloudpickle-load the function, run it, post the cloudpickled task output back.
+It stops only when its pilot job ends,
+or when [`restart_jobs`](../reference/executor.md#restart_jobs) asks it to restart.
+A restart starts a new worker in the same pilot job,
+so new code reaches the pool without a second wait in Slurm's queue.
 
 The driver and the workers never talk to each other.
 Everything passes through the server.
@@ -59,8 +63,8 @@ The workers also do not need to know how many of them there are.
 The driver runs on a login node, or inside a Slurm job.
 Both placements are part of the design.
 The model is the same in each.
-A login node suits a run you start by hand and watch.
-A Slurm job suits a run that outlives your terminal.
+A login node suits a run that somebody starts by hand and watches.
+A Slurm job suits a run that outlives the terminal it started from.
 A Slurm job also suits a driver that wants more memory or more cores
 than a login node gives it.
 
@@ -74,9 +78,9 @@ If those variables reach `sbatch`,
 a pilot job inherits settings from the driver's own allocation.
 The driver's node count and Slurm task count are two of them.
 
-`get_clean_environ` in `slurm_utils.py` exists for that case.
-The function drops all four prefixes,
-and the executor gives `sbatch` what is left.
+The executor handles that case.
+It drops all four prefixes from its environment
+and gives `sbatch` what is left.
 A pilot job therefore takes its shape from the job group's
 `sbatch_args` alone, whatever the driver runs inside.
 The same call runs on a login node, where there is nothing to strip.
@@ -89,7 +93,7 @@ The worker catches it, logs the traceback under a generated `error_id`,
 and returns a `RemoteExecutionError` as the task's `output`.
 `as_completed` and `wait` are what turn that value back into an exception,
 under the [`RaiseOnError`](../reference/executor.md#raiseonerror)
-policy you give them.
+policy the driver gives them.
 
 This trade is deliberate.
 A worker that dies on a bad task takes the rest of its queue with it,

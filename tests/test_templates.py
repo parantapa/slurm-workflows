@@ -20,6 +20,8 @@ def run_sbatch_script(
 ) -> subprocess.CompletedProcess[str]:
     """Run a rendered sbatch body against a stub `srun`.
 
+    The script sees only `PATH`, with the stub's directory first, and `env`.
+    It raises `subprocess.CalledProcessError` when the script exits non-zero.
     Both streams come back, because the script uses both.
     The stub echoes its command line to stdout,
     among whatever the script itself echoed on the way there.
@@ -39,8 +41,7 @@ def run_sbatch_script(
 
     # Only the shell knows which `srun` runs.
     # See the developer notes, "Slurm interaction".
-    # The environment is built from scratch rather than inherited,
-    # so the SLURM variables are exactly what a case sets,
+    # Nothing is inherited, so the SLURM variables are exactly what a case sets,
     # even when the suite itself runs from inside a Slurm job.
     proc = subprocess.run(
         ["bash", str(script_path)],
@@ -473,19 +474,27 @@ class TestOutputRedirectByTaskCount:
 
 
 class TestWorkerScript:
-    def render(self, **overrides) -> str:
-        kwargs = dict(
-            worker_exe="slurm-pilot-worker",
-            setup_script="module load gcc\nconda activate my-env",
+    def render(
+        self,
+        worker_exe: str = "slurm-pilot-worker",
+        setup_script: str = "module load gcc\nconda activate my-env",
+        actor_class_name: str = "",
+    ) -> str:
+        # This method spells out its arguments
+        # for the same reason as `TestWorkerSbatchScript.render` does.
+        return render_template(
+            "slurm_pilot:worker_script",
+            worker_exe=worker_exe,
+            setup_script=setup_script,
             group="cpu",
             name="testex.job.cpu.0",
-            actor_class_name="",
+            actor_class_name=actor_class_name,
             server_address="10.0.0.1:5051",
             work_dir="/scratch/work",
             python_paths_json=json.dumps(["/a", "/b"]),
+            # Any value will do. See `TestWorkerRestart.RESTART_EXIT_CODE`.
+            restart_exit_code=75,
         )
-        kwargs.update(overrides)
-        return render_template("slurm_pilot:worker_script", **kwargs)
 
     def test_setup_script_body_is_inlined_verbatim(self):
         out = self.render()
@@ -528,12 +537,162 @@ class TestWorkerScript:
         """How the batch script asks it to publish a pilot job event."""
         out = self.render()
 
-        assert out.rstrip().endswith('"$@"')
+        # Each line of the worker command but the last ends in a `\`,
+        # and "$@" opens that last line.
+        lines = out.splitlines()
+        end = next(i for i, ln in enumerate(lines) if "slurm-pilot-worker \\" in ln)
+        while lines[end].endswith("\\"):
+            end += 1
+        assert lines[end].strip().startswith('"$@"')
 
     def test_custom_worker_exe(self):
         out = self.render(worker_exe="/opt/bin/my-worker")
 
         assert "/opt/bin/my-worker \\" in out
+
+
+class TestWorkerRestart:
+    """The worker script starts the worker again when the worker exits for a restart.
+
+    These tests run the rendered script with bash against a stub worker.
+    The stub records each run as a line in a file,
+    and exits with the status that `STUB_STATUSES` lists for that run.
+    The stub writes a pilot job event to a file of its own,
+    and always exits 0 for it.
+    """
+
+    # The template takes the code as a variable, so these tests pass their own.
+    # 75 is the value the executor passes.
+    RESTART_EXIT_CODE = 75
+
+    STUB = """#!/bin/bash
+if [[ "$*" == *--pilot-job-event* ]] ; then
+    echo "$*" >> "$EVENTS"
+    exit 0
+fi
+echo "$*" >> "$RUNS"
+runs=$(wc -l < "$RUNS")
+read -r -a statuses <<< "$STUB_STATUSES"
+exit "${statuses[$((runs - 1))]:-0}"
+"""
+
+    def write_worker_script(self, tmp_path: Path) -> Path:
+        stub = tmp_path / "stub-worker"
+        stub.write_text(self.STUB)
+        stub.chmod(0o755)
+        script = render_template(
+            "slurm_pilot:worker_script",
+            worker_exe=str(stub),
+            setup_script='echo setup >> "$SETUP_LOG"',
+            group="cpu",
+            name="testex.job.cpu.0",
+            actor_class_name="",
+            server_address="10.0.0.1:5051",
+            work_dir="/scratch/work",
+            python_paths_json=json.dumps(["/a"]),
+            restart_exit_code=self.RESTART_EXIT_CODE,
+        )
+        script_path = tmp_path / "worker.sh"
+        script_path.write_text(script)
+        return script_path
+
+    def env(self, tmp_path: Path, statuses: str) -> dict[str, str]:
+        return {
+            "RUNS": str(tmp_path / "runs"),
+            "EVENTS": str(tmp_path / "events"),
+            "SETUP_LOG": str(tmp_path / "setup"),
+            "STUB_STATUSES": statuses,
+        }
+
+    def run(
+        self, tmp_path: Path, statuses: str, *args: str
+    ) -> subprocess.CompletedProcess[str]:
+        """Run the worker script by itself, as `srun` does."""
+        return subprocess.run(
+            ["bash", str(self.write_worker_script(tmp_path)), *args],
+            capture_output=True,
+            text=True,
+            env={"PATH": os.environ["PATH"], **self.env(tmp_path, statuses)},
+        )
+
+    def lines(self, path: Path) -> list[str]:
+        return path.read_text().splitlines() if path.exists() else []
+
+    def test_a_restart_status_starts_the_worker_again(self, tmp_path: Path):
+        proc = self.run(tmp_path, f"{self.RESTART_EXIT_CODE} 0")
+
+        assert proc.returncode == 0
+        assert len(self.lines(tmp_path / "runs")) == 2
+        assert "Worker asked for a restart" in proc.stdout
+
+    def test_it_restarts_as_often_as_the_worker_asks(self, tmp_path: Path):
+        code = self.RESTART_EXIT_CODE
+        proc = self.run(tmp_path, f"{code} {code} {code} 0")
+
+        assert proc.returncode == 0
+        assert len(self.lines(tmp_path / "runs")) == 4
+
+    def test_each_run_gets_the_same_arguments(self, tmp_path: Path):
+        self.run(tmp_path, f"{self.RESTART_EXIT_CODE} 0")
+
+        first, second = self.lines(tmp_path / "runs")
+        assert first == second
+        assert "--group cpu" in first
+
+    @pytest.mark.parametrize("status", [0, 1, 3, 143])
+    def test_any_other_status_passes_straight_through(
+        self, tmp_path: Path, status: int
+    ):
+        proc = self.run(tmp_path, f"{status} 0")
+
+        assert proc.returncode == status
+        assert len(self.lines(tmp_path / "runs")) == 1
+
+    def test_a_pilot_job_event_runs_the_worker_once(self, tmp_path: Path):
+        proc = self.run(tmp_path, "", "--pilot-job-event", "start")
+
+        assert proc.returncode == 0
+        (event,) = self.lines(tmp_path / "events")
+        assert event.endswith("--pilot-job-event start")
+        assert self.lines(tmp_path / "runs") == []
+
+    def test_the_setup_script_runs_once_across_a_restart(self, tmp_path: Path):
+        """A setup script need not be safe to run twice."""
+        self.run(tmp_path, f"{self.RESTART_EXIT_CODE} 0")
+
+        assert len(self.lines(tmp_path / "runs")) == 2
+        assert self.lines(tmp_path / "setup") == ["setup"]
+
+    def test_a_batch_worker_restarts_too(self, tmp_path: Path):
+        """The batch shell sources the worker script,
+        and the restart loop runs there.
+        """
+        script = render_template(
+            "slurm_pilot:worker_sbatch_script",
+            name="testex.job.cpu.0",
+            work_dir="/scratch/work",
+            is_batch_worker=True,
+            worker_script_path=self.write_worker_script(tmp_path),
+        )
+
+        run_sbatch_script(
+            script,
+            tmp_path,
+            SLURM_NTASKS="1",
+            **self.env(tmp_path, f"{self.RESTART_EXIT_CODE} 0"),
+        )
+
+        assert len(self.lines(tmp_path / "runs")) == 2
+        events = [
+            ln.split("--pilot-job-event ")[-1] for ln in self.lines(tmp_path / "events")
+        ]
+        # The restart is not a new pilot job,
+        # so the batch script reports each event once.
+        assert events == ["start", "exit"]
+        # Each event report runs the whole worker script in a bash of its own,
+        # which runs the setup script too.
+        # The worker adds one more run, and its restart adds none.
+        assert len(self.lines(tmp_path / "setup")) == 3
 
 
 class TestSbatchScriptTemplate:

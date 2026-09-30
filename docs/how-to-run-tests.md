@@ -87,13 +87,13 @@ Paths are relative to [`tests/`](../tests).
 | `test_utils.py` | The shared helpers |
 | `test_optimize_space_botorch.py` | `OptimizeSpaceBotorch`: the observations it starts from, rounds, acquisition, search behavior, resuming (skips without botorch) |
 | `conftest.py` | Fixtures: real ds-service, fake Slurm, fake NVML, executor, hang guards |
-| `worker_harness.py` | Runs a real worker's main loop for a bounded number of tasks, or of queue polls |
+| `worker_harness.py` | Runs a real worker's main loop for a bounded number of tasks, or of queue polls, or until it returns for a restart |
 | `support_actor.py` | Actor classes. They must stay importable by name for the actor tests |
 
 ## Notes for future changes
 
 - **Worker tests run a real worker.**
-  `PilotWorker.main()` loops forever by design,
+  `PilotWorker.main()` loops until it sees a restart request,
   and swallows every `Exception`, so a bad task cannot kill a worker.
   `run_worker()` stops it with a `BaseException` from `task_done`,
   after the expected number of tasks.

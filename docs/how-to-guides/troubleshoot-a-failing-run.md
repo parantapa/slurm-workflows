@@ -33,8 +33,9 @@ $ grep -rn ERROR_k3n8q1zv7c4b0m2s6h9d5p1f8r3t7w2x /path/to/work_dir
 ```
 
 One line of output tells you where to look.
-The file name identifies the worker that ran the task.
-It carries the pilot job's name, its Slurm job id, and its task rank.
+The file name identifies the Slurm task whose worker ran the task.
+[Logs](../reference/what-a-run-publishes.md#logs) gives what the name holds,
+and why one file can hold several workers after a restart.
 The line number is where the worker logged the failure.
 The traceback starts on the next line.
 
@@ -44,22 +45,29 @@ Add `-A 40` to print the traceback in the same command:
 $ grep -rn -A 40 ERROR_k3n8q1zv7c4b0m2s6h9d5p1f8r3t7w2x /path/to/work_dir
 ```
 
-The worker generates a fresh id for every failure.
-So `grep` finds one line, even when a batch failed a hundred times.
+`grep` finds one line, even when a batch failed a hundred times,
+because the worker generates a fresh id for every failure.
+Do not look in `executor.log`.
 Only the worker's own log carries the traceback.
-`executor.log` does not, because the executor never saw the exception.
+For why the executor never sees the exception, see
+[Exceptions are values](../explanation/pilot-job-model.md#exceptions-are-values).
 
 The task itself holds only `str(e)`, the message of the exception.
 The traceback and the rest of the log are in the file `grep` named.
 
 The executor warns on stderr for every failure,
 whatever `RaiseOnError` value you pass.
-For a batch with many failures, read the ids from the tasks instead:
+For a batch with many failures,
+wait with `raise_on_error=RaiseOnError.RAISE_NEVER`,
+then read the ids from the tasks:
 
 ```python
-failed = [t for t in tasks if isinstance(t.output, RemoteExecutionError)]
+failed = [t for t in tasks if isinstance(t.output, RemoteExecutionError) and t.output.error_id]
 print([t.output.error_id for t in failed])
 ```
+
+A task that never ran because a task it waits on failed
+has an empty `error_id`.
 
 If `grep` finds nothing, search the work dir of another run.
 Unless you pass `work_dir`, each run gets its own timestamped work dir,
@@ -71,14 +79,14 @@ Everything for a run lives under the executor's `work_dir`.
 [Logs](../reference/what-a-run-publishes.md#logs) lists which file holds what.
 
 With the default `is_batch_worker=False`,
-a worker's own log goes to the file of its Slurm task.
-That file is `<job-name>-<jobid>-<rank>.out`, not the batch file.
-A failed setup script lands in that same file.
-It lands in the batch file `<job-name>-<jobid>.out` too,
-because the batch script also runs the setup script
-when it publishes the job's start and exit.
-A job of exactly one Slurm task is the exception:
-it keeps no such file, and writes to `<job-name>-<jobid>.out`.
+open the file of the worker's Slurm task, `<job-name>-<jobid>-<rank>.out`,
+not the batch file.
+If the job holds exactly one Slurm task, open `<job-name>-<jobid>.out` instead,
+because such a job keeps no per-task file.
+If the setup script failed, open either file.
+The batch script also runs the setup script
+when it publishes the job's start and exit,
+so the errors land in the batch file `<job-name>-<jobid>.out` too.
 
 ## Tasks never complete, but the pilot jobs run
 
@@ -92,7 +100,7 @@ The wait raises the error in the next section instead.
 
 ## `RuntimeError: ... tasks are on, or wait on tasks on, queues with no worker started`
 
-The executor raises this error as soon as you wait,
+With the default `RaiseOnError`, the executor raises this error as soon as you wait,
 because the executor holds no pilot job for those queues.
 The queues can belong to the task itself,
 or to a parent task that is not finished yet.
@@ -143,7 +151,8 @@ A `Task` from an earlier run does not work.
 
 The setup script failed.
 The worker script runs it,
-so the traceback lands in the worker's `<job-name>-<jobid>-<rank>.out` file.
+so its errors land in the worker's `<job-name>-<jobid>-<rank>.out` file,
+or in `<job-name>-<jobid>.out` for a job of one Slurm task.
 The batch script also runs it to publish the job's start and exit,
 so the same errors land in the batch file `<job-name>-<jobid>.out`.
 Open either file,
@@ -182,11 +191,10 @@ or while its batch script has not yet finished its first run of the setup script
 For workers that cannot reach the server, see
 [Tasks never complete, but the pilot jobs run](#tasks-never-complete-but-the-pilot-jobs-run).
 
-A pilot job whose workers all exited does not stay behind.
-Its batch script publishes the job's own exit,
-and the job leaves the pilot jobs block with them.
-For a job that does so within seconds, see
+If a pilot job left the pilot jobs block within seconds, see
 [Pilot jobs start and exit within seconds](#pilot-jobs-start-and-exit-within-seconds).
+A pilot job whose workers all exited does not stay behind,
+because its batch script publishes the job's own exit.
 
 ## Related
 

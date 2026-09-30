@@ -23,15 +23,15 @@ result = executor.mapreduce(
 
 | Argument | Meaning |
 | --- | --- |
-| `desc` | Labels the progress `swtop` draws for this call |
-| `queue` | A job group name, or a list of them, as in `submit` |
-| `map_fn` | Runs once per item, on a worker. A callable, or the name of a method on the job group's actor |
-| `reduce_fn` | Folds one mapped value into the running result |
-| `iterable` | The items. Read out in full before any map task starts |
-| `init` | Where every fold starts. Must be the identity of `reduce_fn` |
-| `num_tasks` | How many map tasks drain the item queue, as an upper bound |
-| `map_extra_args`, `map_extra_kwargs` | Passed to `map_fn` after the item |
-| `reduce_extra_args`, `reduce_extra_kwargs` | Passed to `reduce_fn` after the two values |
+| `desc` | Labels the progress `swtop` draws for this call. |
+| `queue` | A job group name, or a list of them, as in `submit`. |
+| `map_fn` | Runs once per item, on a worker. A callable, or the name of a method on the job group's actor. |
+| `reduce_fn` | Folds one mapped value into the running result. |
+| `iterable` | The items. Read out in full before any map task starts. |
+| `init` | Where every fold starts. Must be the identity of `reduce_fn`. |
+| `num_tasks` | How many map tasks drain the item queue, as an upper bound. |
+| `map_extra_args`, `map_extra_kwargs` | Passed to `map_fn` after the item. |
+| `reduce_extra_args`, `reduce_extra_kwargs` | Passed to `reduce_fn` after the two values. |
 
 Everything here travels by cloudpickle,
 so `map_fn`, `reduce_fn`, `init`, every item
@@ -146,7 +146,7 @@ For the rest of what an actor does, see
 ## The queue it creates
 
 A call creates an item queue named `<executor-name>.mapreduce.<n>.<token>`.
-`<n>` counts the calls on this executor,
+`<n>` counts the calls on this executor that enqueued items,
 and `<token>` is 8 hex characters of a UUID4.
 No job group serves that queue.
 Only that call's own map tasks claim from it.
@@ -156,7 +156,7 @@ Each claims its items under `PILOT_WORKER_ID`,
 so while an item is running,
 `task_get_worker_id` on it names the worker that folds it.
 
-Each item becomes an item task on it, `<queue>.item.<i>`.
+Each item becomes an item task on it, `<item-queue>.item.<i>`.
 That item task holds the pickled item and no function.
 A map task marks the item task finished once it folds the value in,
 and the output it records is empty.
@@ -183,8 +183,10 @@ is in [How to fold results across workers](../how-to-guides/fold-results-across-
 - A `num_tasks` below 1 raises `ValueError`.
 - A `map_fn` given as a method name raises `ValueError`
     where a job group named in `queue` has no actor to find it on.
-- A `queue` where no job group has a worker started
+- A `queue` where no job group has a pilot job submitted
     raises `RuntimeError`, before it enqueues anything.
+    A pilot job that is still pending is enough.
+    An empty `iterable` returns before this check.
     Unlike `submit`, this call blocks,
     so it cannot wait for workers that do not exist yet.
 - A map task that fails raises `RuntimeError`, the way `wait` does.

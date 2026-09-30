@@ -188,7 +188,7 @@ class TestConversions:
     def test_a_rounded_parameter_does_not_round_trip_to_its_proposal(self):
         # Why the optimizer records the unit point it evaluated,
         # rather than the candidate.
-        # See the developer notes, Batch Bayesian optimization.
+        # See the comment where `OptimizeSpaceBotorch` appends to `unit_points`.
         proposal = [0.5, 0.51, 0.5]
 
         params = to_params(SPACE, proposal)

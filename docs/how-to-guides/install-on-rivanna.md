@@ -2,7 +2,7 @@
 
 [<- back to the main README](../../README.md)
 
-Nothing here runs until you have two things on Rivanna.
+Nothing in slurm-workflows runs until you have two things on Rivanna.
 You need a Python 3.12 environment with `slurm-workflows` in it,
 and the `ds-service` binary on your `PATH`.
 These steps give you both.

@@ -17,6 +17,9 @@ The complete program can be found at
 
 ## Before we start
 
+Work through [Computing pi on a Slurm cluster](computing-pi.md) first.
+It computes the same number with `submit` and `wait` calls of its own.
+
 Run this program from a Rivanna login node.
 Follow
 [How to install slurm-workflows on Rivanna](../how-to-guides/install-on-rivanna.md)
@@ -132,28 +135,27 @@ conda activate slurm-workflows
 python examples/example_compute_pi_qmc.py
 ```
 
-While it works, we open a second shell on the login node
+The program does not print the server address.
+The executor prints its work directory when it starts,
+and the worker script `compute-pi-qmc.job.bii.0.sh` in that directory
+carries the address after `--server-address`.
+
+We open a second shell on the login node
 and point [`swtop`](../how-to-guides/watch-a-run-with-swtop.md)
-at the address the driver gave the executor:
+at that address.
+Here it is `10.0.0.1:5051`:
 
 ```sh
 swtop 10.0.0.1:5051
 ```
-
-The program does not print that address.
-The executor prints its work directory when it starts,
-and the worker script `compute-pi-qmc.job.bii.0.sh` in that directory
-carries the address after `--server-address`.
 
 We watch the `ready` count fall from 4096 toward zero,
 as the workers claim the points and post what the objective returned.
 
 Behind that count, this happens, in order:
 
-* The `ds-service` server starts on the login node.
-* The executor submits one pilot job across `NUM_NODES` nodes.
-* `srun` starts a worker on every Slurm task in that job.
-    Each worker connects back to the server over InfiniBand.
+* The server, the pilot job and the workers start
+    as in [Computing pi on a Slurm cluster](computing-pi.md).
 * The exploration draws 4096 Sobol' points over `SAMPLE_SPACE`.
     It submits every point to the `bii` queue as a task.
 * The exploration names the tasks `compute-pi-qmc-explore-0000` and up,
@@ -168,6 +170,9 @@ We read `exploration.results` after both `with` blocks close.
 The server is gone by then, and the pilot job is canceled.
 The points and the objective values are still there,
 as ordinary local values in our own process.
+
+The program prints `pi = `, then the estimate,
+then `(from 4096 sample points)`.
 
 One thing outlives the run, and we look at it now:
 
@@ -190,12 +195,6 @@ takes a file like the one this run saved.
 It then searches on from that file with `OptimizeSpaceBotorch`.
 The optimizer chooses where to evaluate next.
 It does not draw every point up front.
-
-[Computing pi on a Slurm cluster](computing-pi.md)
-computes the same number the other way round.
-It submits each piece of work itself with `submit` and `wait`.
-When our work is not a function over a space,
-we copy that shape.
 
 [`ExploreSpaceSobolQMC`](../reference/explore-space.md) is the full API
 for an exploration: the objective contract, the methods,

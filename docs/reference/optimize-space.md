@@ -41,7 +41,7 @@ It reports a parameter missing, one too many,
 or a range since narrowed past a saved point,
 rather than fit on them.
 
-The objective contract is the same for both classes:
+The objective contract is the same for `ExploreSpaceSobolQMC` and `OptimizeSpaceBotorch`:
 see [The objective](objective.md).
 What a failed evaluation does to a run is the same too:
 see [Failures](objective.md#failures).
@@ -56,11 +56,11 @@ The exploration study's fields, minus the design ones, plus the search:
 | `optimizer_queue` | | Queue the model fit and the propose step run on, one task per round. |
 | `search_parallelism` | | Points evaluated per round. Optional if the search carries a default. |
 | `min_search_rounds` | `5` | Rounds that always run. |
-| `max_search_rounds` | `30` | Hard ceiling on rounds. |
+| `max_search_rounds` | `30` | Hard ceiling on rounds. The search runs at least one round, even at `0`. |
 | `patience` | `3` | Consecutive rounds without improvement that end the search. |
 | `min_improvement` | `0.05` | Fraction a round must beat the incumbent by to count as improving. |
 | `objective_key` | `"objective"` | Which entry of the result is minimized. |
-| `num_restarts`, `raw_samples`, `mc_samples`, `acqf_timeout_s` | `10`, `128`, `128`, `10.0` | Tuning for the propose step. See [Tuning the propose step](#tuning-the-propose-step). |
+| `num_restarts`, `raw_samples`, `mc_samples`, `acqf_timeout_s` | See below | Tuning for the propose step. See [Tuning the propose step](#tuning-the-propose-step). |
 | `extra_objective_kwargs` | `{}` | Extra arguments passed to the objective and not varied. |
 | `priority` | `0.0` | The priority of every task the study submits, fits and evaluations alike. The highest priority runs first. |
 
@@ -107,11 +107,6 @@ params, value = opt.best_point("demo")
 `save` writes only what this instance evaluated,
 so an earlier file passed alongside it counts every point once.
 
-The run reports itself as it goes.
-It gives the best point after every round,
-how long each fit and each propose step took,
-and why a study stopped.
-
 ## Attributes
 
 | Attribute | What it holds |
@@ -137,6 +132,11 @@ It carries every point measured so far, so a fit costs more every round.
 A second call to `run()` starts another set of rounds.
 The new rounds model everything the earlier calls measured.
 
+The run reports itself as it goes.
+It gives the best point after every round,
+how long each fit and each propose step took,
+and why a study stopped.
+
 Why a round chooses the whole batch at once,
 and why the fit runs on a worker,
 is in [Batch Bayesian optimization](../explanation/batch-bayesian-optimization.md).
@@ -145,6 +145,8 @@ is in [Batch Bayesian optimization](../explanation/batch-bayesian-optimization.m
 
 A round is *stalled* when it fails to improve the best value by `min_improvement`,
 a fraction of the incumbent's magnitude.
+A round that does not lower the best value is always stalled,
+and against a best value of exactly 0, any decrease counts as improving.
 `patience` stalled rounds **in a row** end the search,
 and an improving round resets the streak.
 

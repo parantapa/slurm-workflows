@@ -16,6 +16,9 @@ from slurm_workflows.slurm_utils import (
 )
 
 
+# `get_clean_environ` is cached.
+# Each test clears it after it sets the environment,
+# and again at the end, so no later test reads this one's variables.
 class TestGetCleanEnviron:
     def test_strips_slurm_variables(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("SLURM_JOB_ID", "1")

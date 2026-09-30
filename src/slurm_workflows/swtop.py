@@ -3,10 +3,9 @@
 See `docs/reference/swtop.md` for the blocks and what fills them.
 """
 
-# This module decides what to show.
-# `swtop_widgets.py` draws it, and `swtop_tui.py` lays those widgets out.
-# "Monitoring" in `docs/developer-notes.md` says
-# why `swtop` collects the way it does.
+# "Where things live" in `docs/developer-notes.md`
+# maps this module and its two siblings,
+# and "Monitoring" there says why `swtop` collects the way it does.
 
 from __future__ import annotations
 
@@ -14,6 +13,7 @@ import sys
 import json
 import asyncio
 from typing import Callable, cast, AsyncIterator
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field, replace
 from contextlib import asynccontextmanager
@@ -36,8 +36,8 @@ from .slurm_pilot_worker import (
 
 DEFAULT_INTERVAL_S: float = 2.0
 
-# The fields a worker publishes about itself,
-# in the order it writes them.
+# The fields of a worker's description that `swtop` reads,
+# in the order the worker writes them.
 # The tables order their own columns.
 WORKER_INFO_FIELDS = ["group", "name", "slurm_job_id", "hostname", "pid", "start_time"]
 
@@ -190,6 +190,7 @@ class ProgressInfo:
 class Snapshot:
     """One poll's worth of server state.
 
+    `worker_jobs` holds the pilot jobs.
     `jobs` holds one entry per Slurm job per node it runs on.
     `worker_jobs`, `workers` and `jobs` leave out
     the pilot jobs and the workers that published their exit,
@@ -201,6 +202,8 @@ class Snapshot:
     when: datetime
     counts: dict[str, int] = field(default_factory=dict)
     progress: ProgressInfo | None = None
+    # The pilot jobs, under the field's old name.
+    # See docs/terminology.md, Names that changed.
     worker_jobs: list[PilotJobInfo] = field(default_factory=list)
     workers: list[WorkerInfo] = field(default_factory=list)
     tasks: list[TaskInfo] = field(default_factory=list)
@@ -270,6 +273,8 @@ class Collector:
 
         return Snapshot(
             address=self.address,
+            # Local time: `when` is only drawn on screen,
+            # never compared with the UTC series times.
             when=datetime.now(),
             counts={
                 "waiting": counts.waiting,
@@ -363,6 +368,8 @@ class Collector:
         try:
             start_time = str(json.loads(text)["start_time"])
         except (ValueError, TypeError, KeyError):
+            # An unreadable start time does not go in the cache,
+            # so the next poll reads the key again.
             return
         self._pilot_job_starts[name] = start_time
 
@@ -373,19 +380,20 @@ class Collector:
             published = json.loads(text)
             fields = {field: str(published[field]) for field in PILOT_JOB_FIELDS}
         except (ValueError, TypeError, KeyError):
+            # An unreadable description does not go in the cache,
+            # so the next poll reads the key again.
             return
 
         # See "`Collector` reads an identity once" in the developer notes.
         self._pilot_jobs[name] = PilotJobInfo(**fields)
 
     async def _collect_workers(self) -> list[WorkerInfo]:
-        """Every worker that registered, cached like the rest."""
+        """Every worker that registered, sorted by group and name."""
         worker_ids = [
             key[len(WORKER_INFO_PREFIX) :]
             for key in await self.client.map_search_key(f"^{WORKER_INFO_PREFIX}")
         ]
 
-        # Every description the cache is short of, read in one go.
         missing = [w for w in worker_ids if w not in self._workers]
         await asyncio.gather(*(self._worker_info(w) for w in missing))
 
@@ -408,7 +416,7 @@ class Collector:
 
         self._workers[worker_id] = WorkerInfo(worker_id=worker_id, **fields)
 
-    async def _collect_tasks(self, workers: list[WorkerInfo]) -> list[TaskInfo]:
+    async def _collect_tasks(self, workers: Sequence[WorkerInfo]) -> list[TaskInfo]:
         """Every task on the server, in the order the tasks block lists them."""
         # Which tasks there are, and which of them have a name:
         # two searches, neither of which needs the other's answer.
@@ -460,7 +468,7 @@ class Collector:
         """Cache one task's name."""
         self._task_names[task_id] = await self._text(f"{TASK_NAME_PREFIX}{task_id}")
 
-    async def _collect_subjects(self, prefixes: dict[str, str]) -> list[SubjectInfo]:
+    async def _collect_subjects(self, prefixes: Mapping[str, str]) -> list[SubjectInfo]:
         """The latest reading of every subject one monitor writes about."""
         # The keys of one series name every subject.
         first = next(iter(prefixes.values()))
@@ -477,7 +485,6 @@ class Collector:
             datetime.now(timezone.utc) - timedelta(seconds=STALE_AFTER_S)
         ).isoformat()
 
-        # Every series of every subject in one go.
         wanted = [
             (subject, name, prefix)
             for subject in subjects
@@ -496,7 +503,7 @@ class Collector:
                 readings[subject].values[name] = points[-1].value
         return [readings[subject] for subject in subjects]
 
-    async def _holder(self, task_id: str, worker_names: dict[str, str]) -> str:
+    async def _holder(self, task_id: str, worker_names: Mapping[str, str]) -> str:
         """The worker that runs `task_id`, by name, or "" if the server cannot say."""
         try:
             worker_id = await self.client.task_get_worker_id(task_id)
@@ -511,7 +518,7 @@ async def open_collector(address: str) -> AsyncIterator[Collector]:
     """A collector on a client of its own, closed on the way out.
 
     The client belongs to the event loop that enters this,
-    so use the collector only on that loop.
+    so the collector works only on that loop.
     """
     async with DsServiceClientAsync(address) as client:
         yield Collector(client, address)
@@ -699,7 +706,7 @@ def block_label(spec: BlockSpec, count: int) -> str:
     return f"{spec.title} ({count})"
 
 
-def _table(headers: list[str], rows: list[list[str]]) -> list[str]:
+def _table(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> list[str]:
     """Left-aligned fixed-width columns, sized to their contents."""
     widths = [len(h) for h in headers]
     for row in rows:
@@ -773,7 +780,7 @@ async def run_plain(collector: Collector, interval: float) -> None:
             draw(render(snapshot))
             await asyncio.sleep(interval)
     except KeyboardInterrupt:
-        # Ctrl-C is the way this ends.
+        # Only reached outside `asyncio.run`, which raises a Ctrl-C at its caller.
         pass
 
 
@@ -821,6 +828,6 @@ def swtop(server_address: str, interval: float, plain: bool) -> None:
     try:
         asyncio.run(watch(server_address, interval, plain))
     except KeyboardInterrupt:
-        # A Ctrl-C that lands between two awaits comes out here,
-        # rather than inside the loop it stops.
+        # `asyncio.run` turns a Ctrl-C into a cancel of the loop,
+        # and raises it here once the loop has stopped.
         pass

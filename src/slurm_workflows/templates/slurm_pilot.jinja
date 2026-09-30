@@ -9,6 +9,7 @@ report_pilot_job() {
 # Slurm sends SIGTERM when it cancels the job or the job reaches its time limit.
 # The TERM trap turns it into a plain `exit 143` (128 + 15),
 # so the job exits with that status after the EXIT trap has run.
+# See the developer notes, Slurm interaction.
 trap 'exit 143' TERM
 trap 'report_pilot_job exit' EXIT
 report_pilot_job start
@@ -19,8 +20,7 @@ echo "Running batch worker."
 . '{{ worker_script_path }}'
 {% else %}
 # A job of one Slurm task writes to the batch job's own output file.
-# SLURM_NTASKS is unset only when no Slurm task count was given,
-# and Slurm then starts one Slurm task per node.
+# See the developer notes, Slurm interaction.
 # `:-` keeps an unset variable from becoming an error if `-u` is ever set.
 num_slurm_tasks="${SLURM_NTASKS:-${SLURM_JOB_NUM_NODES:-}}"
 # The batch output file must say why the shell took the branch below.
@@ -51,12 +51,25 @@ fi
 set -Eeuo pipefail
 set -x
 
+# A worker that exits with {{ restart_exit_code }} asked for a restart,
+# so a fresh interpreter starts in its place and imports the code from disk again.
+# Only the worker runs again, not the setup script.
+# See the developer notes, Restarting workers.
+# `|| status=$?` keeps `set -e` from ending the script on that status.
 # The batch script passes --pilot-job-event through here.
-{{ worker_exe }} \
-    --group '{{ group }}' \
-    --name '{{ name }}' \
-    --actor-class-name '{{ actor_class_name }}' \
-    --server-address '{{ server_address }}' \
-    --work-dir '{{ work_dir }}' \
-    --python-paths-json '{{ python_paths_json }}' \
-    "$@"
+while true; do
+    status=0
+    {{ worker_exe }} \
+        --group '{{ group }}' \
+        --name '{{ name }}' \
+        --actor-class-name '{{ actor_class_name }}' \
+        --server-address '{{ server_address }}' \
+        --work-dir '{{ work_dir }}' \
+        --python-paths-json '{{ python_paths_json }}' \
+        "$@" || status=$?
+    if [[ "${status}" -ne {{ restart_exit_code }} ]] ; then
+        break
+    fi
+    echo "Worker asked for a restart; starting it again."
+done
+exit "${status}"

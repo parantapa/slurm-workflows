@@ -14,7 +14,7 @@ The objective runs on a worker, once per point.
 Its argument names must match the keys of `space`,
 and it receives them as keyword arguments.
 The executor cloudpickles it like any other task,
-so a closure or a lambda is fine.
+so it can be a closure or a lambda.
 What it imports must exist on the compute node.
 
 It returns a **mapping**, not a bare number.
@@ -47,13 +47,18 @@ rather than feed a `RemoteExecutionError` into a model.
 One bad evaluation therefore does not hide the rest of its batch.
 Both classes record what did come back before they raise the exception.
 `save()` therefore still holds the good points,
-and the next run resumes from them.
+and an `OptimizeSpaceBotorch` run can start from them.
 
 This holds for an objective that raises.
-An objective that returns a result the contract rejects,
+In a batch where no objective raised,
+an objective that returns a result the contract rejects,
 such as a bare float or a `NaN`,
 raises as soon as its class records it,
 and the points after it in submission order are not recorded.
+In a batch where an objective also raised,
+the class skips the rejected point,
+records the rest,
+and raises for the failed batch.
 
 ## Related
 
