@@ -111,12 +111,22 @@ def load_template(name: str) -> tuple[str, str, None] | None:
     return None
 
 
+def shell_quote(value: object) -> str:
+    """Quote `value` as one shell word, inside single quotes."""
+    # Always quoted, unlike `shlex.quote`,
+    # so a plain value renders the same as it did before the filter.
+    # A single quote inside the value closes the quotes,
+    # adds a double-quoted `'`, and opens them again.
+    return "'" + str(value).replace("'", "'\"'\"'") + "'"
+
+
 _ENVIRONMENT = jinja2.Environment(
     trim_blocks=True,
     lstrip_blocks=True,
     undefined=jinja2.StrictUndefined,
     loader=jinja2.FunctionLoader(load_template),
 )
+_ENVIRONMENT.filters["shell_quote"] = shell_quote
 
 
 # Keep each overload in step with the variables its template uses.

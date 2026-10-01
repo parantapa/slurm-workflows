@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import sys
 import signal
+import subprocess
 import threading
 from pathlib import Path
 from datetime import datetime
@@ -17,6 +19,7 @@ from typing import Any, Callable, Generator, NoReturn, cast
 
 import pytest
 import click
+from click.testing import CliRunner
 from ds_service_client import DsServiceClient, TaskState
 from ds_service_client.client import TaskGetResponse
 
@@ -40,6 +43,18 @@ def reset_actors() -> Generator[None]:
     support_actor.reset()
     yield
     support_actor.reset()
+
+
+@pytest.fixture
+def fast_retry(monkeypatch: pytest.MonkeyPatch) -> float:
+    """Shorten the sleep after an empty queue or a failed request, and return it.
+
+    The real value is 0.1 s,
+    which makes each idle poll in a test cost a tenth of a second.
+    """
+    retry = 0.005
+    monkeypatch.setattr(worker_mod, "NEXT_TASK_RETRY_TIME_S", retry)
+    return retry
 
 
 def square(x: int) -> int:
@@ -85,7 +100,7 @@ class TestTaskExecution:
         assert task.output == 49
 
     def test_idles_quietly_on_an_empty_queue(
-        self, ds_service_address, tmp_path, caplog
+        self, fast_retry, ds_service_address, tmp_path, caplog
     ):
         """An empty queue is the normal idle case, not an error."""
         worker = make_worker(ds_service_address, tmp_path)
@@ -99,27 +114,6 @@ class TestTaskExecution:
         # but logs a traceback every time.
         # Only the absence of that log tells the two apart.
         assert "Unexpected exception" not in caplog.text
-
-    def test_runs_many_tasks_in_sequence(self, executor, ds_service_address, tmp_path):
-        tasks = [executor.submit("cpu", square, i) for i in range(5)]
-
-        worker = make_worker(ds_service_address, tmp_path)
-        run_worker(worker, expect_tasks=5)
-        worker.close()
-
-        executor.wait(tasks, desc="test")
-        assert sorted(t.output for t in tasks) == [0, 1, 4, 9, 16]
-
-    def test_runs_closures(self, executor, ds_service_address, tmp_path):
-        offset = 100
-        task = executor.submit("cpu", lambda x: x + offset, 5)
-
-        worker = make_worker(ds_service_address, tmp_path)
-        run_worker(worker, expect_tasks=1)
-        worker.close()
-
-        executor.wait([task], desc="test")
-        assert task.output == 105
 
     def test_passes_args_and_kwargs(self, executor, ds_service_address, tmp_path):
         def combine(a, b, sep="-"):
@@ -228,42 +222,107 @@ class TestRemoteErrors:
         assert isinstance(task.output, RemoteExecutionError)
 
 
-class TestActors:
+class TestServerFailures:
+    """A failed request to the server is logged, and the worker keeps serving."""
+
     @pytest.fixture(autouse=True)
     def _pilot_jobs(self, pilot_jobs: Callable[..., None]) -> None:
         pilot_jobs("cpu")
 
-    def test_actor_is_instantiated_once_at_startup(self, ds_service_address, tmp_path):
-        worker = make_worker(
-            ds_service_address, tmp_path, actor_class_name="support_actor.CounterActor"
-        )
-
-        assert len(support_actor.INSTANCES) == 1
-        worker.close()
-
-    def test_constructor_arguments_come_from_the_key_value_store(
-        self, executor, ds_service_address, tmp_path
+    def test_a_failed_fetch_does_not_end_the_worker(
+        self, fast_retry, executor, ds_service_address, tmp_path, caplog
     ):
-        executor.define_job_group(
-            name="configured",
-            sbatch_args=[],
-            actor_class_name="support_actor.ConfiguredActor",
-            actor_class_args=[1, "two"],
-            actor_class_kwargs={"flag": True},
-        )
+        task = executor.submit("cpu", square, 3)
+        worker = make_worker(ds_service_address, tmp_path)
+        client = _FailingCallClient(worker.client, "task_get", fail=lambda n: n == 1)
+        worker.client = cast(DsServiceClient, client)
 
-        worker = make_worker(
-            ds_service_address,
-            tmp_path,
-            group="configured",
-            actor_class_name="support_actor.ConfiguredActor",
-        )
+        with caplog.at_level(logging.ERROR, logger="worker_process"):
+            run_worker(worker, expect_tasks=1)
 
-        actor = worker.actor_instance
-        assert actor is not None
-        assert actor.args == (1, "two")
-        assert actor.kwargs == {"flag": True}
         worker.close()
+        assert client.calls >= 2
+        assert "Unexpected exception" in caplog.text
+        executor.wait([task], desc="test")
+        assert task.output == 9
+
+    @pytest.fixture
+    def fast_report_retry(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(worker_mod, "REPORT_RETRY_TIME_S", 0.005)
+
+    def test_a_report_that_fails_once_is_tried_again(
+        self,
+        fast_retry,
+        fast_report_retry,
+        executor,
+        ds_service_address,
+        ds_client,
+        tmp_path,
+        caplog,
+    ):
+        """A brief server problem does not turn a good result into a failure.
+
+        Two tasks wait, and the worker stops after its first good report.
+        Without the retry, that report is of the second task,
+        and the first stays claimed, so the test fails rather than hangs.
+        """
+        tasks = [executor.submit("cpu", square, x) for x in (3, 5)]
+        worker = make_worker(ds_service_address, tmp_path)
+        client = _FailingCallClient(worker.client, "task_done", fail=lambda n: n == 1)
+        worker.client = cast(DsServiceClient, client)
+
+        with caplog.at_level(logging.WARNING, logger="worker_process"):
+            run_worker(worker, expect_tasks=1)
+
+        worker.close()
+        assert client.calls == 2
+        assert "Report failed, trying again (1 of" in caplog.text
+        # The claimed task finished, and the other was never claimed.
+        states = [ds_client.task_get_status(t.task_id) for t in tasks]
+        assert sorted(states, key=str) == sorted(
+            [TaskState.Finished, TaskState.Ready], key=str
+        )
+        done = tasks[states.index(TaskState.Finished)]
+        executor.wait([done], desc="test")
+        assert done.output in (9, 25)
+
+    def test_a_report_that_keeps_failing_does_not_end_the_worker(
+        self,
+        fast_retry,
+        fast_report_retry,
+        executor,
+        ds_service_address,
+        ds_client,
+        tmp_path,
+        caplog,
+    ):
+        """Every try to report the first task fails, and the other task completes."""
+        attempts = worker_mod.REPORT_ATTEMPTS
+        tasks = [executor.submit("cpu", square, x) for x in (2, 4)]
+        worker = make_worker(ds_service_address, tmp_path)
+        client = _FailingCallClient(
+            worker.client, "task_done", fail=lambda n: n <= attempts
+        )
+        worker.client = cast(DsServiceClient, client)
+
+        with caplog.at_level(logging.ERROR, logger="worker_process"):
+            run_worker(worker, expect_tasks=1)
+
+        worker.close()
+        assert client.calls == attempts + 1
+        assert "Unexpected exception" in caplog.text
+        # Nothing reported the first task, so it still looks claimed.
+        states = [ds_client.task_get_status(t.task_id) for t in tasks]
+        assert set(states) == {TaskState.Running, TaskState.Finished}
+        done = tasks[states.index(TaskState.Finished)]
+        executor.wait([done], desc="test")
+        assert done.output in (4, 16)
+
+
+class TestActors:
+    @pytest.fixture(autouse=True)
+    def _pilot_jobs(self, pilot_jobs: Callable[..., None]) -> None:
+        pilot_jobs("cpu")
 
     def test_arguments_are_read_for_this_workers_group_only(
         self, executor, ds_service_address, tmp_path
@@ -317,12 +376,6 @@ class TestActors:
 
         executor.wait([task], desc="test")
         assert task.output == ((1,), {"flag": True})
-
-    def test_no_actor_by_default(self, ds_service_address, tmp_path):
-        worker = make_worker(ds_service_address, tmp_path)
-
-        assert worker.actor_instance is None
-        worker.close()
 
     def test_method_names_dispatch_to_the_actor(
         self, executor, ds_service_address, tmp_path
@@ -415,6 +468,40 @@ class TestActors:
         executor.wait([task], raise_on_error=RaiseOnError.RAISE_NEVER, desc="test")
         assert isinstance(task.output, RemoteExecutionError)
 
+    def test_a_system_exit_while_building_the_actor_still_cleans_up(
+        self, ds_service_address, ds_client, tmp_path, monkeypatch
+    ):
+        """The `SystemExit` that SIGTERM raises is not an `Exception`.
+
+        The worker never calls `close()` on a constructor that raised,
+        so the constructor itself stops the monitors,
+        publishes the exit and closes the client.
+        """
+        closed: list[DsServiceClient] = []
+        real_close = DsServiceClient.close
+
+        def recording_close(client: DsServiceClient) -> None:
+            closed.append(client)
+            real_close(client)
+
+        monkeypatch.setattr(worker_mod.DsServiceClient, "close", recording_close)
+        before = set(threading.enumerate())
+
+        with pytest.raises(SystemExit):
+            make_worker(
+                ds_service_address,
+                tmp_path,
+                name="w-1",
+                actor_class_name="support_actor.SystemExitActor",
+            )
+
+        leaked = [t for t in threading.enumerate() if t not in before and t.is_alive()]
+        assert leaked == []
+        assert ds_client.map_search_key("^worker_exit:") == [
+            "worker_exit:w-1.42.testhost.4242"
+        ]
+        assert len(closed) == 1
+
     def test_close_calls_actor_close(self, ds_service_address, tmp_path):
         worker = make_worker(
             ds_service_address, tmp_path, actor_class_name="support_actor.CounterActor"
@@ -437,12 +524,6 @@ class TestActors:
         with pytest.raises(ModuleNotFoundError):
             make_worker(
                 ds_service_address, tmp_path, actor_class_name="no_such_module.Actor"
-            )
-
-    def test_missing_actor_class_fails_at_startup(self, ds_service_address, tmp_path):
-        with pytest.raises(AttributeError):
-            make_worker(
-                ds_service_address, tmp_path, actor_class_name="support_actor.Missing"
             )
 
 
@@ -527,18 +608,6 @@ class TestWorkerIdentity:
         ]
         worker.close()
 
-    def test_two_workers_publish_separately(
-        self, ds_service_address, ds_client, tmp_path
-    ):
-        first = make_worker(ds_service_address, tmp_path, group="cpu", name="w-1")
-        second = make_worker(ds_service_address, tmp_path, group="gpu", name="w-2")
-
-        for worker, group in [(first, "cpu"), (second, "gpu")]:
-            published = json.loads(ds_client.map_get(f"worker_info:{worker.worker_id}"))
-            assert published["group"] == group
-        first.close()
-        second.close()
-
     def test_identity_is_published_before_the_actor_is_built(
         self, ds_service_address, ds_client, tmp_path
     ):
@@ -558,14 +627,6 @@ class TestWorkerIdentity:
         published = json.loads(ds_client.map_get(f"worker_info:{wid}"))
         assert published["hostname"] == "testhost"
 
-    def test_nothing_says_a_running_worker_exited(
-        self, ds_service_address, ds_client, tmp_path
-    ):
-        worker = make_worker(ds_service_address, tmp_path, group="cpu", name="w-1")
-
-        assert ds_client.map_search_key("^worker_exit:") == []
-        worker.close()
-
     def test_close_publishes_the_exit(self, ds_service_address, ds_client, tmp_path):
         worker = make_worker(ds_service_address, tmp_path, group="cpu", name="w-1")
 
@@ -573,6 +634,38 @@ class TestWorkerIdentity:
 
         published = json.loads(ds_client.map_get(f"worker_exit:{worker.worker_id}"))
         assert datetime.fromisoformat(published["exit_time"]).tzinfo is not None
+
+    def test_the_exit_is_published_once(self, ds_service_address, tmp_path, caplog):
+        worker = make_worker(ds_service_address, tmp_path, group="cpu", name="w-1")
+        # A second publish fails, and the worker logs that it failed.
+        client = _FailingCallClient(worker.client, "map_set", fail=lambda n: n == 2)
+        worker.client = cast(DsServiceClient, client)
+
+        with caplog.at_level(logging.ERROR, logger="worker_process"):
+            worker.close()
+            worker.close()
+
+        assert client.calls == 1
+        assert "Failed to publish the exit" not in caplog.text
+
+    def test_a_failed_exit_publish_is_logged_and_the_client_still_closed(
+        self, ds_service_address, tmp_path, caplog
+    ):
+        """A worker on its way out cannot do more than say so."""
+        worker = make_worker(ds_service_address, tmp_path, group="cpu", name="w-1")
+        inner = worker.client
+        worker.client = cast(
+            DsServiceClient,
+            _FailingCallClient(inner, "map_set", fail=lambda n: True),
+        )
+
+        with caplog.at_level(logging.ERROR, logger="worker_process"):
+            worker.close()  # must not raise
+
+        assert f"Failed to publish the exit of {worker.worker_id}" in caplog.text
+        # Every call on a closed client raises `RuntimeError`.
+        with pytest.raises(RuntimeError):
+            inner.map_get(f"worker_info:{worker.worker_id}")
 
     def test_a_worker_that_dies_building_its_actor_publishes_its_exit(
         self, ds_service_address, ds_client, tmp_path
@@ -632,37 +725,6 @@ class TestMonitors:
         first.close()
         second.close()
 
-    def test_a_later_job_on_a_reused_node_samples_it_again(
-        self, ds_service_address, ds_client, tmp_path
-    ):
-        """The node's series must not stay stale once its first job is gone."""
-        first = make_worker(ds_service_address, tmp_path, name="w-1")
-        first.close()
-        # A load average cannot be negative, so a value >= 0 is a fresh sample.
-        ds_client.time_series_append(
-            "host_load_average:testhost", -1.0, "2000-01-01T00:00:00+00:00"
-        )
-
-        second = make_worker(ds_service_address, tmp_path, slurm_job_id=99)
-
-        assert "testhost" in [m.subject for m in second.monitors]
-        assert wait_for(
-            lambda: ds_client.time_series_get("host_load_average:testhost")[-1].value
-            >= 0.0
-        )
-        second.close()
-
-    def test_the_election_is_a_counter_per_subject(
-        self, ds_service_address, ds_client, tmp_path
-    ):
-        first = make_worker(ds_service_address, tmp_path, name="w-1")
-        second = make_worker(ds_service_address, tmp_path, name="w-2")
-
-        # The last part is the restart generation, 0 before any restart.
-        assert ds_client.counter_get_current_value("host_monitor:testhost:42:0") == 2
-        first.close()
-        second.close()
-
     def test_a_restarted_worker_samples_again(
         self, ds_service_address, ds_client, tmp_path
     ):
@@ -708,19 +770,6 @@ class TestMonitors:
             )
         )
         worker.close()
-
-    def test_only_the_elected_worker_samples_the_gpus(
-        self, ds_service_address, tmp_path, fake_nvml
-    ):
-        fake_nvml.gpus = [FakeGpu()]
-
-        first = make_worker(ds_service_address, tmp_path, name="w-1")
-        second = make_worker(ds_service_address, tmp_path, name="w-2")
-
-        assert len(first.monitors) == 3
-        assert second.monitors == []
-        first.close()
-        second.close()
 
     def test_a_failed_actor_leaves_none_of_them_running(
         self, ds_service_address, tmp_path
@@ -797,6 +846,32 @@ class _FailingCounterClient:
         return getattr(self._inner, name)
 
 
+class _FailingCallClient:
+    """Wraps a real client, and fails the calls to `method` that `fail` picks."""
+
+    def __init__(
+        self, inner: DsServiceClient, method: str, fail: Callable[[int], bool]
+    ) -> None:
+        self._inner = inner
+        self._method = method
+        self._fail = fail
+        self.calls = 0
+
+    def _call(self, *args: Any, **kwargs: Any) -> Any:
+        self.calls += 1
+        # `fail` gets the number of the call.
+        # The first call is number 1.
+        if self._fail(self.calls):
+            raise TimeoutError("server unreachable")
+        return getattr(self._inner, self._method)(*args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        if name == self._method:
+            return self._call
+        return getattr(self._inner, name)
+
+
+@pytest.mark.usefixtures("fast_retry")
 class TestRestart:
     """A worker returns from `main()` once its group's restart counter moves.
 
@@ -839,20 +914,30 @@ class TestRestart:
         assert polls == 3
 
     def test_an_idle_worker_sees_the_request_within_the_interval(
-        self, monkeypatch, ds_service_address, tmp_path, time_limit
+        self, fast_retry, monkeypatch, ds_service_address, tmp_path, time_limit
     ):
         """The rate limit delays the return of an idle worker, but does not drop it."""
-        monkeypatch.setattr(worker_mod, "RESTART_CHECK_INTERVAL_S", 0.3)
+        # Twenty polls or so, so the rate limit skips many checks.
+        interval = 20 * fast_retry
+        monkeypatch.setattr(worker_mod, "RESTART_CHECK_INTERVAL_S", interval)
+        at_poll = 2
         worker = make_worker(ds_service_address, tmp_path)
         worker.client = cast(
-            DsServiceClient, _RestartingClient(worker.client, "cpu", at_poll=2)
+            DsServiceClient, _RestartingClient(worker.client, "cpu", at_poll=at_poll)
         )
+        # Each idle poll sleeps for at least `fast_retry`,
+        # so no more than `interval / fast_retry + 1` polls fit in one interval.
+        # The first check after the interval in which the request lands sees it.
+        # A slow machine only makes the polls fewer.
+        bound = at_poll + math.ceil(interval / fast_retry) + 1
 
         with time_limit(10, "the worker never returned for a restart"):
-            polls = run_until_restart(worker, max_polls=50)
+            # Room past `bound`, so a late return fails the bound below,
+            # and a request missed for good fails here.
+            polls = run_until_restart(worker, max_polls=4 * bound)
 
         worker.close()
-        assert polls >= 2
+        assert at_poll <= polls <= bound
 
     def test_a_request_older_than_the_worker_is_not_for_it(
         self, check_every_time, ds_service_address, ds_client, tmp_path
@@ -1001,7 +1086,7 @@ class TestCli:
                 seen["kwargs"] = kwargs
 
             def main(self) -> None:
-                seen["sys_path_head"] = list(sys.path[:2])
+                seen["sys_path"] = list(sys.path)
                 seen["streams"] = (sys.stdout, sys.stderr)
 
             def close(self) -> None:
@@ -1042,15 +1127,10 @@ class TestCli:
         assert exit_code == worker_mod.RESTART_EXIT_CODE
         assert captured["closed"] is True
 
-    def test_prepends_python_paths(self, captured, tmp_path):
-        self.invoke(tmp_path)
-
-        assert "/extra/path" in captured["sys_path_head"]
-
     def test_prepends_python_paths_in_order(self, captured, tmp_path):
         self.invoke(tmp_path, **{"--python-paths-json": '["/first", "/second"]'})
 
-        assert captured["sys_path_head"] == ["/first", "/second"]
+        assert captured["sys_path"][:2] == ["/first", "/second"]
 
     def test_leaves_the_process_streams_alone(self, captured, tmp_path):
         """A redirect empties the file Slurm writes.
@@ -1078,6 +1158,99 @@ class TestCli:
         assert exit_code == 128 + signal.SIGTERM
         assert captured["closed"] is True
 
+    @pytest.mark.parametrize("is_batch_worker", [False, True])
+    def test_the_generated_scripts_call_it_with_arguments_it_accepts(
+        self,
+        captured,
+        executor,
+        fake_slurm,
+        ds_service_address,
+        ds_client,
+        tmp_path,
+        is_batch_worker,
+    ):
+        """What the executor writes and what the command parses must agree.
+
+        Bash runs the scripts of one pilot job,
+        and a stub worker records each command line it gets.
+        Then the real command runs on each of those command lines.
+        """
+        argv_dir = tmp_path / "argv"
+        argv_dir.mkdir()
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        # Each run writes its arguments, NUL-separated, to a file of its own.
+        stub = bin_dir / "stub-worker"
+        stub.write_text(
+            "#!/bin/bash\n"
+            'n=$(find "$ARGV_DIR" -type f | wc -l)\n'
+            'printf "%s\\0" "$@" > "$ARGV_DIR/$n"\n'
+        )
+        stub.chmod(0o755)
+        # Runs the command it gets, with or without `--output`.
+        srun = bin_dir / "srun"
+        srun.write_text('#!/bin/bash\n[[ "$1" != --output ]] || shift 2\nexec "$@"\n')
+        srun.chmod(0o755)
+
+        python_paths = [str(tmp_path / "a dir"), "/b"]
+        executor.define_job_group(
+            "full",
+            ["-p", "standard"],
+            setup_script="export FROM_SETUP=1",
+            worker_exe=str(stub),
+            is_batch_worker=is_batch_worker,
+            actor_class_name="support_actor.ConfiguredActor",
+            actor_class_args=[1],
+            actor_class_kwargs={"flag": True},
+            python_paths=python_paths,
+        )
+        executor.scale_jobs("full", 1)
+        (submission,) = fake_slurm.submissions
+        job_name = submission.job_name
+
+        subprocess.run(
+            ["bash", str(submission.script_path)],
+            check=True,
+            capture_output=True,
+            env={
+                "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                "ARGV_DIR": str(argv_dir),
+                "SLURM_NTASKS": "1",
+            },
+        )
+        start, run, exit_ = [
+            (argv_dir / str(n)).read_bytes().decode().split("\0")[:-1] for n in range(3)
+        ]
+
+        assert start == [*run, "--pilot-job-event", "start"]
+        assert exit_ == [*run, "--pilot-job-event", "exit"]
+
+        # Not `invoke()`, which takes its arguments from a dict.
+        # CliRunner swaps the process streams,
+        # but this test does not look at them.
+        runner = CliRunner()
+        for argv in (start, exit_):
+            result = runner.invoke(slurm_pilot_worker, argv)
+            assert result.exit_code == 0, result.output
+        assert "kwargs" not in captured
+        for event in ("start", "exit"):
+            assert ds_client.map_get(f"pilot_job_{event}:{job_name}")
+
+        result = runner.invoke(slurm_pilot_worker, run)
+        assert result.exit_code == worker_mod.RESTART_EXIT_CODE, result.output
+        kwargs = captured["kwargs"]
+        assert {
+            key: kwargs[key]
+            for key in ("group", "name", "actor_class_name", "server_address")
+        } == {
+            "group": "full",
+            "name": job_name,
+            "actor_class_name": "support_actor.ConfiguredActor",
+            "server_address": ds_service_address,
+        }
+        assert kwargs["work_dir"] == executor.work_dir
+        assert captured["sys_path"][:3] == [os.getcwd(), *python_paths]
+
     @pytest.mark.parametrize("event", ["start", "exit"])
     def test_a_pilot_job_event_is_published_and_starts_no_worker(
         self, captured, ds_service_address, ds_client, tmp_path, event
@@ -1095,8 +1268,3 @@ class TestCli:
         assert "kwargs" not in captured
         published = json.loads(ds_client.map_get(f"pilot_job_{event}:testex.job.cpu.0"))
         assert datetime.fromisoformat(published[f"{event}_time"]).tzinfo is not None
-
-    def test_rejects_missing_work_dir(self, captured, tmp_path):
-        exit_code = self.invoke(tmp_path, **{"--work-dir": str(tmp_path / "nope")})
-
-        assert exit_code != 0

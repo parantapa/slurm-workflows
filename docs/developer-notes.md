@@ -246,6 +246,14 @@ Its output is the plain text `Dependency failed (task_id=...)`,
 not a cloudpickle.
 The poll loop checks for that prefix before it unpickles.
 
+**A worker tries a failed report again, rather than mark the task `Failed`.**
+The worker reports the output outside the `try` that runs the task,
+up to `REPORT_ATTEMPTS` times, `REPORT_RETRY_TIME_S` apart.
+A report inside that `try` turns a brief server problem
+into a `Failed` task whose error is the server's, not the task's.
+After the last try, the main loop logs the error and claims the next task,
+and the task stays `Running` on the server.
+
 **`task_done` is per worker.**
 The worker passes its own `worker_id`,
 and the server refuses the call from any other worker.

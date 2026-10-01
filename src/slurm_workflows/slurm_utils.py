@@ -12,7 +12,7 @@ from .templates import render_template
 
 # Seconds any one Slurm command can run before the timeout stops it.
 COMMAND_TIMEOUT: int = 120
-SBATCH_OUTPUT_REGEX = re.compile(r"Submitted batch job (?P<id>\S*)")
+SBATCH_OUTPUT_REGEX = re.compile(r"Submitted batch job (?P<id>\S+)")
 
 SBATCH_EXE = "sbatch"
 SQUEUE_EXE = "squeue"

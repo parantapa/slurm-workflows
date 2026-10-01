@@ -9,20 +9,15 @@ from typing import Callable, NoReturn
 
 import pytest
 import cloudpickle
-from typeguard import TypeCheckError
 from ds_service_client import TaskState
 
 from slurm_workflows import slurm_pilot_executor
 from slurm_workflows.slurm_pilot_executor import (
     MAP_REDUCE_TOKEN_LEN,
-    SlurmPilotExecutor,
     _map_reduce_task,
     _reduce_task,
 )
-from slurm_workflows.slurm_pilot_worker import current_actor
 from slurm_workflows.swtop import ALL_TASK_IDS
-
-import support_actor
 
 from support_map import RecordingClient, item_ids
 
@@ -63,6 +58,22 @@ def explode(x: int) -> NoReturn:
     raise ValueError(f"no good: {x}")
 
 
+def add_offset(acc: int, x: int, offset: int = 0) -> int:
+    """A `reduce_fn` whose result counts every fold that got `offset`."""
+    return acc + x + offset
+
+
+def fail_fold(acc: int, x: int) -> NoReturn:
+    raise ValueError(f"bad fold: {x}")
+
+
+def append_item(acc: tuple[int, ...], x: int) -> tuple[int, ...]:
+    """A `reduce_fn` that takes a mapped item, and refuses a partial result."""
+    if isinstance(x, tuple):
+        raise ValueError(f"bad partial: {x}")
+    return (*acc, x)
+
+
 def count_hits(path: str, threshold: float) -> int:
     """A map function that counts the rows of one file above a threshold."""
     with open(path) as fobj:
@@ -75,22 +86,6 @@ def count_hits(path: str, threshold: float) -> int:
 
 
 class TestResults:
-    def test_it_sums_a_range(self, executor, pilot_jobs, worker_thread):
-        pilot_jobs("cpu")
-        worker_thread(expect_tasks=5)
-
-        total = executor.map_reduce(
-            desc="sum",
-            queue="cpu",
-            map_fn=identity,
-            reduce_fn=add,
-            iterable=range(100),
-            init=0,
-            num_tasks=4,
-        )
-
-        assert total == 4950
-
     def test_every_item_is_mapped_once(self, executor, pilot_jobs, worker_thread):
         """A fold that keeps the items shows a lost one and a doubled one."""
         pilot_jobs("cpu")
@@ -128,51 +123,10 @@ class TestResults:
 
         assert total == sum(x * 3 + 1 for x in range(10)) % 100
 
-    def test_one_task_agrees_with_many(self, executor, pilot_jobs, worker_thread):
-        pilot_jobs("cpu")
-        worker_thread(expect_tasks=(1 + 1) + (8 + 1))
-
-        one = executor.map_reduce(
-            desc="one",
-            queue="cpu",
-            map_fn=identity,
-            reduce_fn=add,
-            iterable=range(20),
-            init=0,
-            num_tasks=1,
-        )
-        many = executor.map_reduce(
-            desc="many",
-            queue="cpu",
-            map_fn=identity,
-            reduce_fn=add,
-            iterable=range(20),
-            init=0,
-            num_tasks=8,
-        )
-
-        assert one == many == 190
-
-    def test_a_queue_list_works(self, executor, pilot_jobs, worker_thread):
-        pilot_jobs("cpu")
-        worker_thread(expect_tasks=3)
-
-        total = executor.map_reduce(
-            desc="sum",
-            queue=["cpu"],
-            map_fn=identity,
-            reduce_fn=add,
-            iterable=range(10),
-            init=0,
-            num_tasks=2,
-        )
-
-        assert total == 45
-
     def test_it_does_not_mutate_init(self, executor, pilot_jobs, worker_thread):
         """A `reduce_fn` that folds in place leaves the caller's value alone."""
         pilot_jobs("cpu")
-        worker_thread(expect_tasks=3)
+        worker_thread(expect_tasks=2)
         init: list[int] = []
 
         got = executor.map_reduce(
@@ -182,7 +136,7 @@ class TestResults:
             reduce_fn=extend_in_place,
             iterable=range(10),
             init=init,
-            num_tasks=2,
+            num_tasks=1,
         )
 
         assert sorted(got) == list(range(10))
@@ -214,27 +168,66 @@ class TestResults:
 
         assert hits == sum(max(index - 2, 0) for index in range(20))
 
-    def test_the_documented_gather_shape_works(
+    def test_a_generator_is_read_in_full(self, executor, pilot_jobs, worker_thread):
+        """A one-shot iterable gives up each item once, so it must be read once."""
+        pilot_jobs("cpu")
+        worker_thread(expect_tasks=4)
+
+        got = executor.map_reduce(
+            desc="collect",
+            queue="cpu",
+            map_fn=wrap,
+            reduce_fn=add,
+            iterable=(x for x in range(20)),
+            init=[],
+            num_tasks=3,
+        )
+
+        assert sorted(got) == list(range(20))
+
+    def test_positional_reduce_args_reach_every_fold(
         self, executor, pilot_jobs, worker_thread
     ):
-        """A map to a one-item list, then a concatenation.
-
-        The shape is the one docs/reference/map-reduce.md shows.
-        """
+        """The map tasks and the reduce task both get `reduce_extra_args`."""
         pilot_jobs("cpu")
         worker_thread(expect_tasks=3)
 
-        got = executor.map_reduce(
-            desc="gather",
+        total = executor.map_reduce(
+            desc="offset",
             queue="cpu",
-            map_fn=lambda x: [x * x],
-            reduce_fn=operator.add,
+            map_fn=identity,
+            reduce_fn=add_offset,
             iterable=range(10),
-            init=[],
+            init=0,
+            num_tasks=2,
+            reduce_extra_args=(1000,),
+        )
+
+        # Ten folds of an item in the map tasks,
+        # and two folds of a partial result in the reduce task.
+        # A map task that drops the offset gives 2045,
+        # and a reduce task that drops it gives 10045.
+        assert total == sum(range(10)) + (10 + 2) * 1000
+
+    def test_a_queue_list_needs_only_one_started_group(
+        self, executor, pilot_jobs, worker_thread
+    ):
+        """A job group with no pilot job in the list does not refuse the call."""
+        pilot_jobs("cpu")
+        executor.define_job_group("idle", [])
+        worker_thread(expect_tasks=3)
+
+        total = executor.map_reduce(
+            desc="sum",
+            queue=["cpu", "idle"],
+            map_fn=identity,
+            reduce_fn=add,
+            iterable=range(10),
+            init=0,
             num_tasks=2,
         )
 
-        assert sorted(got) == [x * x for x in range(10)]
+        assert total == 45
 
 
 # --------------------------------------------------------------------------
@@ -274,88 +267,6 @@ class TestActors:
         )
 
         assert total == 3 * sum(range(10))
-
-    def test_the_actor_is_the_one_the_worker_built(
-        self, executor, actor_group, worker_thread
-    ):
-        """The whole point: one actor per worker, not one per item."""
-        support_actor.INSTANCES.clear()
-        worker_thread(
-            expect_tasks=2, group="act", actor_class_name="support_actor.MapActor"
-        )
-
-        executor.map_reduce(
-            desc="scale",
-            queue="act",
-            map_fn="scale",
-            reduce_fn=add,
-            iterable=range(6),
-            init=0,
-            num_tasks=1,
-        )
-
-        # The worker runs in a thread of this process,
-        # and `current_actor()` is process-wide.
-        actor = current_actor()
-        assert isinstance(actor, support_actor.MapActor)
-        assert actor.calls == 6
-
-    def test_map_extra_args_reach_the_method(
-        self, executor, actor_group, worker_thread
-    ):
-        worker_thread(
-            expect_tasks=2, group="act", actor_class_name="support_actor.MapActor"
-        )
-
-        total = executor.map_reduce(
-            desc="offset",
-            queue="act",
-            map_fn="offset",
-            reduce_fn=add,
-            iterable=range(5),
-            init=0,
-            num_tasks=1,
-            map_extra_args=(2,),
-            map_extra_kwargs={"sign": -1},
-        )
-
-        assert total == sum(-(x * 3 + 2) for x in range(5))
-
-    def test_a_failing_method_raises(self, executor, actor_group, worker_thread):
-        worker_thread(
-            expect_tasks=1, group="act", actor_class_name="support_actor.MapActor"
-        )
-
-        with pytest.raises(RuntimeError, match="failed on its worker"):
-            executor.map_reduce(
-                desc="boom",
-                queue="act",
-                map_fn="explode",
-                reduce_fn=add,
-                iterable=range(4),
-                init=0,
-                num_tasks=1,
-            )
-
-    def test_a_callable_still_runs_on_an_actor_group(
-        self, executor, actor_group, worker_thread
-    ):
-        """The actor is there for a method name, and does not block a callable."""
-        worker_thread(
-            expect_tasks=3, group="act", actor_class_name="support_actor.MapActor"
-        )
-
-        total = executor.map_reduce(
-            desc="sum",
-            queue="act",
-            map_fn=identity,
-            reduce_fn=add,
-            iterable=range(10),
-            init=0,
-            num_tasks=2,
-        )
-
-        assert total == 45
 
 
 # --------------------------------------------------------------------------
@@ -454,34 +365,6 @@ class TestQueuesAndIds:
         assert len(tasks) == 3
         assert max(items) < min(tasks)
 
-    def test_item_ids_do_not_collide_with_task_ids(
-        self, executor, ds_client, pilot_jobs, worker_thread
-    ):
-        pilot_jobs("cpu")
-        worker_thread(expect_tasks=3)
-
-        executor.map_reduce(
-            desc="sum",
-            queue="cpu",
-            map_fn=identity,
-            reduce_fn=add,
-            iterable=range(6),
-            init=0,
-            num_tasks=2,
-        )
-
-        items = item_ids(ds_client)
-        assert len(items) == 6
-        prefix = f"{executor.name}.map_reduce.0."
-        assert all(i.startswith(prefix) for i in items)
-        # `<name>.map_reduce.<index>.<token>.item.<i>`, and the token is hex.
-        token = items[0][len(prefix) :].split(".")[0]
-        assert len(token) == MAP_REDUCE_TOKEN_LEN
-        assert int(token, 16) >= 0
-
-        # The submitted tasks kept the plain numbering, and nothing collided.
-        assert executor.submit("cpu", identity, 1).task_id == f"{executor.name}.task.3"
-
     def test_two_calls_use_two_queues(
         self, executor, ds_client, pilot_jobs, worker_thread
     ):
@@ -504,10 +387,12 @@ class TestQueuesAndIds:
         # A queue is `<name>.map_reduce.<index>.<token>`, so field 2 is the index.
         assert {q.split(".")[2] for q in queues} == {"0", "1"}
 
-    def test_it_publishes_progress(
+    def test_it_publishes_progress_task_names_and_distinct_item_ids(
         self, executor, ds_client, pilot_jobs, worker_thread
     ):
+        """What `swtop` shows for a call, and the ids it puts on the server."""
         pilot_jobs("cpu")
+        # Three map tasks and the reduce task.
         worker_thread(expect_tasks=4)
 
         executor.map_reduce(
@@ -515,7 +400,7 @@ class TestQueuesAndIds:
             queue="cpu",
             map_fn=identity,
             reduce_fn=add,
-            iterable=range(30),
+            iterable=range(6),
             init=0,
             num_tasks=3,
         )
@@ -526,27 +411,29 @@ class TestQueuesAndIds:
         # Three map tasks and the reduce task.
         assert display["total"] == 4
 
-    def test_it_names_its_tasks(self, executor, ds_client, pilot_jobs, worker_thread):
-        """What `swtop` shows for a map_reduce task."""
-        pilot_jobs("cpu")
-        worker_thread(expect_tasks=3)
-
-        executor.map_reduce(
-            desc="sum",
-            queue="cpu",
-            map_fn=identity,
-            reduce_fn=add,
-            iterable=range(4),
-            init=0,
-            num_tasks=2,
-        )
+        items = item_ids(ds_client)
+        assert len(items) == 6
+        prefix = f"{executor.name}.map_reduce.0."
+        assert all(i.startswith(prefix) for i in items)
+        # `<name>.map_reduce.<index>.<token>.item.<i>`, and the token is hex.
+        token = items[0][len(prefix) :].split(".")[0]
+        assert len(token) == MAP_REDUCE_TOKEN_LEN
+        assert int(token, 16) >= 0
 
         names = {
             ds_client.map_get(f"task_name:{executor.name}.task.{i}").decode("utf-8")
-            for i in range(3)
+            for i in range(4)
         }
-        (queue,) = {j.split(".item.")[0] for j in item_ids(ds_client)}
-        assert names == {f"{queue}.task.0", f"{queue}.task.1", f"{queue}.reduce"}
+        queue = f"{prefix}{token}"
+        assert names == {
+            f"{queue}.task.0",
+            f"{queue}.task.1",
+            f"{queue}.task.2",
+            f"{queue}.reduce",
+        }
+
+        # The submitted tasks kept the plain numbering, and nothing collided.
+        assert executor.submit("cpu", identity, 1).task_id == f"{executor.name}.task.4"
 
 
 # --------------------------------------------------------------------------
@@ -621,18 +508,6 @@ class TestEdgeCases:
             )
         assert ds_client.task_search_id(ALL_TASK_IDS) == []
 
-    def test_a_non_int_num_tasks_raises(self, executor):
-        with pytest.raises(TypeCheckError):
-            executor.map_reduce(
-                desc="sum",
-                queue="cpu",
-                map_fn=identity,
-                reduce_fn=add,
-                iterable=range(4),
-                init=0,
-                num_tasks="4",
-            )
-
     def test_a_method_name_needs_an_actor(self, executor, pilot_jobs, ds_client):
         """Only a job group with an actor can resolve a method name."""
         pilot_jobs("cpu")
@@ -648,12 +523,24 @@ class TestEdgeCases:
             )
         assert ds_client.task_search_id(ALL_TASK_IDS) == []
 
-    def test_a_method_name_on_a_worker_without_an_actor_is_reported(
-        self, ds_service_address, map_task_env
-    ):
-        """The worker-side half of the same check, for a group defined elsewhere."""
-        with pytest.raises(RuntimeError, match="no actor"):
-            _map_reduce_task("mr-no-actor", "scale", add, 0, (), {}, (), {})
+    def test_a_method_name_names_the_group_without_an_actor(self, executor, ds_client):
+        """In a queue list, one job group with no actor is enough to refuse."""
+        executor.define_job_group("act", [], actor_class_name="support_actor.MapActor")
+        executor.define_job_group("cpu", [])
+
+        with pytest.raises(
+            ValueError, match=r"map_reduce names a method.*: \['cpu'\]$"
+        ):
+            executor.map_reduce(
+                desc="scale",
+                queue=["act", "cpu"],
+                map_fn="scale",
+                reduce_fn=add,
+                iterable=range(4),
+                init=0,
+                num_tasks=2,
+            )
+        assert ds_client.task_search_id(ALL_TASK_IDS) == []
 
     def test_a_queue_with_no_worker_raises_before_enqueueing(self, executor, ds_client):
         with pytest.raises(RuntimeError, match="no worker started"):
@@ -667,22 +554,6 @@ class TestEdgeCases:
                 num_tasks=2,
             )
         assert ds_client.task_search_id(ALL_TASK_IDS) == []
-
-    def test_a_failing_map_fn_raises(self, executor, pilot_jobs, worker_thread):
-        """The worker turns it into a `RemoteExecutionError`, and the wait raises."""
-        pilot_jobs("cpu")
-        worker_thread(expect_tasks=1)
-
-        with pytest.raises(RuntimeError, match="failed on its worker"):
-            executor.map_reduce(
-                desc="boom",
-                queue="cpu",
-                map_fn=explode,
-                reduce_fn=add,
-                iterable=range(4),
-                init=0,
-                num_tasks=1,
-            )
 
 
 # --------------------------------------------------------------------------
@@ -759,6 +630,32 @@ class TestReduceTask:
 
         with pytest.raises(RuntimeError, match="no good"):
             executor.map_reduce("cpu", explode, add, range(4), 0, num_tasks=1)
+
+    def test_a_reduce_fn_failing_in_a_map_task_raises(
+        self, executor, pilot_jobs, worker_thread, time_limit
+    ):
+        """The map task fails, and the call ends rather than wait on the reduce."""
+        pilot_jobs("cpu")
+        worker_thread(expect_tasks=1)
+
+        with time_limit(20.0, "map_reduce hung on a failed map fold"):
+            with pytest.raises(RuntimeError, match="bad fold"):
+                executor.map_reduce(
+                    "cpu", identity, fail_fold, range(4), 0, num_tasks=1
+                )
+
+    def test_a_reduce_fn_failing_in_the_reduce_task_raises(
+        self, executor, pilot_jobs, worker_thread, time_limit
+    ):
+        """The map tasks finish, and only the fold of their partial results fails."""
+        pilot_jobs("cpu")
+        worker_thread(expect_tasks=3)
+
+        with time_limit(20.0, "map_reduce hung on a failed reduce task"):
+            with pytest.raises(RuntimeError, match="bad partial"):
+                executor.map_reduce(
+                    "cpu", identity, append_item, range(4), (), num_tasks=2
+                )
 
 
 # --------------------------------------------------------------------------

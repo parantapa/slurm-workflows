@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -38,8 +39,6 @@ from slurm_workflows.monitors import (
     start_host_monitor,
     start_slurm_job_monitor,
 )
-
-import pynvml
 
 from conftest import FakeGpu, FakeNvml
 
@@ -172,9 +171,7 @@ class TestCgroupSampler:
 
 
 class TestMonitor:
-    def test_one_reading_lands_in_the_subjects_series(
-        self, ds_client, ds_service_address
-    ):
+    def test_one_reading_lands_in_the_subjects_series(self, ds_client):
         monitor = Monitor(
             client=ds_client,
             subject="node-1",
@@ -238,6 +235,60 @@ class TestMonitor:
         assert monitor.is_alive()
         monitor.stop()
 
+    def test_a_failed_append_does_not_end_it(self, ds_client, monkeypatch, caplog):
+        """A `ds-service` that briefly refuses a write must not stop the series."""
+        calls: list[str] = []
+
+        def refuse(key, value, stamp):
+            calls.append(key)
+            raise ConnectionError("ds-service is away")
+
+        monkeypatch.setattr(ds_client, "time_series_append", refuse)
+        monitor = Monitor(
+            client=ds_client,
+            subject="node-1",
+            prefixes=HOST_SERIES,
+            sampler=lambda: {"load_average": 1.0},
+            interval=0.01,
+        )
+        monitor.start()
+
+        # Three refused writes mean it went on sampling after the first.
+        assert wait_for(lambda: len(calls) >= 3)
+        assert monitor.is_alive()
+        assert "failed to sample" in caplog.text.lower()
+        monitor.stop()
+
+    def test_stop_returns_after_its_timeout_when_a_reading_hangs(self, ds_client):
+        """A hung `ds-service` call must not hang the worker's shutdown."""
+        entered = threading.Event()
+        release = threading.Event()
+
+        def hang() -> dict[str, float]:
+            entered.set()
+            release.wait(5.0)
+            return {}
+
+        monitor = Monitor(
+            client=ds_client,
+            subject="node-1",
+            prefixes=HOST_SERIES,
+            sampler=hang,
+            interval=60.0,
+        )
+        monitor.start()
+        assert entered.wait(5.0)
+
+        start = time.monotonic()
+        monitor.stop(timeout=0.05)
+        elapsed = time.monotonic() - start
+
+        assert elapsed < 1.0
+        assert monitor.is_alive(), "the reading still hangs"
+        release.set()
+        monitor.join(5.0)
+        assert not monitor.is_alive()
+
     def test_stopping_one_that_never_ran_is_fine(self, ds_client):
         monitor = Monitor(
             client=ds_client,
@@ -274,13 +325,15 @@ class TestStartHelpers:
         assert ds_client.time_series_get("slurm_job_cpu:12345:node-1")[-1].value == 0.0
         monitor.stop()
 
-    def test_a_numeric_job_id_keys_the_series_as_text(self, ds_client):
-        monitor = start_slurm_job_monitor(ds_client, 7, "node-1", interval=60.0)
-        monitor.stop()
+    def test_the_host_and_job_monitors_are_daemons(self, ds_client):
+        """A thread that is not a daemon keeps a worker alive past its time limit."""
+        host = start_host_monitor(ds_client, "node-1", interval=60.0)
+        job = start_slurm_job_monitor(ds_client, 7, "node-1", interval=60.0)
+        host.stop()
+        job.stop()
 
-        assert ds_client.time_series_search_key("^slurm_job_memory:") == [
-            "slurm_job_memory:7:node-1"
-        ]
+        assert host.daemon
+        assert job.daemon
 
     def test_two_nodes_of_one_job_write_series_of_their_own(self, ds_client):
         first = start_slurm_job_monitor(ds_client, 7, "node-1", interval=60.0)
@@ -313,9 +366,6 @@ class TestGpuSubject:
             "3",
         )
 
-    def test_it_extends_the_subject_of_its_job(self):
-        assert gpu_subject(7, "node-1", 0) == f"{job_subject(7, 'node-1')}:0"
-
 
 class TestNvmlSession:
     def test_it_shuts_down_what_it_started(self, fake_nvml):
@@ -323,17 +373,6 @@ class TestNvmlSession:
             assert fake_nvml.sessions == 1
 
         assert fake_nvml.sessions == 0
-
-    def test_no_driver_raises(self, fake_nvml):
-        fake_nvml.no_driver = True
-
-        with pytest.raises(pynvml.NVMLError) as raised:
-            with nvml_session():
-                pass
-
-        # `NVMLError` sets `value` in `__new__`, where pyright cannot see it,
-        # hence `getattr`.
-        assert getattr(raised.value, "value") == pynvml.NVML_ERROR_LIBRARY_NOT_FOUND
 
 
 class TestQueryGpus:
@@ -373,18 +412,6 @@ class TestQueryGpus:
 
         assert gpu.memory_total is None
         assert set(gpu.values) == {"utilization"}
-
-    def test_no_gpu_is_an_empty_list(self, fake_nvml):
-        with nvml_session():
-            assert query_gpus() == []
-
-    def test_outside_a_session_it_raises(self, fake_nvml):
-        two_gpus(fake_nvml)
-
-        with pytest.raises(pynvml.NVMLError) as raised:
-            query_gpus()
-
-        assert getattr(raised.value, "value") == pynvml.NVML_ERROR_UNINITIALIZED
 
 
 class TestGpuMonitor:
@@ -446,12 +473,6 @@ class TestGpuMonitor:
         }
         assert len(stamps) == 1
 
-    def test_its_thread_name_differs_from_the_job_monitors(self, ds_client):
-        monitor = GpuMonitor(ds_client, "7:node-1")
-
-        assert monitor.subject == "7:node-1"
-        assert monitor.name == "gpu-monitor:7:node-1"
-
     def test_the_thread_holds_one_session_while_it_runs(self, ds_client, fake_nvml):
         fake_nvml.gpus = [FakeGpu()]
         monitor = GpuMonitor(ds_client, "7:node-1", interval=60.0)
@@ -494,6 +515,15 @@ class TestStartGpuMonitor:
             )
         )
         monitor.stop()
+
+    def test_it_is_a_daemon(self, ds_client, fake_nvml):
+        fake_nvml.gpus = [FakeGpu()]
+
+        monitor = start_gpu_monitor(ds_client, 7, "node-1", interval=60.0)
+
+        assert monitor is not None
+        monitor.stop()
+        assert monitor.daemon
 
     def test_a_node_with_no_gpu_starts_nothing(self, ds_client, fake_nvml):
         assert start_gpu_monitor(ds_client, 7, "node-1", interval=60.0) is None

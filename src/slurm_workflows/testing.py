@@ -132,7 +132,30 @@ class Submission:
 
 
 class FakeSlurm:
-    """Stands in for the `subprocess` module inside `slurm_utils`."""
+    """Stands in for the `subprocess` module inside `slurm_utils`.
+
+    Only `run` is faked.
+    It answers `sbatch`, `squeue` and `scancel`,
+    and fails the test on any other command.
+
+    The attributes a test reads or sets:
+
+    * `calls` records every `run` call in order,
+      as the command list and the keyword arguments,
+      also for a call that then fails or times out.
+    * `submissions` holds one `Submission` per successful `sbatch`.
+    * `running_job_ids` is what `squeue` reports.
+      `sbatch` adds to it and `scancel` removes from it.
+    * `cancelled_job_ids` holds every job id `scancel` was given.
+    * `next_job_id` is the id the next `sbatch` gets.
+      It starts at 1000.
+    * `fail` maps a command name to the error `fail_command` set for it.
+    * `timeouts` holds the command names `timeout_command` set.
+    * `sbatch_stdout_override`, when set, replaces the stdout of `sbatch`.
+
+    Like the real `scancel`,
+    a `scancel` with no job id raises `subprocess.CalledProcessError`.
+    """
 
     def __init__(self) -> None:
         self.submissions: list[Submission] = []
@@ -140,7 +163,9 @@ class FakeSlurm:
         self.cancelled_job_ids: list[int] = []
         self.next_job_id = 1000
         self.fail: dict[str, tuple[int, str, str]] = {}
+        self.timeouts: set[str] = set()
         self.sbatch_stdout_override: str | None = None
+        self.calls: list[tuple[list[str], dict[str, Any]]] = []
 
     # -- failure injection --------------------------------------------------
 
@@ -150,6 +175,10 @@ class FakeSlurm:
         """Make future calls to `exe` raise CalledProcessError."""
         self.fail[exe] = (returncode, stdout, stderr)
 
+    def timeout_command(self, exe: str) -> None:
+        """Make future calls to `exe` raise TimeoutExpired."""
+        self.timeouts.add(exe)
+
     # -- the subprocess surface --------------------------------------------
 
     def run(self, cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
@@ -157,7 +186,11 @@ class FakeSlurm:
 
         Any other command fails the test.
         """
+        self.calls.append((list(cmd), dict(kwargs)))
         exe = Path(cmd[0]).name
+
+        if exe in self.timeouts:
+            raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout") or 0)
 
         if exe in self.fail:
             returncode, stdout, stderr = self.fail[exe]
@@ -172,9 +205,11 @@ class FakeSlurm:
 
         raise AssertionError(f"unexpected command in test: {cmd!r}")
 
-    # `run` covers only the three Slurm commands.
+    # Only `run` is faked, and it covers only the three Slurm commands.
     # Every other attribute, such as an exception type,
     # comes from the real `subprocess`.
+    # A new call such as `subprocess.Popen` in `slurm_utils`
+    # would therefore run for real, not against this fake.
     def __getattr__(self, name: str) -> Any:
         return getattr(subprocess, name)
 
@@ -207,9 +242,13 @@ class FakeSlurm:
         return subprocess.CompletedProcess(cmd, 0, stdout, "")
 
     def _scancel(self, cmd: list[str]) -> subprocess.CompletedProcess[str]:
-        for arg in cmd[1:]:
-            if arg.startswith("-"):
-                continue
+        job_args = [arg for arg in cmd[1:] if not arg.startswith("-")]
+        # The real `scancel` exits 1 when it gets no job to cancel.
+        if not job_args:
+            raise subprocess.CalledProcessError(
+                1, cmd, "", "scancel: error: No job identification provided"
+            )
+        for arg in job_args:
             job_id = int(arg)
             self.cancelled_job_ids.append(job_id)
             if job_id in self.running_job_ids:

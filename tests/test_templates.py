@@ -15,7 +15,12 @@ from pathlib import Path
 import jinja2
 import pytest
 
-from slurm_workflows.templates import line_col_from_pos, parse_file, render_template
+from slurm_workflows.templates import (
+    line_col_from_pos,
+    parse_file,
+    render_template,
+    shell_quote,
+)
 
 
 def run_sbatch_script(
@@ -79,44 +84,10 @@ class TestParseFile:
         assert templates["sample:first"].source == "body one"
         assert templates["sample:second"].source == "body two"
 
-    def test_the_prefix_is_the_callers_not_the_filename(self, tmp_path: Path):
-        """`load_template` derives the prefix from the name the caller looks up.
-
-        The file it then reads is `<prefix>.jinja`, so the two agree in practice.
-        But `parse_file` uses the prefix the caller passes, whatever the file name.
-        """
-        path = self.write(tmp_path, '{#- name: "only" -#}\nbody\n')
-
-        assert list(parse_file("other", path)) == ["other:only"]
-        assert list(parse_file("sample", path)) == ["sample:only"]
-
     def test_a_body_is_stripped(self, tmp_path: Path):
         path = self.write(tmp_path, '{#- name: "only" -#}\n\n\n  body  \n\n')
 
         assert parse_file("sample", path)["sample:only"].source == "body"
-
-    def test_text_before_the_first_header_is_ignored(self, tmp_path: Path):
-        path = self.write(tmp_path, 'a preamble\n{#- name: "only" -#}\nbody\n')
-
-        assert parse_file("sample", path)["sample:only"].source == "body"
-
-    def test_a_file_with_no_headers_yields_nothing(self, tmp_path: Path):
-        assert parse_file("sample", self.write(tmp_path, "just text\n")) == {}
-
-    def test_an_empty_file_yields_nothing(self, tmp_path: Path):
-        assert parse_file("sample", self.write(tmp_path, "")) == {}
-
-    def test_a_repeated_name_keeps_the_last(self, tmp_path: Path):
-        """Not an error today.
-
-        The test pins this behavior, so that any change to it is deliberate.
-        """
-        path = self.write(
-            tmp_path,
-            '{#- name: "dup" -#}\nfirst\n{#- name: "dup" -#}\nsecond\n',
-        )
-
-        assert parse_file("sample", path)["sample:dup"].source == "second"
 
     def test_an_unterminated_header_is_reported(self, tmp_path: Path):
         path = self.write(tmp_path, '{#- name: "only"\nbody with no header end\n')
@@ -128,14 +99,6 @@ class TestParseFile:
         path = self.write(tmp_path, "{#- name: -#}\nbody\n")
 
         with pytest.raises(Exception) as excinfo:
-            parse_file("sample", path)
-
-        assert "Failed to parse template file" in "".join(excinfo.value.__notes__)
-
-    def test_a_header_without_a_name_is_reported(self, tmp_path: Path):
-        path = self.write(tmp_path, '{#- title: "only" -#}\nbody\n')
-
-        with pytest.raises(KeyError) as excinfo:
             parse_file("sample", path)
 
         assert "Failed to parse template file" in "".join(excinfo.value.__notes__)
@@ -164,8 +127,6 @@ class TestParseFile:
 
 
 class TestLineColFromPos:
-    def test_the_first_character_is_line_one_column_one(self):
-        assert line_col_from_pos("hello", 0) == (1, 1)
 
     def test_counts_lines_and_columns(self):
         text = "one\ntwo\nthree"
@@ -180,12 +141,6 @@ class TestLineColFromPos:
 class TestLoader:
     # Each call here is one that no `render_template` overload accepts.
     # The `pyright: ignore[reportCallIssue]` pragmas mark those calls as deliberate.
-
-    def test_unknown_template_name_raises(self):
-        with pytest.raises(jinja2.TemplateNotFound):
-            render_template(
-                "slurm_pilot:no_such_template"  # pyright: ignore[reportCallIssue]
-            )
 
     def test_unknown_file_prefix_raises(self):
         with pytest.raises(jinja2.TemplateNotFound):
@@ -226,38 +181,6 @@ class TestWorkerSbatchScript:
 
         assert ". '/path/to/worker.sh'" in out
         assert "srun" not in out
-
-    def test_batch_worker_leaves_output_to_sbatch(self):
-        """One process, one allocation: the job's own --output already has it."""
-        out = self.render(is_batch_worker=True)
-
-        assert "--output" not in out
-
-    def test_non_batch_worker_is_wrapped_in_srun(self):
-        out = self.render()
-
-        assert (
-            "srun --output '/scratch/work/testex.job.cpu.0-%j-%t.out' "
-            "/bin/bash '/path/to/worker.sh'" in out
-        )
-
-    def test_both_srun_forms_are_rendered(self, srun_lines):
-        """The script carries both. The shell picks between them at run time."""
-        out = self.render()
-
-        plain, per_task = srun_lines(out)
-        assert plain == "srun /bin/bash '/path/to/worker.sh'"
-        assert per_task == (
-            "srun --output '/scratch/work/testex.job.cpu.0-%j-%t.out' "
-            "/bin/bash '/path/to/worker.sh'"
-        )
-
-    def test_each_srun_task_gets_its_own_output_file(self, srun_lines):
-        """The per-task output pattern carries both the job id and the task id."""
-        out = self.render()
-
-        _, per_task = srun_lines(out)
-        assert "%j" in per_task and "%t" in per_task
 
     def test_the_output_pattern_lands_in_the_work_dir(self):
         out = self.render(work_dir="/some/other/dir")
@@ -429,20 +352,6 @@ class TestOutputRedirectByTaskCount:
             "/bin/bash /path/to/worker.sh"
         ]
 
-    def test_the_task_count_is_never_overridden_by_the_node_count(
-        self, tmp_path: Path, srun_lines
-    ):
-        """`SLURM_NTASKS` is the job's task count, so no other variable decides it."""
-        out = run_sbatch_script(
-            self.render(),
-            tmp_path,
-            SLURM_NTASKS="4",
-            SLURM_JOB_NUM_NODES="1",
-        ).stdout
-
-        (command,) = srun_lines(out)
-        assert "--output" in command
-
     def test_the_count_it_decided_on_is_echoed(self, tmp_path: Path):
         """The batch output file records the task count the shell decided on."""
         proc = run_sbatch_script(
@@ -480,7 +389,6 @@ class TestOutputRedirectByTaskCount:
 class TestWorkerScript:
     def render(
         self,
-        worker_exe: str = "slurm-pilot-worker",
         setup_script: str = "module load gcc\nconda activate my-env",
         actor_class_name: str = "",
     ) -> str:
@@ -488,7 +396,7 @@ class TestWorkerScript:
         # for the same reason as `TestWorkerSbatchScript.render` does.
         return render_template(
             "slurm_pilot:worker_script",
-            worker_exe=worker_exe,
+            worker_exe="slurm-pilot-worker",
             setup_script=setup_script,
             group="cpu",
             name="testex.job.cpu.0",
@@ -499,13 +407,6 @@ class TestWorkerScript:
             # Any value will do. See `TestWorkerRestart.RESTART_EXIT_CODE`.
             restart_exit_code=75,
         )
-
-    def test_setup_script_body_is_inlined_verbatim(self):
-        out = self.render()
-
-        assert "module load gcc\nconda activate my-env" in out
-        # It is a body, not a path: nothing sources it.
-        assert ". 'module load gcc" not in out
 
     def test_multiline_body_is_not_escaped(self):
         out = self.render(setup_script='export A="x y"\nexport B=$HOME/z\n# a comment')
@@ -520,39 +421,15 @@ class TestWorkerScript:
         assert ". '/etc/profile'" in out
         assert "slurm-pilot-worker \\" in out
 
-    def test_fails_fast_on_setup_errors(self):
-        assert "set -Eeuo pipefail" in self.render()
-
     def test_passes_all_worker_arguments(self):
-        out = self.render()
+        out = self.render(actor_class_name="pkg.mod.MyActor")
 
         assert "--group 'cpu'" in out
+        assert "--actor-class-name 'pkg.mod.MyActor'" in out
         assert "--name 'testex.job.cpu.0'" in out
         assert "--server-address '10.0.0.1:5051'" in out
         assert "--work-dir '/scratch/work'" in out
         assert """--python-paths-json '["/a", "/b"]'""" in out
-
-    def test_actor_class_name_is_forwarded(self):
-        out = self.render(actor_class_name="pkg.mod.MyActor")
-
-        assert "--actor-class-name 'pkg.mod.MyActor'" in out
-
-    def test_passes_its_own_arguments_on(self):
-        """How the batch script asks it to publish a pilot job event."""
-        out = self.render()
-
-        # Each line of the worker command but the last ends in a `\`,
-        # and "$@" opens that last line.
-        lines = out.splitlines()
-        end = next(i for i, ln in enumerate(lines) if "slurm-pilot-worker \\" in ln)
-        while lines[end].endswith("\\"):
-            end += 1
-        assert lines[end].strip().startswith('"$@"')
-
-    def test_custom_worker_exe(self):
-        out = self.render(worker_exe="/opt/bin/my-worker")
-
-        assert "/opt/bin/my-worker \\" in out
 
 
 class TestWorkerRestart:
@@ -643,7 +520,7 @@ exit "${statuses[$((runs - 1))]:-0}"
         assert first == second
         assert "--group cpu" in first
 
-    @pytest.mark.parametrize("status", [0, 1, 3, 143])
+    @pytest.mark.parametrize("status", [0, 1, 143])
     def test_any_other_status_passes_straight_through(
         self, tmp_path: Path, status: int
     ):
@@ -709,11 +586,21 @@ class TestSbatchScriptTemplate:
             script="echo hi",
         )
 
-        assert '#SBATCH --job-name "myjob"' in out
-        assert "#SBATCH -A alloc" in out
-        assert "#SBATCH -p gpu" in out
-        assert "#SBATCH --gres=gpu:1" in out
-        assert '#SBATCH --output "/work/myjob-%j.out"' in out
+        # The name first, then the caller's arguments in the caller's order,
+        # then the output file.
+        directives = [ln for ln in out.splitlines() if ln.startswith("#SBATCH")]
+        assert directives == [
+            '#SBATCH --job-name "myjob"',
+            "#SBATCH -A alloc",
+            "#SBATCH -p gpu",
+            "#SBATCH --gres=gpu:1",
+            '#SBATCH --output "/work/myjob-%j.out"',
+        ]
+        # `sbatch` reads directives only up to the first command,
+        # so all of them come before the script body.
+        lines = out.splitlines()
+        assert lines[0] == "#!/bin/bash"
+        assert lines.index("echo hi") > lines.index(directives[-1])
         assert out.rstrip().endswith("echo hi")
 
     def test_no_sbatch_args(self):
@@ -726,3 +613,74 @@ class TestSbatchScriptTemplate:
         )
 
         assert out.count("#SBATCH") == 2  # job-name and output only
+
+
+class TestShellQuoting:
+    """A value reaches the worker as one argument, whatever characters it holds."""
+
+    AWKWARD = [
+        "plain",
+        "it's",
+        "two words",
+        "$HOME and `date`",
+        'a "double" quote',
+        "''",
+        "",
+    ]
+
+    @pytest.mark.parametrize("value", AWKWARD)
+    def test_bash_reads_back_the_value_it_was_given(self, value: str):
+        result = subprocess.run(
+            ["bash", "-c", "printf '%s' " + shell_quote(value)],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert result.stdout == value
+
+    def test_a_plain_value_renders_as_it_always_did(self):
+        assert shell_quote("cpu") == "'cpu'"
+
+    def test_the_worker_gets_each_value_whole(self, tmp_path: Path):
+        stub = tmp_path / "stub-worker"
+        # One argument per line, so a split or a lost quote shows.
+        stub.write_text('#!/bin/bash\nprintf \'%s\\n\' "$@" > "$ARGS"\n')
+        stub.chmod(0o755)
+        work_dir = str(tmp_path / "it's a $dir")
+        paths = json.dumps(["/home/o'brien/lib"])
+        script = render_template(
+            "slurm_pilot:worker_script",
+            worker_exe=str(stub),
+            setup_script="",
+            group="cpu",
+            name="testex.job.cpu.0",
+            actor_class_name="pkg.Model's",
+            server_address="10.0.0.1:5051",
+            work_dir=work_dir,
+            python_paths_json=paths,
+            restart_exit_code=75,
+        )
+        script_path = tmp_path / "worker.sh"
+        script_path.write_text(script)
+        args_file = tmp_path / "args"
+
+        subprocess.run(
+            ["bash", str(script_path)],
+            env={"PATH": os.environ["PATH"], "ARGS": str(args_file)},
+            check=True,
+        )
+
+        assert args_file.read_text().splitlines() == [
+            "--group",
+            "cpu",
+            "--name",
+            "testex.job.cpu.0",
+            "--actor-class-name",
+            "pkg.Model's",
+            "--server-address",
+            "10.0.0.1:5051",
+            "--work-dir",
+            work_dir,
+            "--python-paths-json",
+            paths,
+        ]

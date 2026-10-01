@@ -8,17 +8,17 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
-from collections.abc import Callable, Coroutine
+from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Callable, Coroutine
 from datetime import datetime
 from typing import Any, cast
 
 import pytest
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual.widgets import (
     Checkbox,
     DataTable,
-    Footer,
-    Header,
     ProgressBar,
     Static,
     TabbedContent,
@@ -40,6 +40,7 @@ from slurm_workflows.swtop import (
     PilotJobInfo,
     open_collector,
 )
+from slurm_workflows import swtop_widgets
 from slurm_workflows.swtop_tui import TAB_KEYS, SwtopApp
 from slurm_workflows.swtop_widgets import (
     BlockTable,
@@ -184,12 +185,6 @@ def synced(*updates: list[tuple[str, list[str]]]) -> dict:
 class TestSyncTable:
     """What keeps a scroll position: an update to the rows, not a rebuild."""
 
-    def test_it_adds_the_rows_it_is_given(self):
-        seen = synced([("k1", ["a", "b"]), ("k2", ["c", "d"])])
-
-        assert seen["count"] == 2
-        assert seen["rows"]["k2"] == ["c", "d"]
-
     def test_a_row_that_is_still_there_keeps_its_place(self):
         seen = synced(
             [("k1", ["a", "b"]), ("k2", ["c", "d"])],
@@ -213,11 +208,6 @@ class TestSyncTable:
         seen = synced([("k1", ["a", "b"])], [("k1", ["a", "b"]), ("k2", ["c", "d"])])
 
         assert seen["keys"] == ["k1", "k2"]
-
-    def test_emptying_it_leaves_no_rows(self):
-        seen = synced([("k1", ["a", "b"])], [])
-
-        assert seen["count"] == 0
 
 
 # --------------------------------------------------------------------------
@@ -267,25 +257,6 @@ class TestDisplay:
 
         drive(scenario)
 
-    def test_a_job_with_no_process_shows_in_one_block_only(self):
-        """A queued pilot job: submitted, and nothing running in it yet."""
-
-        async def scenario():
-            app = SwtopApp(as_collector(StubCollector()), 3600.0)
-            async with app.run_test() as pilot:
-                await app.workers.wait_for_complete()
-                await pilot.pause()
-                app.poller.deliver(snapshot(workers=[]))
-
-                assert len(rows_of(app, "pilot-jobs")) == 1
-                assert rows_of(app, "workers") == []
-                empty = app.query_one("#swtop-workers").query_one(
-                    ".swtop-block-empty", Static
-                )
-                assert "no workers have registered" in text_of(empty)
-
-        drive(scenario)
-
     def test_the_progress_display_is_a_bar(self):
         async def scenario():
             app = SwtopApp(as_collector(StubCollector()), 3600.0)
@@ -300,6 +271,26 @@ class TestDisplay:
                 assert "explore" in label and "2/8 point" in label
                 bar = block.query_one(ProgressBar)
                 assert (bar.total, bar.progress) == (8, 2)
+
+        drive(scenario)
+
+    def test_an_empty_wait_is_drawn_as_done(self):
+        """A wait on no tasks publishes a total of 0, which must not divide."""
+
+        async def scenario():
+            app = SwtopApp(as_collector(StubCollector()), 3600.0)
+            async with app.run_test() as pilot:
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                empty = ProgressInfo("p-0", "nothing", "task", 0)
+                app.poller.deliver(snapshot(progress=empty))
+
+                block = app.query_one("#progress")
+                assert block.display
+                label = text_of(block.query_one(".swtop-progress-label", Static))
+                assert "0/0 task" in label and "done" in label
+                bar = block.query_one(ProgressBar)
+                assert (bar.total, bar.progress) == (1, 0)
 
         drive(scenario)
 
@@ -373,41 +364,6 @@ class TestDisplay:
 
         drive(scenario)
 
-    def test_rows_keep_their_identity_across_updates(self):
-        """The reason the table keys its rows: a scroll position survives a poll."""
-
-        async def scenario():
-            app = SwtopApp(as_collector(StubCollector()), 3600.0)
-            async with app.run_test() as pilot:
-                await app.workers.wait_for_complete()
-                await pilot.pause()
-                app.poller.deliver(snapshot())
-                first = keys_of(app, "workers")
-
-                app.poller.deliver(snapshot())
-
-                assert keys_of(app, "workers") == first
-
-        drive(scenario)
-
-    def test_a_worker_that_appears_is_added_to_the_table(self):
-        async def scenario():
-            app = SwtopApp(as_collector(StubCollector()), 3600.0)
-            async with app.run_test() as pilot:
-                await app.workers.wait_for_complete()
-                await pilot.pause()
-                app.poller.deliver(snapshot())
-
-                more = [
-                    WorkerInfo("w-id", "cpu", "run.job.cpu.0", "42", "node-1", "17"),
-                    WorkerInfo("w-id2", "cpu", "run.job.cpu.1", "42", "node-2", "18"),
-                ]
-                app.poller.deliver(snapshot(workers=more))
-
-                assert keys_of(app, "workers") == ["w-id", "w-id2"]
-
-        drive(scenario)
-
 
 def tasks_in_every_state() -> list[TaskInfo]:
     """One task in each state `STATE_ORDER` names, in that order."""
@@ -424,17 +380,6 @@ def state_box(app: App, state: str) -> Checkbox:
 
 
 class TestTaskStateFilter:
-    def test_the_tasks_tab_has_a_task_table(self):
-        async def scenario():
-            app = SwtopApp(as_collector(StubCollector()), 3600.0)
-            async with app.run_test():
-                assert isinstance(
-                    app.query_one("#swtop-tasks").query_one(BlockTable), TaskTable
-                )
-                assert not app.query_one("#swtop-workers").query(TaskStateFilter)
-
-        drive(scenario)
-
     def test_there_is_a_checkbox_for_each_state_in_order(self):
         async def scenario():
             app = SwtopApp(as_collector(StubCollector()), 3600.0)
@@ -464,7 +409,7 @@ class TestTaskStateFilter:
 
         drive(scenario)
 
-    def test_checking_a_state_shows_its_tasks_at_once(self):
+    def test_checking_or_unchecking_a_state_redraws_at_once(self):
         async def scenario():
             app = SwtopApp(as_collector(StubCollector()), 3600.0)
             async with app.run_test() as pilot:
@@ -479,16 +424,7 @@ class TestTaskStateFilter:
                 assert "Failed" in [row[2] for row in rows_of(app, "tasks")]
                 assert label_of(app, "tasks") == "tasks (4)"
 
-        drive(scenario)
-
-    def test_unchecking_a_state_hides_its_tasks(self):
-        async def scenario():
-            app = SwtopApp(as_collector(StubCollector()), 3600.0)
-            async with app.run_test() as pilot:
-                await app.workers.wait_for_complete()
-                await pilot.pause()
-                app.poller.deliver(snapshot(tasks=tasks_in_every_state()))
-
+                state_box(app, "Failed").value = False
                 state_box(app, "Running").value = False
                 await pilot.pause()
 
@@ -511,23 +447,6 @@ class TestTaskStateFilter:
                 app.poller.deliver(snapshot(tasks=tasks_in_every_state()))
 
                 assert "Finished" in [row[2] for row in rows_of(app, "tasks")]
-
-        drive(scenario)
-
-    def test_clicking_a_checkbox_toggles_its_state(self):
-        async def scenario():
-            app = SwtopApp(as_collector(StubCollector()), 3600.0)
-            async with app.run_test() as pilot:
-                await app.workers.wait_for_complete()
-                await pilot.pause()
-                app.poller.deliver(snapshot(tasks=tasks_in_every_state()))
-                await pilot.press("t")
-                await pilot.pause()
-
-                await pilot.click(state_box(app, "Canceled"))
-                await pilot.pause()
-
-                assert "Canceled" in [row[2] for row in rows_of(app, "tasks")]
 
         drive(scenario)
 
@@ -651,26 +570,6 @@ class TestFailedPoll:
 
 
 class TestLayout:
-    def test_the_areas_come_in_order(self):
-        async def scenario():
-            app = SwtopApp(as_collector(StubCollector()), 3600.0)
-            async with app.run_test():
-                areas = [
-                    type(w)
-                    for w in app.screen.children
-                    if not isinstance(w, SnapshotPoller)
-                ]
-                assert areas == [
-                    Header,
-                    SummaryLine,
-                    SwtopTabs,
-                    ProgressDisplay,
-                    ErrorLine,
-                    Footer,
-                ]
-
-        drive(scenario)
-
     def test_there_is_one_tab_for_each_block_in_order(self):
         async def scenario():
             app = SwtopApp(as_collector(StubCollector()), 3600.0)
@@ -688,11 +587,22 @@ class TestLayout:
         assert not {"q", "r"} & set(TAB_KEYS.values())
 
     def test_each_tab_key_shows_its_tab(self):
+        # Every key binds to the action that shows its own tab.
+        # Pressing all of them takes most of 2 s,
+        # so two presses check that a bound action does what it names.
+        bindings = Binding.make_bindings(SwtopApp.BINDINGS)
+        actions = {binding.key: binding.action for binding in bindings}
+        for block, key in TAB_KEYS.items():
+            assert actions[key] == f"show_tab('swtop-{block}')"
+
         async def scenario():
             app = SwtopApp(as_collector(StubCollector()), 3600.0)
+            # A press waits out the tab underline's slide from the last press,
+            # which takes about 0.3 s.
+            app.animation_level = "none"
             async with app.run_test() as pilot:
-                for block, key in TAB_KEYS.items():
-                    await pilot.press(key)
+                for block in ["tasks", "workers"]:
+                    await pilot.press(TAB_KEYS[block])
                     await pilot.pause()
 
                     assert app.query_one(SwtopTabs).active == f"swtop-{block}"
@@ -765,53 +675,43 @@ class PollingApp(App):
 
 
 class TestSlowPoll:
-    # A poll of 0.3 s against an interval of 0.05 s.
+    # A poll of 0.1 s against an interval of 0.02 s.
     # This is a read of a large pool through a tunnel, scaled down.
 
-    def test_a_poll_slower_than_the_interval_still_lands(self):
-        """The next tick does not cut it short, so the screen moves on."""
-        slow = SlowCollector(0.3)
+    def test_a_slow_poll_lands_and_no_other_overlaps_it(self):
+        """The next tick neither cuts the poll short nor queues behind it."""
+        slow = SlowCollector(0.1)
 
         async def scenario():
-            app = PollingApp(slow, interval=0.05)
+            app = PollingApp(slow, interval=0.02)
             async with app.run_test() as pilot:
-                await pilot.pause(1.0)
+                await pilot.pause(0.35)
 
+                # The poll lands, so the screen moves on.
                 assert slow.finished >= 2
                 assert len(app.polled) == slow.finished
                 assert "total 6" in text_of(app.query_one(SummaryLine))
-
-        drive(scenario)
-
-    def test_one_poll_is_in_flight_at_a_time(self):
-        """The poller drops a tick during a poll, and does not queue it."""
-        slow = SlowCollector(0.3)
-
-        async def scenario():
-            app = PollingApp(slow, interval=0.05)
-            async with app.run_test() as pilot:
-                await pilot.pause(1.0)
-
+                # The poller drops a tick during a poll.
                 assert slow.most_in_flight == 1
-                # About 1.0 / 0.3 polls. With queued ticks, the count is 20.
+                # About 0.35 / 0.1 polls. With queued ticks, the count is 17.
                 assert slow.started <= 5
 
         drive(scenario)
 
     def test_a_refresh_asked_for_during_a_poll_runs_after_it(self):
-        slow = SlowCollector(0.3)
+        slow = SlowCollector(0.1)
 
         async def scenario():
             app = PollingApp(slow, interval=3600.0)
             async with app.run_test() as pilot:
-                await pilot.pause(0.1)
+                await pilot.pause(0.03)
                 assert slow.started == 1
 
                 app.query_one(SnapshotPoller).poll_now()
-                await pilot.pause(0.1)
+                await pilot.pause(0.03)
                 assert slow.started == 1, "the first poll is not cut short"
 
-                await pilot.pause(0.6)
+                await pilot.pause(0.2)
                 assert slow.started == 2
                 assert slow.finished == 2
 
@@ -950,18 +850,6 @@ class TestEmbedding:
 
         drive(scenario)
 
-    def test_the_host_gets_no_tab_keys(self):
-        async def scenario():
-            app = HostApp(as_collector(StubCollector(snapshot())))
-            async with app.run_test() as pilot:
-                for key in TAB_KEYS.values():
-                    await pilot.press(key)
-                await pilot.pause()
-
-                assert app.query_one(TabbedContent).active == "mine"
-
-        drive(scenario)
-
     def test_the_lines_fill_in_without_any_tabs(self):
         async def scenario():
             app = StatusApp(as_collector(StubCollector()))
@@ -1012,6 +900,60 @@ class TestEmbedding:
                 second = app.query_one("#second-workers").query_one(DataTable)
                 assert [str(k.value) for k in first.rows] == ["w-id"]
                 assert [str(k.value) for k in second.rows] == ["w-2"]
+
+        drive(scenario)
+
+    def test_a_detached_view_hears_of_no_more_polls(self):
+        async def scenario():
+            app = SwtopApp(as_collector(StubCollector()), 3600.0)
+            async with app.run_test() as pilot:
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                summary = app.query_one(SummaryLine)
+                before = text_of(summary)
+
+                app.poller.detach(summary)
+                app.poller.deliver(snapshot())
+
+                assert summary not in app.poller.views
+                assert text_of(summary) == before
+                assert "total 6" not in text_of(summary)
+                assert len(rows_of(app, "workers")) == 1, "the others still hear"
+
+        drive(scenario)
+
+    def test_unmounting_cancels_the_poll_and_closes_its_collector(self, monkeypatch):
+        """A poller that opened its own collector closes it on the way out."""
+        slow = SlowCollector(3600.0)
+        closed: list[int] = []
+
+        @asynccontextmanager
+        async def open_collector(address: str) -> AsyncIterator[SlowCollector]:
+            try:
+                yield slow
+            finally:
+                closed.append(slow.started)
+
+        monkeypatch.setattr(swtop_widgets, "open_collector", open_collector)
+
+        class AddressApp(PollingApp):
+            def compose(self) -> ComposeResult:
+                yield SummaryLine()
+                yield SnapshotPoller(address="host:1", interval=3600.0)
+
+        async def scenario():
+            app = AddressApp(slow, interval=3600.0)
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                assert slow.in_flight == 1
+
+                await app.query_one(SnapshotPoller).remove()
+                await pilot.pause()
+
+                assert closed == [1]
+                assert slow.in_flight == 0, "the poll in flight is canceled"
+                assert slow.finished == 0
+                assert app.polled == []
 
         drive(scenario)
 

@@ -4,7 +4,7 @@
 # It runs in a bash of its own, so its setup script leaves this shell as it was.
 # A failure to publish does not end the job.
 report_pilot_job() {
-    /bin/bash '{{ worker_script_path }}' --pilot-job-event "$1" || true
+    /bin/bash {{ worker_script_path | shell_quote }} --pilot-job-event "$1" || true
 }
 # This trap turns the SIGTERM that Slurm sends into `exit 143` (128 + 15).
 # See the developer notes, Slurm interaction.
@@ -15,7 +15,7 @@ report_pilot_job start
 {% if is_batch_worker %}
 echo "Running batch worker."
 
-. '{{ worker_script_path }}'
+. {{ worker_script_path | shell_quote }}
 {% else %}
 # A job of one Slurm task writes to the batch job's own output file,
 # so a file per Slurm task only duplicates it.
@@ -35,14 +35,14 @@ if [[ "${num_slurm_tasks}" = "1" ]] ; then
     # that dies before the worker script gets as far as its own log.
     # For this reason, `set -x` comes before `srun` in both branches.
     set -x
-    srun /bin/bash '{{ worker_script_path }}'
+    srun /bin/bash {{ worker_script_path | shell_quote }}
 else
     echo "Redirecting output."
 
     set -x
     # One file for each Slurm task,
     # so the Slurm tasks do not interleave into the one batch output file.
-    srun --output '{{ work_dir }}/{{ name }}-%j-%t.out' /bin/bash '{{ worker_script_path }}'
+    srun --output {{ (work_dir ~ "/" ~ name ~ "-%j-%t.out") | shell_quote }} /bin/bash {{ worker_script_path | shell_quote }}
 fi
 {% endif %}
 
@@ -67,12 +67,12 @@ set -x
 while true; do
     status=0
     {{ worker_exe }} \
-        --group '{{ group }}' \
-        --name '{{ name }}' \
-        --actor-class-name '{{ actor_class_name }}' \
-        --server-address '{{ server_address }}' \
-        --work-dir '{{ work_dir }}' \
-        --python-paths-json '{{ python_paths_json }}' \
+        --group {{ group | shell_quote }} \
+        --name {{ name | shell_quote }} \
+        --actor-class-name {{ actor_class_name | shell_quote }} \
+        --server-address {{ server_address | shell_quote }} \
+        --work-dir {{ work_dir | shell_quote }} \
+        --python-paths-json {{ python_paths_json | shell_quote }} \
         "$@" || status=$?
     if [[ "${status}" -ne {{ restart_exit_code }} ]] ; then
         break

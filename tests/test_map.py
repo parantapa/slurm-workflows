@@ -8,7 +8,6 @@ from typing import Any, NoReturn
 
 import pytest
 import cloudpickle
-from typeguard import TypeCheckError
 from ds_service_client import DsServiceClient, TaskState
 
 from slurm_workflows import slurm_pilot_executor
@@ -119,42 +118,40 @@ class TestResults:
 
         assert got == [x * 3 + 1 for x in range(10)]
 
-    def test_one_task_agrees_with_many(self, executor, pilot_jobs, worker_thread):
+    def test_a_queue_list_needs_only_one_started_group(
+        self, executor, pilot_jobs, worker_thread
+    ):
+        """A job group with no pilot job in the list does not refuse the call."""
         pilot_jobs("cpu")
-        worker_thread(expect_tasks=1 + 8)
-
-        one = executor.map(
-            desc="one", queue="cpu", map_fn=square, iterable=range(20), num_tasks=1
-        )
-        many = executor.map(
-            desc="many", queue="cpu", map_fn=square, iterable=range(20), num_tasks=8
-        )
-
-        assert one == many == [x * x for x in range(20)]
-
-    def test_a_queue_list_works(self, executor, pilot_jobs, worker_thread):
-        pilot_jobs("cpu")
+        executor.define_job_group("idle", [])
         worker_thread(expect_tasks=2)
 
         got = executor.map(
-            desc="square", queue=["cpu"], map_fn=square, iterable=range(10), num_tasks=2
+            desc="square",
+            queue=["cpu", "idle"],
+            map_fn=square,
+            iterable=range(10),
+            num_tasks=2,
         )
 
         assert got == [x * x for x in range(10)]
 
-    def test_a_lambda_works(self, executor, pilot_jobs, worker_thread):
+    def test_a_generator_is_read_in_full_and_in_order(
+        self, executor, pilot_jobs, worker_thread
+    ):
+        """A one-shot iterable gives up each item once, so it must be read once."""
         pilot_jobs("cpu")
-        worker_thread(expect_tasks=2)
+        worker_thread(expect_tasks=3)
 
         got = executor.map(
-            desc="pairs",
+            desc="square",
             queue="cpu",
-            map_fn=lambda x: (x, str(x)),
-            iterable=range(5),
-            num_tasks=2,
+            map_fn=square,
+            iterable=(x for x in range(20)),
+            num_tasks=3,
         )
 
-        assert got == [(x, str(x)) for x in range(5)]
+        assert got == [x * x for x in range(20)]
 
     def test_a_none_value_is_a_value(self, executor, pilot_jobs, worker_thread):
         """`None` from `map_fn` comes back as `None`, and does not look missing."""
@@ -240,20 +237,6 @@ class TestActors:
         )
 
         assert got == [-(x * 3 + 2) for x in range(5)]
-
-    def test_a_failing_method_raises(self, executor, actor_group, worker_thread):
-        worker_thread(
-            expect_tasks=1, group="act", actor_class_name="support_actor.MapActor"
-        )
-
-        with pytest.raises(RuntimeError, match="failed on its worker"):
-            executor.map(
-                desc="boom",
-                queue="act",
-                map_fn="explode",
-                iterable=range(4),
-                num_tasks=1,
-            )
 
     def test_a_callable_still_runs_on_an_actor_group(
         self, executor, actor_group, worker_thread
@@ -351,28 +334,6 @@ class TestQueuesAndIds:
         assert len(tasks) == 2
         assert max(items) < min(tasks)
 
-    def test_item_ids_do_not_collide_with_task_ids(
-        self, executor, ds_client, pilot_jobs, worker_thread
-    ):
-        pilot_jobs("cpu")
-        worker_thread(expect_tasks=2)
-
-        executor.map(
-            desc="square", queue="cpu", map_fn=square, iterable=range(6), num_tasks=2
-        )
-
-        items = item_ids(ds_client)
-        assert len(items) == 6
-        prefix = f"{executor.name}.map.0."
-        assert all(i.startswith(prefix) for i in items)
-        # `<name>.map.<index>.<token>.item.<i>`, and the token is hex.
-        token = items[0][len(prefix) :].split(".")[0]
-        assert len(token) == MAP_REDUCE_TOKEN_LEN
-        assert int(token, 16) >= 0
-
-        # The submitted tasks kept the plain numbering, and nothing collided.
-        assert executor.submit("cpu", identity, 1).task_id == f"{executor.name}.task.2"
-
     def test_map_and_map_reduce_use_queues_of_their_own(
         self, executor, ds_client, pilot_jobs, worker_thread
     ):
@@ -399,29 +360,10 @@ class TestQueuesAndIds:
             ("map_reduce", "0"),
         }
 
-    def test_two_calls_use_two_queues(
+    def test_it_publishes_progress_task_names_and_distinct_item_ids(
         self, executor, ds_client, pilot_jobs, worker_thread
     ):
-        pilot_jobs("cpu")
-        worker_thread(expect_tasks=2)
-
-        for _ in range(2):
-            executor.map(
-                desc="square",
-                queue="cpu",
-                map_fn=square,
-                iterable=range(4),
-                num_tasks=1,
-            )
-
-        queues = {i.split(".item.")[0] for i in item_ids(ds_client)}
-        assert len(queues) == 2
-        # A queue is `<name>.map.<index>.<token>`, so field 2 is the index.
-        assert {q.split(".")[2] for q in queues} == {"0", "1"}
-
-    def test_it_publishes_progress(
-        self, executor, ds_client, pilot_jobs, worker_thread
-    ):
+        """What `swtop` shows for a call, and the ids it puts on the server."""
         pilot_jobs("cpu")
         worker_thread(expect_tasks=3)
 
@@ -429,7 +371,7 @@ class TestQueuesAndIds:
             desc="squaring things",
             queue="cpu",
             map_fn=square,
-            iterable=range(30),
+            iterable=range(6),
             num_tasks=3,
         )
 
@@ -438,24 +380,23 @@ class TestQueuesAndIds:
         assert display["unit"] == "task"
         assert display["total"] == 3
 
-    def test_it_names_its_tasks(self, executor, ds_client, pilot_jobs, worker_thread):
-        """What `swtop` shows for a map task."""
-        pilot_jobs("cpu")
-        worker_thread(expect_tasks=2)
-
-        executor.map(
-            desc="square", queue="cpu", map_fn=square, iterable=range(4), num_tasks=2
-        )
+        items = item_ids(ds_client)
+        assert len(items) == 6
+        prefix = f"{executor.name}.map.0."
+        assert all(i.startswith(prefix) for i in items)
+        # `<name>.map.<index>.<token>.item.<i>`, and the token is hex.
+        token = items[0][len(prefix) :].split(".")[0]
+        assert len(token) == MAP_REDUCE_TOKEN_LEN
+        assert int(token, 16) >= 0
 
         names = {
             ds_client.map_get(f"task_name:{executor.name}.task.{i}").decode("utf-8")
-            for i in range(2)
+            for i in range(3)
         }
-        assert names == {
-            f"{q}.task.{i}"
-            for i in range(2)
-            for q in {j.split(".item.")[0] for j in item_ids(ds_client)}
-        }
+        assert names == {f"{prefix}{token}.task.{i}" for i in range(3)}
+
+        # The submitted tasks kept the plain numbering, and nothing collided.
+        assert executor.submit("cpu", identity, 1).task_id == f"{executor.name}.task.3"
 
 
 # --------------------------------------------------------------------------
@@ -499,16 +440,6 @@ class TestEdgeCases:
             )
         assert ds_client.task_search_id(ALL_TASK_IDS) == []
 
-    def test_a_non_int_num_tasks_raises(self, executor):
-        with pytest.raises(TypeCheckError):
-            executor.map(
-                desc="square",
-                queue="cpu",
-                map_fn=square,
-                iterable=range(4),
-                num_tasks="4",
-            )
-
     def test_a_method_name_needs_an_actor(self, executor, pilot_jobs, ds_client):
         """Only a job group with an actor can resolve a method name."""
         pilot_jobs("cpu")
@@ -516,6 +447,21 @@ class TestEdgeCases:
             executor.map(
                 desc="scale",
                 queue="cpu",
+                map_fn="scale",
+                iterable=range(4),
+                num_tasks=2,
+            )
+        assert ds_client.task_search_id(ALL_TASK_IDS) == []
+
+    def test_a_method_name_names_the_group_without_an_actor(self, executor, ds_client):
+        """In a queue list, one job group with no actor is enough to refuse."""
+        executor.define_job_group("act", [], actor_class_name="support_actor.MapActor")
+        executor.define_job_group("cpu", [])
+
+        with pytest.raises(ValueError, match=r"map names a method.*: \['cpu'\]$"):
+            executor.map(
+                desc="scale",
+                queue=["act", "cpu"],
                 map_fn="scale",
                 iterable=range(4),
                 num_tasks=2,

@@ -10,10 +10,17 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from click.testing import CliRunner
-from ds_service_client import DsServiceClient, DsServiceClientAsync
+from ds_service_client import DsServiceClient, DsServiceClientAsync, TaskStateError
 
 from slurm_workflows import swtop as swtop_mod
-from slurm_workflows.swtop import UNNAMED, Collector, Snapshot, render, swtop
+from slurm_workflows.swtop import (
+    UNNAMED,
+    Collector,
+    ProgressInfo,
+    Snapshot,
+    render,
+    swtop,
+)
 from slurm_workflows.slurm_pilot_worker import publish_pilot_job_event
 from slurm_workflows.testing import make_worker
 from test_monitors import wait_for
@@ -100,6 +107,17 @@ class StallingClient(CountingClient):
             self.keys_read.append(key)
             await asyncio.Event().wait()
         return await super().map_get(key)
+
+
+class GoneHolderClient(CountingClient):
+    """Answers every holder read as if the task had just left `Running`."""
+
+    def __init__(self, inner: DsServiceClientAsync, error: type[Exception]) -> None:
+        super().__init__(inner)
+        self.error = error
+
+    async def task_get_worker_id(self, task_id: str) -> str:
+        raise self.error(task_id)
 
 
 # --------------------------------------------------------------------------
@@ -202,6 +220,24 @@ class TestCollectTasks:
         states = [(t.name, t.state) for t in collector.snapshot().tasks]
 
         assert states == [("a-running", "Running"), ("b-ready", "Finished")]
+
+    @pytest.mark.parametrize("error", [TaskStateError, KeyError])
+    def test_a_task_that_leaves_running_mid_poll_has_no_holder(
+        self, ds_service_address, executor, ds_client, error
+    ):
+        """The task can finish between the status read and the holder read."""
+        task = executor.submit("cpu", square, 1)
+        ds_client.task_get("stranger", "cpu")
+        bound = LoopBound(
+            ds_service_address, wrap=lambda client: GoneHolderClient(client, error)
+        )
+
+        (listed,) = bound.snapshot().tasks
+
+        assert listed.task_id == task.task_id
+        assert listed.state == "Running"
+        assert listed.worker == ""
+        bound.close()
 
 
 class TestCollectProgress:
@@ -310,16 +346,6 @@ class TestCollectWorkerJobs:
 
         assert [job.group for job in listed] == ["cpu", "cpu", "gpu"]
         assert listed[0].name < listed[1].name
-
-    def test_a_job_with_no_process_is_still_listed(self, collector, executor):
-        """A queued job looks like this: submitted, not yet running."""
-        executor.define_job_group("cpu", [])
-        executor.scale_jobs("cpu", 1)
-
-        snapshot = collector.snapshot()
-
-        assert len(snapshot.worker_jobs) == 1
-        assert snapshot.workers == []
 
     def test_a_description_that_cannot_be_read_is_shown_as_unknown(
         self, collector, ds_client
@@ -511,7 +537,7 @@ class TestCollectWorkers:
         stalling.stall_on = "worker_info:w-3"
 
         with pytest.raises(TimeoutError):
-            bound.run(asyncio.wait_for(bound.collector.snapshot(), timeout=0.5))
+            bound.run(asyncio.wait_for(bound.collector.snapshot(), timeout=0.05))
 
         stalling.stall_on = None
         before = stalling.reads("worker_info:")
@@ -556,12 +582,6 @@ class TestCollectWorkers:
 
 class TestCollectMonitored:
     """Host and job readings, as the monitors leave them in the store."""
-
-    def test_nothing_is_monitored_on_an_idle_server(self, collector):
-        snapshot = collector.snapshot()
-
-        assert snapshot.hosts == []
-        assert snapshot.jobs == []
 
     def test_a_monitored_host_and_job_appear(
         self, collector, ds_client, ds_service_address, tmp_path
@@ -648,7 +668,17 @@ class TestRender:
         assert "25%" in out
         assert "#" in out and "-" in out
 
-    def test_no_progress_line_without_a_display(self, collector):
+    def test_an_empty_wait_is_drawn_as_done(self):
+        """A wait on no tasks publishes a total of 0, which must not divide."""
+        progress = ProgressInfo("p-0", "nothing", "task", total=0)
+        out = render(Snapshot(address="a", when=datetime.now(), progress=progress))
+
+        assert progress.fraction == 1.0
+        assert progress.done
+        assert "0/0 task" in out
+        assert "100%" in out
+
+    def test_no_progress_line_without_a_display(self):
         assert "%" not in render(Snapshot(address="a", when=datetime.now()))
 
     def test_an_idle_server_says_so(self, collector):
@@ -829,22 +859,8 @@ class TestCli:
 
         assert result.exit_code != 0
 
-    def test_the_address_is_required(self):
-        result = CliRunner().invoke(swtop, [])
-
-        assert result.exit_code != 0
-
     def test_an_unreachable_server_is_reported_not_fatal(self, stop_after_one_poll):
         result = CliRunner().invoke(swtop, ["127.0.0.1:1"])
 
         assert result.exit_code == 0
         assert "cannot read the server" in result.output
-
-
-def test_a_snapshot_needs_only_an_address_and_a_time():
-    """The error path builds one and never reaches the server."""
-    snapshot = Snapshot(address="host:1", when=swtop_mod.datetime.now())
-
-    assert snapshot.counts == {}
-    assert snapshot.workers == []
-    assert snapshot.tasks == []

@@ -31,6 +31,12 @@ from .monitors import (
 # after an empty queue or a failed request.
 NEXT_TASK_RETRY_TIME_S: float = 0.1
 
+# How many times a worker tries to report the output of a task,
+# and how long it sleeps between two tries.
+# A brief server problem must not turn a good result into a failed task.
+REPORT_ATTEMPTS: int = 3
+REPORT_RETRY_TIME_S: float = 1.0
+
 # One JSON key per worker, keyed on its worker id.
 # `swtop` reads it.
 # `docs/reference/what-a-run-publishes.md` lists the fields.
@@ -342,6 +348,24 @@ class PilotWorker:
                 self.actor_instance.close()
             self.actor_instance = None
 
+    def _report(self, task_id: str, output: bytes, failed: bool) -> None:
+        """Report a task's output, and try again after a failed request."""
+        for attempt in range(1, REPORT_ATTEMPTS + 1):
+            try:
+                self.client.task_done(task_id, self.worker_id, output, failed=failed)
+                return
+            except Exception:
+                if attempt == REPORT_ATTEMPTS:
+                    raise
+                self.logger.warning(
+                    "task_id=%s: Report failed, trying again (%d of %d)",
+                    task_id,
+                    attempt,
+                    REPORT_ATTEMPTS,
+                    exc_info=True,
+                )
+                time.sleep(REPORT_RETRY_TIME_S)
+
     def main(self) -> None:
         """Run tasks from the job group's queue until a restart request arrives.
 
@@ -358,6 +382,8 @@ class PilotWorker:
         Then the worker returns the exception to the driver
         as a `RemoteExecutionError` on a task it marks `Failed`.
         As a result, one bad task cannot end the worker.
+        A report of the output that fails is tried again,
+        up to `REPORT_ATTEMPTS` times in all.
         """
         self.logger.info("Starting worker: %s" % self.worker_id)
 
@@ -405,8 +431,7 @@ class PilotWorker:
 
                     self.logger.info("task_id=%s: Serializing output ...", task.task_id)
                     output = cloudpickle.dumps(retval, protocol=pickle.HIGHEST_PROTOCOL)
-
-                    self.client.task_done(task.task_id, self.worker_id, output)
+                    failed = False
                 except Exception as e:
                     eid = gen_error_id()
                     self.logger.exception(
@@ -417,9 +442,11 @@ class PilotWorker:
                     output = cloudpickle.dumps(retval, protocol=pickle.HIGHEST_PROTOCOL)
                     # `Failed`, not `Finished`,
                     # so every task that waits on this one fails too.
-                    self.client.task_done(
-                        task.task_id, self.worker_id, output, failed=True
-                    )
+                    failed = True
+
+                # Outside the `try` above,
+                # so a failed report is never mistaken for a failed task.
+                self._report(task.task_id, output, failed)
                 task_finished = True
             except Exception:
                 self.logger.exception("Unexpected exception")

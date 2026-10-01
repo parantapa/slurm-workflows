@@ -83,3 +83,10 @@ class EnvironmentActor:
 
         self.server_address = os.environ["DS_SERVER_ADDRESS"]
         self.worker_id = os.environ["PILOT_WORKER_ID"]
+
+
+class SystemExitActor:
+    """Raises the `SystemExit` that a SIGTERM raises in a worker, while it is built."""
+
+    def __init__(self) -> None:
+        raise SystemExit(143)

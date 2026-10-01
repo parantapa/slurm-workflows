@@ -18,7 +18,7 @@ pytest tests/test_templates.py::TestParseFile::test_a_body_is_stripped
 ```
 
 The suite needs no Slurm cluster.
-It runs about 540 tests, and takes about 35 seconds end to end.
+It runs about 490 tests, and takes about 20 seconds end to end.
 Most tests start a `ds-service` server of their own,
 and a test against the real server pays for that start.
 
@@ -34,8 +34,13 @@ Everything above that boundary is the real code path:
 script rendering, job-id parsing and environment scrubbing.
 A test can inspect the scripts the executor sent to `sbatch`
 (`fake_slurm.submissions`).
+It can read every command and its keyword arguments
+(`fake_slurm.calls`).
 A test can also inject a command failure
-(`fake_slurm.fail_command("sbatch")`).
+(`fake_slurm.fail_command("sbatch")`),
+or a command that times out
+(`fake_slurm.timeout_command("squeue")`).
+A bare `scancel` with no job id fails, as it does on a real cluster.
 
 **NVML is mocked.**
 `FakeNvml` (in `tests/conftest.py`) replaces the `pynvml` functions

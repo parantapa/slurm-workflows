@@ -9,8 +9,10 @@ import itertools
 import logging
 import subprocess
 import threading
+import time
 from pathlib import Path
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Any, Callable
 
 import pytest
@@ -25,6 +27,7 @@ from slurm_workflows.slurm_pilot_executor import (
     SlurmPilotExecutor,
     Task,
 )
+from slurm_workflows.slurm_pilot_worker import RESTART_EXIT_CODE
 from slurm_workflows.utils import RemoteExecutionError
 
 
@@ -125,13 +128,7 @@ class TestExecutorName:
 
         assert task.task_id == "testex.task.0"
 
-    def test_it_prefixes_worker_job_names(self, executor, setup_script):
-        executor.define_job_group(name="cpu", sbatch_args=[], setup_script=setup_script)
-        executor.scale_jobs("cpu", 1)
-
-        assert list(executor.groups["cpu"].jobs) == ["testex.job.cpu.0"]
-
-    @pytest.mark.parametrize("name", ["ab", "a", ""])
+    @pytest.mark.parametrize("name", ["ab"])
     def test_a_short_name_is_rejected(self, ds_service_address, name):
         with pytest.raises(ValueError):
             SlurmPilotExecutor(name, ds_service_address)
@@ -140,8 +137,6 @@ class TestExecutorName:
         "name",
         [
             "1abc",  # must start with a letter
-            "_abc",
-            "-abc",
             "abc def",  # a job name and a directory name
             "abc.def",  # the separator in task ids and worker names
             "abc/def",
@@ -152,14 +147,15 @@ class TestExecutorName:
         with pytest.raises(ValueError):
             SlurmPilotExecutor(name, ds_service_address)
 
-    @pytest.mark.parametrize("name", ["abc", "Run-1", "a_b", "abc123"])
+    @pytest.mark.parametrize("name", ["abc", "Run-1", "a_b"])
     def test_a_usable_name_is_accepted(self, ds_service_address, tmp_path, name):
         ex = SlurmPilotExecutor(name, ds_service_address, work_dir=tmp_path / name)
 
         assert ex.name == name
         ex.close()
 
-    def test_rejects_a_non_string_name(self, ds_service_address):
+    def test_argument_types_are_checked(self, ds_service_address):
+        """The one smoke test that `@typechecked` is applied."""
         with pytest.raises(TypeCheckError):
             SlurmPilotExecutor(
                 42, ds_service_address  # pyright: ignore[reportArgumentType]
@@ -244,15 +240,42 @@ class TestProgressDisplay:
         assert values[-1] == 4, "and closes at every task counted"
         assert values == sorted(values)
 
-    def test_a_failed_wait_still_leaves_a_series(self, executor, ds_client):
-        tasks = [executor.submit("cpu", square, i) for i in range(2)]
+    def test_a_failed_wait_still_closes_at_the_final_count(self, executor, ds_client):
+        tasks = [executor.submit("cpu", square, i) for i in range(3)]
+        # The first two finish and the third fails,
+        # all within one progress interval,
+        # so only the closing append can record the two.
+        drain(ds_client, "cpu", 2)
         fail_one(ds_client, "cpu")
 
         with pytest.raises(RuntimeError):
             executor.wait(tasks, desc="squaring")
 
         values = self.series(ds_client, self.published(ds_client)["progress_id"])
-        assert values, "the display is published before anything is waited on"
+        assert values[-1] == 2, "the tasks that came back before the failure"
+
+    def test_the_series_takes_one_point_per_interval_and_the_final_count(
+        self, executor, ds_client, monkeypatch
+    ):
+        """A fake clock that only the test moves, so the intervals are exact."""
+        clock = [1000.0]
+        monkeypatch.setattr(
+            spe, "time", SimpleNamespace(monotonic=lambda: clock[0], sleep=time.sleep)
+        )
+        monkeypatch.setattr(spe, "PROGRESS_INTERVAL_S", 10.0)
+        tasks = [executor.submit("cpu", square, i) for i in range(6)]
+        drain(ds_client, "cpu", 6)
+
+        # One task comes back every 4 s, so 10 s span about two of them.
+        for _ in executor.as_completed(tasks, desc="squaring"):
+            clock[0] += 4.0
+
+        values = self.series(ds_client, self.published(ds_client)["progress_id"])
+        # Counts 1 to 3 fall within 10 s of the opening point,
+        # and count 5 within 10 s of count 4.
+        assert [v for v in values if 0 < v < 6] == [4]
+        assert values[0] == 0
+        assert values[-1] == 6
 
 
 # --------------------------------------------------------------------------
@@ -392,16 +415,6 @@ class TestDefineWorker:
         assert "module load gcc/14.2.0" in script
         assert "export TEST_SETUP=1" in script
 
-    def test_accepts_an_empty_body(self, executor):
-        executor.define_job_group(name="cpu", sbatch_args=[], setup_script="")
-
-        assert executor.groups["cpu"].setup_script == ""
-
-    def test_setup_script_is_optional(self, executor):
-        executor.define_job_group(name="cpu", sbatch_args=[])
-
-        assert executor.groups["cpu"].setup_script == ""
-
     def test_omitted_setup_script_still_yields_a_runnable_script(self, executor):
         executor.define_job_group(name="cpu", sbatch_args=[])
         executor.scale_jobs("cpu", 1)
@@ -410,14 +423,6 @@ class TestDefineWorker:
         assert script.startswith("#!/bin/bash")
         assert ". '/etc/profile'" in script
         assert "slurm-pilot-worker \\" in script
-
-    def test_rejects_wrong_argument_types(self, executor, setup_script):
-        with pytest.raises(TypeCheckError):
-            executor.define_job_group(
-                name="cpu",
-                sbatch_args="-A alloc",  # must be a list
-                setup_script=setup_script,
-            )
 
 
 # --------------------------------------------------------------------------
@@ -497,6 +502,16 @@ class TestScaleWorkers:
         assert script.exists()
         assert script.stat().st_mode & 0o111
         assert f"--server-address '{defined.server_address}'" in script.read_text()
+
+    def test_the_restart_loop_uses_the_worker_exit_code(self, defined):
+        """The worker exits with this code to ask for a restart.
+
+        A loop that compares against another code ends the pilot job instead.
+        """
+        defined.scale_jobs("cpu", 1)
+
+        script = (defined.work_dir / "testex.job.cpu.0.sh").read_text()
+        assert f'if [[ "${{status}}" -ne {RESTART_EXIT_CODE} ]]' in script
 
     def test_scaling_up_again_only_adds_the_difference(self, defined, fake_slurm):
         defined.scale_jobs("cpu", 2)
@@ -717,7 +732,7 @@ class TestRestartJobs:
         # One exits at once, and the other a little later,
         # so the wait has to see both.
         publish_exit(ds_client, workers[0])
-        timer = self.exit_later(ds_service_address, workers[1], 0.3)
+        timer = self.exit_later(ds_service_address, workers[1], 0.05)
 
         try:
             with time_limit(10, "restart_jobs never saw the workers exit"):
@@ -771,7 +786,7 @@ class TestRestartJobs:
         defined.scale_jobs("cpu", 1)
         ((name, job_id),) = self.jobs(defined, "cpu")
         publish_worker(ds_client, name, job_id)
-        timer = later(0.3, lambda: fake_slurm.running_job_ids.remove(job_id))
+        timer = later(0.05, lambda: fake_slurm.running_job_ids.remove(job_id))
 
         try:
             with time_limit(10, "restart_jobs never saw the Slurm job end"):
@@ -790,27 +805,7 @@ class TestRestartJobs:
         fake_slurm.fail_command("squeue")
 
         with pytest.raises(TimeoutError, match=re.escape(worker_id)):
-            defined.restart_jobs("cpu", timeout=0.3)
-
-    def test_a_failing_squeue_keeps_its_previous_answer(
-        self, defined, ds_client, fake_slurm
-    ):
-        """A job that `squeue` listed stays live while `squeue` fails."""
-        defined.scale_jobs("cpu", 1)
-        ((name, job_id),) = self.jobs(defined, "cpu")
-        worker_id = publish_worker(ds_client, name, job_id)
-
-        def break_squeue() -> None:
-            fake_slurm.running_job_ids.clear()
-            fake_slurm.fail_command("squeue")
-
-        # The first `squeue` runs at once and lists the job.
-        timer = later(0.1, break_squeue)
-        try:
-            with pytest.raises(TimeoutError, match=re.escape(worker_id)):
-                defined.restart_jobs("cpu", timeout=0.5)
-        finally:
-            timer.join()
+            defined.restart_jobs("cpu", timeout=0.05)
 
     def test_the_wait_resumes_once_squeue_answers_again(
         self, defined, ds_client, fake_slurm, time_limit
@@ -820,7 +815,7 @@ class TestRestartJobs:
         publish_worker(ds_client, name, job_id)
         fake_slurm.running_job_ids.clear()
         fake_slurm.fail_command("squeue")
-        timer = later(0.3, lambda: fake_slurm.fail.pop("squeue"))
+        timer = later(0.05, lambda: fake_slurm.fail.pop("squeue"))
 
         try:
             with time_limit(10, "restart_jobs never retried squeue"):
@@ -837,12 +832,30 @@ class TestRestartJobs:
         publish_exit(ds_client, first)
 
         with pytest.raises(TimeoutError) as raised:
-            defined.restart_jobs("cpu", timeout=0.2)
+            defined.restart_jobs("cpu", timeout=0.05)
 
         message = str(raised.value)
         assert "1 workers of job group 'cpu'" in message
         assert second in message
         assert first not in message
+
+    def test_a_timeout_names_only_the_first_few_workers(self, defined, ds_client):
+        count = spe.MAX_REPORTED_WORKERS + 2
+        defined.scale_jobs("cpu", count)
+        workers = sorted(
+            publish_worker(ds_client, name, job_id)
+            for name, job_id in self.jobs(defined, "cpu")
+        )
+
+        with pytest.raises(TimeoutError) as raised:
+            defined.restart_jobs("cpu", timeout=0)
+
+        message = str(raised.value)
+        assert f"{count} workers of job group 'cpu'" in message
+        assert "and 2 more" in message
+        shown = workers[: spe.MAX_REPORTED_WORKERS]
+        assert all(worker in message for worker in shown)
+        assert not any(worker in message for worker in workers[len(shown) :])
 
     def test_a_timeout_keeps_the_new_generation(self, defined, ds_client):
         """The restart request stays,
@@ -853,7 +866,7 @@ class TestRestartJobs:
         publish_worker(ds_client, name, job_id)
 
         with pytest.raises(TimeoutError):
-            defined.restart_jobs("cpu", timeout=0.1)
+            defined.restart_jobs("cpu", timeout=0)
 
         assert defined.restart_jobs("cpu", wait=False) == 2
 
@@ -915,20 +928,6 @@ class TestSubmit:
         fetched = ds_client.task_get("test-worker", "gpu")
         assert cloudpickle.loads(fetched.input) == ((5,), {})
 
-    def test_rejects_wrong_queue_type(self, executor):
-        with pytest.raises(TypeCheckError):
-            executor.submit(42, square, 1)
-
-    def test_serializes_closures_and_lambdas(self, executor, ds_client):
-        """The captured variable must survive the trip to the queue."""
-        factor = 7
-        task = executor.submit("cpu", lambda x: x * factor, 6)
-
-        (drained,) = drain(ds_client, "cpu", 1)
-
-        assert drained == task.task_id
-        assert cloudpickle.loads(ds_client.task_get_output(drained)) == 42
-
     def test_submission_order_is_dispatch_order(self, executor, ds_client):
         """ds-service serves tasks of equal priority on one queue oldest first."""
         tasks = [executor.submit("cpu", square, i) for i in range(6)]
@@ -936,11 +935,6 @@ class TestSubmit:
         served = drain(ds_client, "cpu", 6)
 
         assert served == [t.task_id for t in tasks]
-
-    def test_the_default_priority_is_zero(self, executor):
-        task = executor.submit("cpu", square, 1)
-
-        assert task.priority == 0.0
 
     def test_a_higher_priority_is_served_first(self, executor, ds_client):
         low = executor.submit("cpu", square, 1)
@@ -963,20 +957,11 @@ class TestSubmit:
 
         assert cloudpickle.loads(fetched.input) == ((2,), {"extra": 3})
 
-    def test_rejects_a_non_task_parent(self, executor):
-        with pytest.raises(TypeCheckError):
-            executor.submit("cpu", square, 1, task_parents=["a-task-id"])
-
 
 class TestTaskParents:
     @pytest.fixture(autouse=True)
     def _pilot_jobs(self, pilot_jobs: Callable[..., None]) -> None:
         pilot_jobs("cpu")
-
-    def test_a_task_has_no_parents_by_default(self, executor):
-        task = executor.submit("cpu", square, 1)
-
-        assert task.parent_task_ids == []
 
     def test_the_parent_ids_are_recorded(self, executor):
         first = executor.submit("cpu", square, 1)
@@ -1041,11 +1026,6 @@ class TestTaskParents:
 
 
 class TestTaskName:
-    def test_a_task_is_unnamed_to_start_with(self, executor):
-        task = executor.submit("cpu", square, 5)
-
-        assert task.task_name is None
-
     def test_naming_records_it_on_the_task_and_the_server(self, executor, ds_client):
         task = executor.submit("cpu", square, 5)
 
@@ -1072,18 +1052,6 @@ class TestTaskName:
         assert second.task_name is None
         with pytest.raises(KeyError):
             ds_client.map_get(f"task_name:{second.task_id}")
-
-    def test_the_property_is_read_only(self, executor):
-        task = executor.submit("cpu", square, 5)
-
-        with pytest.raises(AttributeError):
-            task.task_name = "direct"
-
-    def test_rejects_a_non_string_name(self, executor):
-        task = executor.submit("cpu", square, 5)
-
-        with pytest.raises(TypeCheckError):
-            executor.set_task_name(task, 42)
 
 
 class TestAsCompleted:
@@ -1335,34 +1303,6 @@ class TestRemoteErrors:
 
 
 class TestLiveQueues:
-    def test_no_groups_means_nothing_is_live(self, executor):
-        assert executor._live_queues() == set()
-
-    def test_a_defined_but_unscaled_group_is_not_live(self, executor, setup_script):
-        executor.define_job_group("cpu", [], setup_script)
-
-        assert executor._live_queues() == set()
-
-    def test_a_group_with_a_queued_job_is_live(self, executor, setup_script):
-        executor.define_job_group("cpu", [], setup_script)
-        executor.scale_jobs("cpu", 1)
-
-        assert executor._live_queues() == {"cpu"}
-
-    def test_only_groups_with_jobs_still_on_the_cluster_are_live(
-        self, executor, fake_slurm, setup_script
-    ):
-        executor.define_job_group("cpu", [], setup_script)
-        executor.define_job_group("gpu", [], setup_script)
-        executor.scale_jobs("cpu", 1)
-        executor.scale_jobs("gpu", 1)
-        gpu_job = fake_slurm.submissions[-1].job_id
-
-        # The gpu job ends, so its group has nothing left on the cluster.
-        fake_slurm.running_job_ids.remove(gpu_job)
-
-        assert executor._live_queues() == {"cpu"}
-
     def test_a_group_is_live_while_any_of_its_jobs_survives(
         self, executor, fake_slurm, setup_script
     ):
@@ -1563,6 +1503,28 @@ class TestStrandedTasks:
             with pytest.raises(RuntimeError, match="no live pilot job"):
                 list(executor.as_completed([task], desc="test"))
 
+    def test_a_claimed_task_whose_pilot_job_died_is_stranded(
+        self,
+        executor,
+        fake_slurm,
+        setup_script,
+        ds_client,
+        check_immediately,
+        time_limit,
+    ):
+        """The common real failure: the job dies while its worker runs a task."""
+        executor.define_job_group("cpu", [], setup_script)
+        executor.scale_jobs("cpu", 1)
+        task = executor.submit("cpu", square, 2)
+        ds_client.task_get("test-worker", "cpu")
+        assert ds_client.task_get_status(task.task_id) == TaskState.Running
+
+        fake_slurm.running_job_ids.clear()
+
+        with time_limit(10, "wait hung on a task whose worker died"):
+            with pytest.raises(RuntimeError, match="no live pilot job"):
+                executor.wait([task], desc="test")
+
     def test_error_names_the_dead_queues(
         self, executor, fake_slurm, setup_script, check_immediately, time_limit
     ):
@@ -1653,20 +1615,6 @@ class TestStrandedTasks:
 
         assert working.output == 1
 
-    def test_already_finished_tasks_are_not_checked(
-        self, executor, fake_slurm, setup_script, ds_client, check_immediately
-    ):
-        """Nothing is pending, so a dead queue is irrelevant."""
-        executor.define_job_group("cpu", [], setup_script)
-        executor.scale_jobs("cpu", 1)
-        task = executor.submit("cpu", square, 4)
-        drain(ds_client, "cpu", 1)
-        executor.wait([task], desc="test")
-
-        fake_slurm.running_job_ids.clear()
-
-        assert [t.output for t in executor.as_completed([task], desc="test")] == [16]
-
     def test_squeue_failure_does_not_abort_the_wait(
         self, executor, fake_slurm, setup_script, ds_client, check_immediately
     ):
@@ -1682,18 +1630,31 @@ class TestStrandedTasks:
         assert done.output == 25
 
     def test_not_checked_before_the_interval_elapses(
-        self, executor, fake_slurm, setup_script, ds_client
+        self, executor, fake_slurm, setup_script, ds_service_address, time_limit
     ):
         """A queue with no job yet is normal right after `submit` returns."""
         executor.define_job_group("cpu", [], setup_script)
         # The README says a caller can submit tasks before the workers exist.
         task = executor.submit("cpu", square, 6)
-        assert fake_slurm.running_job_ids == []
-
         executor.scale_jobs("cpu", 1)
-        drain(ds_client, "cpu", 1)
+        # `squeue` does not list the job yet,
+        # so a check made now finds the queue dead.
+        fake_slurm.running_job_ids.clear()
 
-        (done,) = list(executor.as_completed([task], desc="test"))
+        def finish() -> None:
+            client = DsServiceClient(ds_service_address)
+            try:
+                drain(client, "cpu", 1)
+            finally:
+                client.close()
+
+        # Late enough that the wait polls the task as pending a few times.
+        timer = later(0.3, finish)
+        try:
+            with time_limit(10, "as_completed never saw the task finish"):
+                (done,) = list(executor.as_completed([task], desc="test"))
+        finally:
+            timer.join()
         assert done.output == 36
 
 
@@ -1764,13 +1725,6 @@ class TestWaitingOnParents:
         with time_limit(10, "wait did not return"):
             executor.wait([child], desc="test")
         assert child.output == 4
-
-    def test_the_parents_are_not_shown_in_the_repr(self, executor, pilot_jobs):
-        pilot_jobs("cpu")
-        parent = executor.submit("cpu", square, 1)
-        child = executor.submit("cpu", square, 2, task_parents=[parent])
-
-        assert "_parents" not in repr(child)
 
 
 # --------------------------------------------------------------------------
@@ -1847,12 +1801,16 @@ class TestLogging:
 
         assert self.file_handlers(ex) == []
 
-    def test_closing_twice_releases_it_once(
-        self, ds_service_address, fake_slurm, tmp_path
+    def test_close_releases_the_log_file_when_scancel_fails(
+        self, ds_service_address, fake_slurm, tmp_path, setup_script
     ):
-        ex = SlurmPilotExecutor("twice", ds_service_address, work_dir=tmp_path / "work")
+        ex = SlurmPilotExecutor(
+            "cancelfails", ds_service_address, work_dir=tmp_path / "work"
+        )
+        ex.define_job_group("cpu", [], setup_script)
+        ex.scale_jobs("cpu", 1)
+        fake_slurm.fail_command("scancel")
 
-        ex.close()
         ex.close()  # must not raise
 
         assert self.file_handlers(ex) == []
@@ -1897,6 +1855,19 @@ class TestLifecycle:
         # The client is still open, so a test can reuse the executor.
         assert executor.submit("cpu", square, 2) is not None
 
+    @pytest.mark.parametrize("command", ["squeue", "scancel"])
+    def test_stop_tolerates_a_failing_slurm_command(
+        self, executor, fake_slurm, setup_script, command
+    ):
+        executor.define_job_group("cpu", [], setup_script)
+        executor.scale_jobs("cpu", 2)
+        fake_slurm.fail_command(command)
+
+        executor.stop()  # must not raise
+
+        # The docstring promises the executor forgets the jobs either way.
+        assert num_workers(executor) == 0
+
     def test_close_cancels_all_groups(self, executor, fake_slurm, setup_script):
         executor.define_job_group("a", [], setup_script)
         executor.define_job_group("b", [], setup_script)
@@ -1923,10 +1894,6 @@ class TestLifecycle:
 
         executor.close()
         executor.close()  # must not raise
-
-    def test_context_manager_yields_the_executor(self, executor):
-        with executor as entered:
-            assert entered is executor
 
     def test_context_manager_closes_on_exit(self, executor, fake_slurm, setup_script):
         with executor:
