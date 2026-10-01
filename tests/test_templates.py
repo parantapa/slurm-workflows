@@ -25,8 +25,8 @@ def run_sbatch_script(
     Both streams come back, because the script uses both.
     The stub echoes its command line to stdout,
     among whatever the script itself echoed on the way there.
-    For this reason callers pick that line back out with `srun_lines`
-    rather than reading stdout whole.
+    For this reason, callers pick that line back out with `srun_lines`
+    rather than read stdout whole.
     `set -x` traces to stderr.
     """
 
@@ -265,9 +265,9 @@ class TestWorkerSbatchScript:
 class TestPilotJobEvents:
     """The batch script reports its own start and exit through the worker script.
 
-    These run the shell against a stub worker script
-    that echoes its arguments,
-    and a stub `srun` that echoes its command line
+    These run the shell against two stubs.
+    The stub worker script echoes its arguments.
+    The stub `srun` echoes its command line,
     or sleeps until the test signals the job.
     """
 
@@ -552,19 +552,19 @@ class TestWorkerScript:
 
 
 class TestWorkerRestart:
-    """The worker script starts the worker again when the worker exits for a restart.
-
-    These tests run the rendered script with bash against a stub worker.
-    The stub records each run as a line in a file,
-    and exits with the status that `STUB_STATUSES` lists for that run.
-    The stub writes a pilot job event to a file of its own,
-    and always exits 0 for it.
-    """
+    """The worker script starts the worker again when the worker exits for a restart."""
 
     # The template takes the code as a variable, so these tests pass their own.
     # 75 is the value the executor passes.
     RESTART_EXIT_CODE = 75
 
+    # These tests run the rendered script with bash against this stub worker.
+    # For each run, the stub appends its arguments as a line to `$RUNS`.
+    # Then the stub exits with the status
+    # that `STUB_STATUSES` lists for that run,
+    # or 0 once the list runs out.
+    # The stub appends a pilot job event to `$EVENTS` instead,
+    # and always exits 0 for it.
     STUB = """#!/bin/bash
 if [[ "$*" == *--pilot-job-event* ]] ; then
     echo "$*" >> "$EVENTS"

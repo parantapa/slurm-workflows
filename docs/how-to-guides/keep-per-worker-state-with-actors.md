@@ -28,10 +28,11 @@ class Model:
 ```
 
 If the actor has a `close()` method,
-the worker calls it when Slurm ends the pilot job,
-but a SIGKILL or a node failure can cut it short or skip it.
-Keep `close()` short,
-and do not rely on it for anything the next run needs.
+the worker calls it when Slurm ends the pilot job
+and when `restart_jobs` restarts the worker.
+But a SIGKILL or a node failure can cut `close()` short or skip it.
+Keep `close()` short.
+Do not rely on it for anything the next run needs.
 For when `close()` runs, see
 [`define_job_group` options](../reference/executor.md#define_job_group-options).
 

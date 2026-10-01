@@ -36,9 +36,9 @@ swtop 10.0.0.1:5051 --plain  # frames of text, no UI
 | `j` | Show the slurm jobs tab |
 | `t` | Show the tasks tab |
 
-The terminal UI runs until it is quit with `q`.
-The text frames run until they are interrupted with Ctrl-C.
-Nothing has to be started for it on the cluster side.
+The terminal UI runs until `q` quits it.
+The text frames run until Ctrl-C interrupts them.
+It needs nothing extra on the cluster side.
 The executor and the workers publish what it reads as they go.
 
 ## What the screen shows
@@ -85,21 +85,21 @@ The blocks come from different places:
     A server belongs to one executor,
     so every task on it is a task of the run `swtop` watches.
 - **Pilot jobs** are the ones the executor submitted
-    that have not exited.
+    that did not exit yet.
     The executor publishes each one as it submits it.
     A job appears here the moment `scale_jobs` returns,
     whether or not Slurm started it.
     `STARTED` is `-` while the job is still pending,
-    or while its batch script has not yet finished its first run of the setup script.
+    or while its batch script is still in its first run of the setup script.
     The batch script publishes the start through the worker script,
     which runs the setup script first.
     A job leaves the block when it publishes its exit.
 - **Workers** are the ones that registered themselves
-    and have not exited.
+    and did not exit yet.
     Each worker registers when it starts.
     A started job in the pilot jobs block with no worker against it
     is still inside its setup script,
-    has workers that are starting again after a restart,
+    has workers that start again after a restart,
     or has workers that cannot reach the server.
     One job usually holds many workers, one per Slurm task,
     so the two counts differ by design.
@@ -189,7 +189,7 @@ The blocks and columns are the same either way.
 
 If the server is unreachable, `swtop` says so.
 In the terminal UI the error line appears below the tabs.
-It continues to poll rather than exit.
+`swtop` continues to poll rather than exit.
 In the terminal UI the last good reading stays on the screen,
 so a server restart does not blank the display.
 A text frame carries the message in place of the blocks.
@@ -214,7 +214,7 @@ and leaves its item tasks unnamed.
 
 ## What the hosts and jobs blocks measure
 
-Nothing has to be started for these.
+These need nothing extra.
 The workers sample the nodes and jobs themselves
 and publish the readings:
 see [What a run publishes](what-a-run-publishes.md).
@@ -223,16 +223,18 @@ The two blocks show these columns:
 
 | Column | What it is |
 | --- | --- |
-| `FREE MEM` | Memory available on the node, including the cache the kernel can reclaim |
-| `LOAD` | The node's 1 minute load average, over all its cpus |
-| `/dev/shm`, `/tmp` | How full each node-local scratch filesystem is |
 | `HOST` | The node the reading comes from |
-| `MEMORY` | The job's cgroup total on that node: every process and thread of the job, not just the workers. Where the cgroup files cannot be read, it is the summed RSS of the job's processes instead. |
+| `FREE MEM` | Memory available on the node, including the cache the kernel can reclaim |
+| `LOAD` | The node's 1 minute load average, over all its cores |
+| `/dev/shm`, `/tmp` | How full each node-local scratch filesystem is |
+| `JOB` | The Slurm job the reading comes from |
+| `MEMORY` | The job's cgroup total on that node: every process and thread of the job, not only the workers. Where the cgroup files cannot be read, it is the summed RSS of the job's processes instead. |
 | `CPU` | Cores the job used on that node, averaged since the previous sample |
 
 `LOAD` reads against the node's core count.
 `bii` has 40 cores,
 so 39.80 is a full node and 80 is oversubscribed twice over.
+
 The slurm jobs block has one row for each node of each job.
 A job on 4 nodes shows 4 rows,
 and its total is the sum of their `MEMORY` or `CPU`.
@@ -240,6 +242,7 @@ and its total is the sum of their `MEMORY` or `CPU`.
 so `--ntasks-per-node=40 --cpus-per-task=1` sits near 40 on every row.
 The first reading of a job is 0,
 since the monitor has no earlier sample to difference against.
+
 A `/tmp` that climbs toward 100% takes the whole node down with it,
 not only the job that filled it.
 
@@ -253,9 +256,10 @@ since each pilot job samples every node it runs on.
 It also comes back when [`restart_jobs`](executor.md#restart_jobs)
 restarts the workers of a job on it,
 since the new workers hold a new election.
+
 A single `-` on an otherwise live row
 is one series with nothing recent in it.
-That is what a node without that path looks like.
+This `-` is what a node without that path looks like.
 A path that is not a mount point of its own
 shows the filesystem that holds it.
 
@@ -294,10 +298,11 @@ To do that, see
   `open_collector(address)` in `slurm_workflows.swtop`
   is an async context manager that yields one
   on a client of its own, and closes that client on the way out.
-  It must be entered on the app's event loop.
+  The `async with` that enters it must run on the app's event loop.
 
-Its other arguments are `interval`, in seconds, `2.0` by default,
-and `views`, the views to attach from the start.
+Its other arguments are `interval` and `views`.
+The `interval` is in seconds, and `2.0` by default.
+The `views` are the views to attach from the start.
 It raises `ValueError` when it gets both `address` and `collector` or neither,
 or when `interval` is not greater than 0.
 
@@ -320,7 +325,7 @@ The widgets add no key bindings of their own.
 The tabs and the tables inside them keep the usual Textual keys,
 such as the arrow keys, while they have focus.
 The only ids the widgets set are the `swtop-<key>` ids of the block panes.
-The app that lays them out picks the other keys and every other id,
-for example a key for each tab and a key for `poll_now`.
+The app that lays them out picks the other keys and every other id.
+For example, it picks a key for each tab and a key for `poll_now`.
 Each widget carries its own styles,
 so it needs no CSS from the app.

@@ -1,7 +1,8 @@
 """Tests for the botorch-based parallel optimizer."""
 
 # Why most tests run on LocalExecutor,
-# and where the thresholds of TestSearchBehaviour come from:
+# and the measured margins of test_search_moves_toward_the_minimum
+# and test_search_beats_random_search:
 # see docs/how-to-run-tests.md, Notes for future changes.
 
 from __future__ import annotations
@@ -1157,10 +1158,10 @@ class TestPartialFailure:
     @staticmethod
     def fails_every_other() -> Callable[..., dict[str, float]]:
         """An objective that raises on every second point it receives."""
-        # A threshold on `x`, as in `fails_at`, cannot split a search round:
-        # the acquisition places the points,
+        # A threshold on `x`, as in `fails_at`, cannot split a search round.
+        # The acquisition places the points,
         # and torch's RNG is unseeded,
-        # so a round can land wholly on one side of it.
+        # so a round can land wholly on one side of the threshold.
         # A count of the calls splits every round,
         # because `LocalExecutor` runs them inline in submission order.
         seen = 0
@@ -1490,7 +1491,7 @@ class TestSearchBehaviour:
         assert abs(params["x"]) < 1.0 and abs(params["y"]) < 1.0
 
     def test_search_beats_random_search(self, tmp_path):
-        # Sobol' alone is the thing BO has to beat.
+        # Sobol' alone is the thing the search has to beat.
         # Its 24 points floor to 16, against the 24 the search sees in all.
         opt, _ = make_opt(tmp_path, objective=sphere, explore=8, rounds=4, parallel=4)
         opt.run()
@@ -1505,7 +1506,6 @@ class TestSearchBehaviour:
         assert guided < blind.best_point("blind")[1]
 
     def test_a_mixed_space_optimizes(self, tmp_path):
-        # Float, integer and categorical in one space.
         offsets = [0.0, 10.0, 25.0]
 
         def objective(x, y, cat):

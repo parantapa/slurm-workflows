@@ -22,15 +22,16 @@ and the README's [Installation](../../README.md#installation) section covers tha
 The package resolves them on first use rather than at import time,
 so `import slurm_workflows` still works without botorch installed.
 
-`studies` is a **list**, as for an exploration.
+`studies` is a list, as for an exploration.
 `OptimizeSpaceBotorch` searches several spaces in the same rounds,
 and each drops out when it meets its own stopping rule.
 
 It never explores.
 `files` are results files to start from,
-which `ExploreSpaceSobolQMC.save` or this class's own `save` wrote.
+which `ExploreSpaceSobolQMC.save` or this class's own `save` wrote,
+in the format of [the results file](explore-space.md#the-results-file).
 `OptimizeSpaceBotorch` models a study
-on the observations they hold **under its name**,
+on the observations they hold under its name,
 so an optimization study must carry the name its exploration ran under.
 A resumed run takes the exploration file and every search file written since.
 See [How to resume a search](../how-to-guides/resume-a-search.md).
@@ -52,7 +53,7 @@ The exploration study's fields, minus the design ones, plus the search:
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `name`, `space`, `objective`, `objective_queue` | | As for `ExplorationStudy`. The value is **minimized**. |
+| `name`, `space`, `objective`, `objective_queue` | | As for `ExplorationStudy`. The value is minimized. |
 | `optimizer_queue` | | Queue the model fit and the propose step run on, one task per round. |
 | `search_parallelism` | | Points evaluated per round. Optional if the search carries a default. |
 | `min_search_rounds` | `5` | Rounds that always run. |
@@ -75,7 +76,7 @@ They are settings of one run.
 | `num_restarts` | `10` | Multi-start count for the acquisition optimization. |
 | `raw_samples` | `128` | Candidates drawn to pick those starting points from. |
 | `mc_samples` | `128` | Quasi-MC draws per acquisition evaluation. |
-| `acqf_timeout_s` | `10.0` | Wall-clock budget for one propose step. Hitting it is not an error: what comes back is a full batch, finite and inside the bounds, less thoroughly optimized. |
+| `acqf_timeout_s` | `10.0` | Wall-clock budget for one propose step. The step can hit it without an error: what comes back is a full batch, finite and inside the bounds, less thoroughly optimized. |
 
 ```python
 OptimizationStudy(..., num_restarts=20, acqf_timeout_s=60.0)
@@ -85,12 +86,12 @@ OptimizationStudy(..., num_restarts=20, acqf_timeout_s=60.0)
 
 | Method | What it does |
 | --- | --- |
-| `run()` | Run rounds until every study stops, by its patience or its ceiling. |
+| `run()` | Runs rounds until every study stops, by its patience or its ceiling. |
 | `best_point(name)` | `(params, value)` of the best point the study knows, files included. |
 | `best_output(name)` | The objective's whole result at that point. |
 | `observations(name)`, `num_observations(name)` | What the study's model is fit on, and how much of it. |
 | `dim(name)` | How many dimensions a study's space has. |
-| `save(path)` | Write **this run's** points to a gzipped pickle. |
+| `save(path)` | Writes this run's points to a gzipped pickle. |
 
 ```python
 opt = OptimizeSpaceBotorch(
@@ -145,16 +146,16 @@ is in [Batch Bayesian optimization](../explanation/batch-bayesian-optimization.m
 
 A round is *stalled* when it fails to improve the best value by `min_improvement`,
 a fraction of the incumbent's magnitude.
-A round that does not lower the best value is always stalled,
-and against a best value of exactly 0, any decrease counts as improving.
-`patience` stalled rounds **in a row** end the search,
+A round that does not lower the best value is always stalled.
+Against a best value of exactly 0, any decrease counts as improving.
+`patience` stalled rounds in a row end the search,
 and an improving round resets the streak.
 
 `min_search_rounds` is a floor on rounds *run*, not on rounds counted.
 A stalled round below it still counts toward `patience`,
 but it cannot be the round that ends the search.
-The earliest stop is therefore `max(min_search_rounds, patience)` rounds,
-and a search that never improves stops there exactly,
+The earliest stop is therefore `max(min_search_rounds, patience)` rounds.
+A search that never improves stops there exactly,
 unless `max_search_rounds` is lower and stops it first.
 `max_search_rounds` stops the search even while it still improves.
 Each stalled round reports how far it has to go,
@@ -183,3 +184,10 @@ activates that environment.
 Workers that serve only `objective_queue` need neither botorch nor torch.
 A fit that fails to import it raises on the driver and names the queue.
 The traceback is in a worker log under `executor.work_dir`.
+
+## Related
+
+- [Search spaces](search-space.md)
+- [The objective](objective.md)
+- [`ExploreSpaceSobolQMC`](explore-space.md)
+- [`SlurmPilotExecutor`](executor.md)

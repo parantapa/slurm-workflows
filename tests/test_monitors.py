@@ -153,10 +153,8 @@ class TestCgroupSampler:
         assert values["memory"] != 4096, "the partial cgroup reading is not used"
 
     def test_a_cgroup_naming_no_readable_process_falls_back(self, tmp_path):
-        """The root cgroup of a systemd host names only kernel threads.
-
-        A kernel thread has no address space, so the sum over them is zero.
-        """
+        """The root cgroup of a systemd host names only kernel threads."""
+        # A kernel thread has no address space, so the sum over them is zero.
         # A pid well above every live one, so it names no process.
         dead = max(psutil.pids()) + 1000
         assert not psutil.pid_exists(dead)

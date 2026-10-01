@@ -4,12 +4,12 @@
 
 Your own Textual app can show what `swtop` shows,
 next to views of its own.
-You can put any of the `swtop` tabs among your own tabs,
-and put the summary line, the progress display and the error line
+You can put any of the `swtop` tabs among your own tabs.
+You can also put the summary line, the progress display and the error line
 anywhere in your layout.
 
-For every widget and its arguments, see
-[`swtop` reference](../reference/swtop.md#slurm_workflowsswtop_widgets).
+For every widget and its arguments,
+see the [`swtop` reference](../reference/swtop.md#slurm_workflowsswtop_widgets).
 
 ## Lay out the widgets
 
@@ -90,8 +90,8 @@ such as `swtop-workers`.
 Pass `id=` to `block_pane` to choose another.
 
 If you want the tasks tab to start on other states,
-yield `TaskTable(spec, states={"Failed"})` in place of the tasks `block_pane`,
-inside a `TabPane` of your own.
+yield `TaskTable(spec, states={"Failed"})` inside a `TabPane` of your own.
+The `TaskTable` takes the place of the tasks `block_pane`.
 `block_pane` takes no `states`.
 A `TaskTable` is a `BlockTable` with a row of state checkboxes above it,
 so `self.query(BlockTable)` still finds it.
@@ -100,7 +100,7 @@ See [`TaskTable`](../reference/swtop.md#slurm_workflowsswtop_widgets).
 ## React to a poll in your own widgets
 
 The poller posts `SnapshotPoller.Polled` after each poll.
-Handle it to use the reading in a widget of your own:
+Handle it to use the snapshot in a widget of your own:
 
 ```python
     def on_snapshot_poller_polled(self, event: SnapshotPoller.Polled) -> None:

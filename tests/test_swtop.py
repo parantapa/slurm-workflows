@@ -834,7 +834,7 @@ class TestCli:
         assert result.exit_code != 0
 
     def test_an_unreachable_server_is_reported_not_fatal(self, stop_after_one_poll):
-        """A failed poll is reported, and the loop keeps running."""
+        """`swtop` reports a failed poll, and the loop goes on."""
         result = CliRunner().invoke(swtop, ["127.0.0.1:1"])
 
         assert result.exit_code == 0

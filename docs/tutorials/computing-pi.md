@@ -8,7 +8,7 @@ On the way we meet the server, the executor and the workers.
 We run on the `bii` partition of the Rivanna cluster at UVA,
 under the `bii_nssac` account.
 
-The complete program can be found at
+The complete program is in
 [`examples/example_compute_pi.py`](../../examples/example_compute_pi.py).
 
 ## Before we start
@@ -64,7 +64,7 @@ SBATCH_ARGS = [
 ]
 
 
-def do_step_pi(start, stop, step, stepsize):
+def do_step_pi(start: int, stop: int, step: int, stepsize: float) -> float:
     """Sum every `step`-th midpoint slice, from `start`."""
     x, s = 0.0, 0.0
     for i in range(start, stop, step):
@@ -73,7 +73,7 @@ def do_step_pi(start, stop, step, stepsize):
     return s
 
 
-def main():
+def main() -> None:
     with DsServiceServer(interface="ib0") as ds_service:
         ds_service.wait_until_ready()
         address = ds_service.address
@@ -143,8 +143,8 @@ conda activate slurm-workflows
 python examples/example_compute_pi.py
 ```
 
-While it works, we open a second shell on the login node
-and ask Slurm what we hold:
+While it works, we open a second shell on the login node.
+There we ask Slurm what we hold:
 
 ```sh
 squeue -u $USER
@@ -155,7 +155,7 @@ after the executor and the job group.
 It moves from `PENDING` to `RUNNING`, and it holds two nodes.
 That job is the whole allocation this run gets.
 
-Behind that one job, this happens, in order:
+Behind that one job, these steps happen, in order:
 
 * The `ds-service` server starts on the login node.
 * The executor submits one pilot job across `NUM_NODES` nodes.
@@ -167,12 +167,13 @@ Behind that one job, this happens, in order:
 Notice that the program submits the 800 tasks before a single worker exists.
 The tasks wait on the queue until a pilot job starts and its workers claim them.
 We time nothing by hand.
-When the last task is back, the program prints one line that starts with `pi = `,
-followed by the estimate.
+When the last task is back,
+the program prints one line:
+`pi = `, then the estimate.
 
-We ran a thousand-million-slice integration
-across 80 workers on two compute nodes,
-and we wrote no sbatch script to do it.
+We ran a billion-slice integration
+across 80 workers on two compute nodes.
+We wrote no `sbatch` script to do it.
 Every later program in this documentation has the shape of this one.
 
 ## Next steps

@@ -12,7 +12,7 @@ and the model then chooses the next batch.
 We run on the `bii` partition of the Rivanna cluster at UVA,
 under the `bii_nssac` account.
 
-The complete program can be found at
+The complete program is in
 [`examples/example_optimize_himmelblau.py`](../../examples/example_optimize_himmelblau.py).
 
 ## Before we start
@@ -27,8 +27,8 @@ the `sbatch` arguments, and the setup of an exploration.
 Run this program from a Rivanna login node.
 Follow
 [How to install slurm-workflows on Rivanna](../how-to-guides/install-on-rivanna.md)
-first,
-and in [step 3](../how-to-guides/install-on-rivanna.md#3-install-slurm-workflows)
+first.
+In [step 3](../how-to-guides/install-on-rivanna.md#3-install-slurm-workflows) of that guide,
 install the `botorch` extra.
 Unlike the two pi tutorials, this one needs botorch in two places:
 
@@ -54,25 +54,23 @@ conda activate slurm-workflows
 python examples/example_optimize_himmelblau.py
 ```
 
-Either phase names every task it submits on the server.
-So [`swtop`](../how-to-guides/watch-a-run-with-swtop.md) shows
-`himmelblau-explore-00` through `himmelblau-search-<round>-<index>`
-as the run works through them.
-Each search round also runs one `himmelblau-fit-<round>` task,
-which fits the model and proposes that round's points.
-
 The program does not print the server address `swtop` needs.
-The worker script `himmelblau.job.eval.0.sh`
-in the work directory the executor prints
-carries it after `--server-address`.
-We open another shell on the login node
-and start `swtop` there with that address:
+The executor prints its work directory.
+In that directory, the worker script `himmelblau.job.eval.0.sh`
+carries the address after `--server-address`.
+We open another shell on the login node.
+There we start `swtop` with that address:
 
 ```sh
 swtop <server-address>
 ```
 
-We watch a round go by.
+Either phase names every task it submits on the server.
+So [`swtop`](../how-to-guides/watch-a-run-with-swtop.md)
+shows `himmelblau-explore-00` through `himmelblau-search-<round>-<index>`
+as the run works through them.
+Each search round also runs one `himmelblau-fit-<round>` task,
+which fits the model and proposes that round's points.
 
 The run takes a while.
 The rest of this tutorial reads the program while it works.
@@ -170,13 +168,13 @@ KNOWN_MINIMA = [
 ]
 
 
-def himmelblau(x, y):
+def himmelblau(x: float, y: float) -> dict[str, float]:
     """The objective that the search minimizes over SEARCH_SPACE."""
     value = (x * x + y - 11.0) ** 2 + (x + y * y - 7.0) ** 2
     return {"objective": value, "distance_from_origin": math.hypot(x, y)}
 
 
-def main():
+def main() -> None:
     with DsServiceServer(interface="ib0") as ds_service:
         ds_service.wait_until_ready()
         address = ds_service.address
@@ -281,8 +279,6 @@ gives the reason.
 The two job groups have their own setup scripts.
 Both are empty,
 because on Rivanna a compute node imports botorch with no setup.
-Elsewhere, `OPTIMIZER_SETUP_SCRIPT` must activate an environment that has botorch,
-because `opt` is the job group that imports it on a compute node.
 [Where the work runs](../reference/optimize-space.md#where-the-work-runs)
 says what each job group needs.
 
@@ -351,12 +347,12 @@ params, value = opt.best_point(RUN_NAME)
 Outside both blocks, the executor canceled the pilot jobs
 and the server shut down.
 But the optimizer kept every point it evaluated.
-So this is an ordinary local value.
+So `params` and `value` are ordinary local values.
 `opt.best_output(RUN_NAME)` is the whole mapping the objective returned there,
 `distance_from_origin` included.
 
 The program ends with a line `best f = ... (true minimum is 0)`,
-then the full result, the point where it was found,
+then the full result, the point where the search found it,
 and the nearest known minimum.
 
 So the program reports which of the four known minima it landed nearest.
@@ -378,8 +374,8 @@ searches the parameters of a real model.
 - [`OptimizeSpaceBotorch`](../reference/optimize-space.md) is the full API:
     several spaces searched at once,
     how the search decides to stop, and the acquisition settings.
-- [Search spaces](../reference/search-space.md) covers integer,
-    categorical and log-scaled parameters.
+- [Search spaces](../reference/search-space.md)
+    covers integer, categorical and log-scaled parameters.
 - [Batch Bayesian optimization](../explanation/batch-bayesian-optimization.md)
     says why the search has this shape,
     and when it is worth its overhead.

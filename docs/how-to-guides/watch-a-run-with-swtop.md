@@ -9,8 +9,8 @@ and the work is on nodes you are not logged in to.
 and of the compute nodes they run on.
 It needs nothing on the cluster side.
 
-For the options, the keys, the blocks and the columns, see
-[`swtop` reference](../reference/swtop.md).
+For the options, the keys, the blocks and the columns,
+see the [`swtop` reference](../reference/swtop.md).
 
 ## Watch a run from another shell
 
@@ -35,7 +35,7 @@ for the pilot jobs, workers, hosts, slurm jobs or tasks tab.
 
 ## Make the tasks tab readable
 
-If you are running an exploration or a search, skip this section.
+If you run an exploration or a search, skip this section.
 `ExploreSpaceSobolQMC` and `OptimizeSpaceBotorch` name what they submit,
 and the tasks tab is readable without your help.
 
@@ -67,7 +67,7 @@ swtop 10.0.0.1:5051 --plain > swtop.log
 ```
 
 Each poll adds one more frame to the file,
-rather than replacing the last one.
+and leaves the last frame in place.
 The file has the same blocks and columns as the tabs,
 one block after another.
 For the frame format, see

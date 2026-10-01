@@ -52,8 +52,8 @@ and you leave torch out with it.
 
 `ds-service` is a static binary.
 The project releases it separately from this package.
-Always download the latest release,
-and put it somewhere on your `PATH`:
+Always download the latest release.
+Put it somewhere on your `PATH`:
 
 ```sh
 mkdir -p ~/bin
@@ -93,4 +93,4 @@ Both must print usage text.
 - [How to run the `ds-service` server](run-the-ds-service-server.md),
     for starting `ds-service` from your driver
 - [The pilot-job model](../explanation/pilot-job-model.md),
-    for what `ds-service` is doing in a run
+    for what `ds-service` does in a run

@@ -56,7 +56,7 @@ def time_limit() -> Callable[[float, str], AbstractContextManager[None]]:
     """Bound a block that can spin forever if the code under test regresses.
 
     The block raises `TimeoutError(message)` once `seconds` pass.
-    The end of the block also ends the 60s hang guard,
+    The end of the block also ends the 60 s hang guard,
     so the rest of the test runs unguarded.
     """
 
@@ -230,7 +230,7 @@ def ds_service_address() -> Generator[str]:
 
     The test skips when no `ds-service` executable is found.
     """
-    # A fresh in-memory server per test starts in about 10ms.
+    # A fresh in-memory server per test starts in about 10 ms.
     # Why `DsServiceServer` owns the lifecycle and why it binds `lo`:
     # see docs/how-to-run-tests.md, "Notes for future changes".
     try:

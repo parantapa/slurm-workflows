@@ -65,13 +65,13 @@ KNOWN_MINIMA = [
 ]
 
 
-def himmelblau(x, y):
+def himmelblau(x: float, y: float) -> dict[str, float]:
     """The objective that the search minimizes over SEARCH_SPACE."""
     value = (x * x + y - 11.0) ** 2 + (x + y * y - 7.0) ** 2
     return {"objective": value, "distance_from_origin": math.hypot(x, y)}
 
 
-def main():
+def main() -> None:
     with DsServiceServer(interface="ib0") as ds_service:
         ds_service.wait_until_ready()
         address = ds_service.address

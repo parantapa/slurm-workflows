@@ -58,8 +58,8 @@ The traceback and the rest of the log are in the file `grep` named.
 The executor warns on stderr for every failure,
 whatever `RaiseOnError` value you pass.
 For a batch with many failures,
-wait with `raise_on_error=RaiseOnError.RAISE_NEVER`,
-then read the ids from the tasks:
+wait with `raise_on_error=RaiseOnError.RAISE_NEVER`.
+Then read the ids from the tasks:
 
 ```python
 failed = [t for t in tasks if isinstance(t.output, RemoteExecutionError) and t.output.error_id]
@@ -83,10 +83,8 @@ open the file of the worker's Slurm task, `<job-name>-<jobid>-<rank>.out`,
 not the batch file.
 If the job holds exactly one Slurm task, open `<job-name>-<jobid>.out` instead,
 because such a job keeps no per-task file.
-If the setup script failed, open either file.
-The batch script also runs the setup script
-when it publishes the job's start and exit,
-so the errors land in the batch file `<job-name>-<jobid>.out` too.
+If the setup script failed, see
+[Pilot jobs start and exit within seconds](#pilot-jobs-start-and-exit-within-seconds).
 
 ## Tasks never complete, but the pilot jobs run
 
@@ -94,7 +92,7 @@ Open the worker's `-<jobid>-<rank>.out` file.
 If it shows a connection failure,
 the workers cannot reach the server from the compute nodes.
 Restart the server on an interface the compute nodes can reach,
-following [How to run the `ds-service` server](run-the-ds-service-server.md).
+as [How to run the `ds-service` server](run-the-ds-service-server.md) shows.
 A queue that matches no job group name does not end up here.
 The wait raises the error in the next section instead.
 
@@ -119,8 +117,8 @@ You scaled the job group, but its pilot jobs then left the cluster.
 The cause is the time limit, a cancellation,
 or an exit before the queue drained.
 The worker's `.out` file says which.
-Scale the job group down to 0, then back up,
-and then wait on the same tasks again.
+Scale the job group down to 0, then back up.
+Then wait on the same tasks again.
 The server still holds them, and the new pilot jobs run them.
 A call with the old count submits nothing,
 because `scale_jobs` counts every pilot job it submitted,
@@ -155,9 +153,9 @@ so its errors land in the worker's `<job-name>-<jobid>-<rank>.out` file,
 or in `<job-name>-<jobid>.out` for a job of one Slurm task.
 The batch script also runs it to publish the job's start and exit,
 so the same errors land in the batch file `<job-name>-<jobid>.out`.
-Open either file,
-fix the script,
-then start the run again.
+Open either file.
+Fix the script.
+Then start the run again.
 A second `define_job_group` with a changed `setup_script`
 raises `AssertionError`,
 so the fix cannot reach a job group the executor already holds.
@@ -186,8 +184,9 @@ Three causes leave the workers block empty
 while the pilot jobs block holds entries.
 The pilot jobs are still pending, their setup scripts did not finish,
 or their workers cannot reach the server.
-A pilot job shows `-` under `STARTED` while it is still pending,
-or while its batch script has not yet finished its first run of the setup script.
+A pilot job shows `-` under `STARTED` while it is still pending.
+The pilot job also shows `-`
+until its batch script finishes its first run of the setup script.
 For workers that cannot reach the server, see
 [Tasks never complete, but the pilot jobs run](#tasks-never-complete-but-the-pilot-jobs-run).
 

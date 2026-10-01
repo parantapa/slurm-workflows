@@ -46,7 +46,7 @@ because a worker only ever asks its own queue for work.
 from Jinja templates and submits them.
 Each job runs the job group's setup script inline and launches `slurm-pilot-worker`.
 That worker loops: claim a task from its group's queue,
-cloudpickle-load the function, run it, post the cloudpickled task output back.
+load the function with cloudpickle, run it, post the cloudpickled task output back.
 It stops only when its pilot job ends,
 or when [`restart_jobs`](../reference/executor.md#restart_jobs) asks it to restart.
 A restart starts a new worker in the same pilot job,
@@ -81,8 +81,9 @@ The driver's node count and Slurm task count are two of them.
 The executor handles that case.
 It drops all four prefixes from its environment
 and gives `sbatch` what is left.
-A pilot job therefore takes its shape from the job group's
-`sbatch_args` alone, whatever the driver runs inside.
+A pilot job therefore takes its shape
+from the job group's `sbatch_args` alone,
+whatever the driver runs inside.
 The same call runs on a login node, where there is nothing to strip.
 
 ## Exceptions are values
@@ -92,8 +93,8 @@ never reaches the driver.
 The worker catches it, logs the traceback under a generated `error_id`,
 and returns a `RemoteExecutionError` as the task's `output`.
 `as_completed` and `wait` are what turn that value back into an exception,
-under the [`RaiseOnError`](../reference/executor.md#raiseonerror)
-policy the driver gives them.
+under the [`RaiseOnError`](../reference/executor.md#raiseonerror) policy
+the driver gives them.
 
 This trade is deliberate.
 A worker that dies on a bad task takes the rest of its queue with it,
@@ -103,13 +104,14 @@ until somebody waits on the task.
 
 ## Why one executor per server
 
-A `ds-service` server holds one run's tasks,
-worker registrations and actor arguments
-in a single flat namespace with no executor name in it.
+A `ds-service` server holds one run's queues, actor arguments
+and restart counters under names that carry the job group's name
+and never the executor's.
 Point two executors at one server,
-and they share that namespace.
+and they share those names.
 Same-named job groups serve each other's tasks,
-and they overwrite each other's actor arguments.
+overwrite each other's actor arguments,
+and restart each other's workers.
 
 Nothing enforces the rule,
 because an executor cannot see another one.

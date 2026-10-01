@@ -1,7 +1,7 @@
 # slurm-workflows: HPC workflow helpers for Slurm clusters
 
 `slurm-workflows` lets you run Python functions on a Slurm cluster
-without sbatch scripts written by hand.
+without hand-written sbatch scripts.
 It provides an interface
 inspired by [`concurrent.futures`](https://docs.python.org/3/library/concurrent.futures.html).
 The interface launches long-lived **workers** inside pilot jobs.
@@ -92,7 +92,7 @@ They wait on the queue until a worker starts and claims them.
 | Document | What it covers |
 | --- | --- |
 | [Computing pi on a Slurm cluster](docs/tutorials/computing-pi.md) | The main features of `slurm-workflows`, by creating a pool of workers to compute $\pi$. |
-| [Computing pi with a Sobol' QMC exploration](docs/tutorials/computing-pi-qmc.md) | Using `ExploreSpaceSobolQMC` to create a space filling design and evaluate it. |
+| [Computing pi with a Sobol' QMC exploration](docs/tutorials/computing-pi-qmc.md) | Using `ExploreSpaceSobolQMC` to create a space-filling design and evaluate it. |
 | [Optimizing Himmelblau's function](docs/tutorials/optimizing-himmelblau.md) | Using `OptimizeSpaceBotorch` to run a batch Bayesian search. |
 | [How to install slurm-workflows on Rivanna](docs/how-to-guides/install-on-rivanna.md) | Installing the package and the `ds-service` binary on Rivanna. |
 | [How to run the `ds-service` server](docs/how-to-guides/run-the-ds-service-server.md) | Starting a `ds-service` server from the driver and binding it where workers can reach it. |
@@ -105,7 +105,7 @@ They wait on the queue until a worker starts and claims them.
 | [How to update worker code without resubmitting](docs/how-to-guides/update-worker-code-without-resubmitting.md) | Restarting the workers in running pilot jobs, so they run new code without a second wait in Slurm's queue. |
 | [`SlurmPilotExecutor`](docs/reference/executor.md) | The executor, `Task`, `RaiseOnError`, the job group options, restarting workers, and the worker entry point. |
 | [`mapreduce`](docs/reference/mapreduce.md) | Mapping an iterable across the pool, the fold contract, and what the call creates on the server. |
-| [What a run publishes](docs/reference/what-a-run-publishes.md) | The keys and series a run writes, and the logs. |
+| [What a run publishes](docs/reference/what-a-run-publishes.md) | The keys and time series a run writes, and the logs. |
 | [`ExploreSpaceSobolQMC`](docs/reference/explore-space.md) | The Sobol' exploration, its study fields, and the results file. |
 | [`OptimizeSpaceBotorch`](docs/reference/optimize-space.md) | The batch Bayesian search, its study fields, and its stopping rule. |
 | [Search spaces](docs/reference/search-space.md) | `IntRange`, `FloatRange` and `CategoricalRange`. |
@@ -119,7 +119,7 @@ They wait on the queue until a worker starts and claims them.
 
 | Document | What it covers |
 | --- | --- |
-| [Developer notes](docs/developer-notes.md) | The layout of the code, where each kind of documentation goes, and the conventions a change is held to. |
+| [Developer notes](docs/developer-notes.md) | The layout of the code, where each kind of documentation goes, and the conventions a change must follow. |
 | [Terminology](docs/terminology.md) | The word this project uses for each concept, in prose and in identifiers, and where each word comes from. |
 | [How to run the tests](docs/how-to-run-tests.md) | Running the suite, what it mocks, and what it runs for real. |
 

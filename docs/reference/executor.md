@@ -57,18 +57,18 @@ Generated scripts and all logs land there.
 | Method | What it does |
 | --- | --- |
 | `define_job_group(name, sbatch_args, ...)` | Registers a job group. Submits nothing. The job group name is also the queue name. A second identical definition registers nothing new, and only rewrites any actor arguments it passes. A definition that differs raises `AssertionError`. |
-| `scale_jobs(name, count)` | Submits or cancels pilot jobs so the job group has `count` jobs. The count includes every job the group submitted and did not cancel, even one that already left the cluster, so calling it again with the same count submits nothing. `stop()` forgets the jobs, so a later call submits `count` new ones. A job group `define_job_group` did not register raises `AssertionError`. |
+| `scale_jobs(name, count)` | Submits or cancels pilot jobs so the job group has `count` jobs. The count includes every job the group submitted and did not cancel, even one that already left the cluster. A second call with the same count therefore submits nothing. `stop()` forgets the jobs, so a later call submits `count` new ones. A job group `define_job_group` did not register raises `AssertionError`. |
 | [`restart_jobs(group, wait=True, timeout=None) -> int`](#restart_jobs) | Restarts the workers of a job group inside its running pilot jobs, so they run the code on disk now. Cancels and submits no Slurm job. Returns the job group's new restart generation. See [`restart_jobs`](#restart_jobs). |
 | `submit(queue, fn, *args, task_parents=None, task_priority=0.0, **kwargs) -> Task` | Enqueues one task and returns a `Task` straight away. `queue` is a job group name or a list of them. `fn` is a callable, or a method name (`str`) for actor workers. `task_parents` is a list of the `Task`s this one waits on. `task_priority` orders the queue. See [`submit` options](#submit-options). |
 | [`mapreduce(desc, queue, ...)`](mapreduce.md) | Maps an iterable across the pool and folds the results into one value. Blocks. `init` must be the identity of `reduce_fn`. |
-| `as_completed(tasks, desc, unit="task", raise_on_error=...)` | Yields tasks as their results arrive. `desc` and `unit` label the progress `swtop` draws. Raises `RuntimeError` rather than blocking forever on a task whose queues have no worker. |
+| `as_completed(tasks, desc, unit="task", raise_on_error=...)` | Yields tasks as their results arrive. `desc` and `unit` label the progress `swtop` draws. Raises `RuntimeError` on a task whose queues have no worker, and does not block forever. |
 | `wait(tasks, desc, unit="task", raise_on_error=...)` | Same, but discards the iterator. Blocks until all are done. |
 | `set_task_name(task, name)` | Names a task, on the server as well as locally. |
 | `stop()` | Cancels all pilot jobs and keeps the executor usable. |
 | `close()` | Cancels all pilot jobs and closes the server connection. |
 
-It is also a context manager.
-On leaving the block, Python calls `close()`.
+`SlurmPilotExecutor` is also a context manager.
+When the `with` block ends, Python calls `close()`.
 That call cancels every pilot job, and the executor is spent afterward.
 An exception raised inside the block still propagates:
 
@@ -122,9 +122,10 @@ Each worker reads them back at startup.
 They must be picklable.
 Anything they refer to must be importable on the compute node,
 exactly as for the actor class itself.
-They are not part of the job group's identity,
+
+The actor arguments are not part of the job group's identity,
 so a later call can redefine a job group with different ones.
-`sbatch_args` are part of it, and a different value asserts.
+`sbatch_args` are part of it, and a different value raises `AssertionError`.
 Only the workers started after that call read the new values.
 A worker constructs its actor once, when it starts.
 [`restart_jobs`](#restart_jobs) starts new workers in the running pilot jobs,
@@ -184,7 +185,7 @@ since its workers start on the code on disk anyway.
 | Argument | Default | Meaning |
 | --- | --- | --- |
 | `group` | required | A job group that `define_job_group` registered. Any other name raises `AssertionError`. |
-| `wait` | `True` | Block until every worker that was running exits, or its Slurm job ends. |
+| `wait` | `True` | Blocks until every worker that started before the call exits, or its Slurm job ends. |
 | `timeout` | `None` | With `wait`, the most seconds to block. `None` waits without limit. A negative value raises `ValueError`. |
 
 **With `wait`**, the call returns once every older worker exits.
@@ -223,16 +224,180 @@ and a new worker takes its place with a new `PID` and a new `STARTED` time.
 For the steps of a restart, see
 [How to update worker code without resubmitting](../how-to-guides/update-worker-code-without-resubmitting.md).
 
+## `submit` options
+
+| Argument | Default | Meaning |
+| --- | --- | --- |
+| `task_parents` | `None` | The `Task`s this one waits on. |
+| `task_priority` | `0.0` | Orders the queue. The highest value runs first. |
+
+`task_priority` sets the task's `priority`, and `priority` orders the queue.
+`ds-service` dispatches the highest value first.
+`ds-service` serves tasks of equal priority on one queue oldest first.
+The default is `0.0`,
+so tasks submitted without a priority run in submission order.
+
+`task_parents` makes a task wait for other tasks.
+The server dispatches the task only after every parent finishes.
+If a parent fails, the task fails too.
+If a parent is canceled, the task is canceled.
+Each parent must already be on the server.
+A parent therefore goes through `submit` before the task that waits on it.
+If the server does not know a parent, `submit` raises `KeyError`.
+
+`fn` cannot take keyword arguments named `task_parents` or `task_priority`,
+because `submit` keeps them.
+
+## `Task`
+
+`submit` returns a `Task` with `task_id`, `queue`, `priority`, `function`,
+`input`, `output`, and `parent_task_ids`.
+`output` is a sentinel until the task completes.
+After that it holds the return value,
+or a `RemoteExecutionError(error, error_id)` if the worker raised.
+`wait` and `as_completed` are what fill it in.
+If a parent task failed, the task does not run,
+and `output` is a `RemoteExecutionError` with an empty `error_id`.
+Its `error` is `Dependency failed (task_id=<id>)`,
+and `<id>` is the task that failed.
+
+`RemoteExecutionError` lives in `slurm_workflows.utils`,
+and imports from the package root like everything else.
+
+`priority` and `parent_task_ids` record what `submit` was given
+as `task_priority` and `task_parents`:
+see [`submit` options](#submit-options).
+A change to `priority` on the `Task` has no effect,
+because the server orders by the value that `submit` sent with the task.
+
+`task_name` is a read-only property, and it is `None`
+until `executor.set_task_name(task, name)` sets it.
+That call stores the name on the server, under `task_name:<task_id>`,
+as UTF-8 rather than a pickle.
+Anything that reads the map can therefore read it too.
+The call also updates the `Task` to match.
+
+Nothing in this library dispatches on the name.
+Whoever looks at the queue reads it,
+which in practice means [`swtop`](swtop.md).
+`ExploreSpaceSobolQMC` and `OptimizeSpaceBotorch` call `set_task_name` themselves
+for every task they submit.
+[`mapreduce`](mapreduce.md) calls `set_task_name` for every map task it submits.
+
+## Errors that end a wait
+
+A task whose queues have no worker can never finish.
+`as_completed` and `wait` therefore do not block on such a task.
+They raise `RuntimeError` and name those queues,
+unless `raise_on_error` is `RAISE_NEVER`.
+They check this twice.
+
+**Before the first wait**, and without a call to Slurm,
+they check each pending task's queues.
+At least one of those queues must have a pilot job
+that `scale_jobs` submitted
+and that `stop()` did not cancel later.
+`submit` does not check queue names,
+so this check is where a mistyped queue name appears.
+Under `RAISE_ON_FIRST_ERROR`, they raise the error before they yield any result.
+
+**Then once a minute while blocked**,
+they ask `squeue` whether each pending task's queues
+still have a job on the cluster.
+That check covers an allocation that ended, jobs that were canceled,
+and jobs that died before they drained their queue.
+The first of these checks is a minute in, not immediate.
+A `squeue` they cannot reach leaves liveness unknown rather than dead.
+They log it, retry it, and do not end the wait.
+
+A task that waits on a parent is also checked on the queues
+of every parent, grandparent and further ancestor
+that is not finished yet.
+A task whose ancestor can never run therefore raises the same error,
+whether or not the wait includes that ancestor.
+
+Both checks know only about the workers that this executor started.
+They refuse an executor that submits to a queue
+where another process launched the pilot jobs.
+
+Two more states end a wait,
+and the executor reads both straight off the server:
+
+- **The server does not know the task id**:
+  `RuntimeError: Task ... is unknown to the task queue server`.
+  In practice, the unknown task is a `Task` built by hand,
+  or one left over from a server that restarted in the meantime.
+- **The task was canceled**:
+  `RuntimeError: Task ... was canceled on the task queue server`.
+  Nothing in this library cancels a task.
+  Somebody called `task_cancel` through the `ds-service` client directly,
+  on this task or on a task above it in its chain of parents.
+  `ds-service` never dispatches a canceled task again.
+
+For what to do about each, see
+[How to troubleshoot a failing run](../how-to-guides/troubleshoot-a-failing-run.md).
+
+## `RaiseOnError`
+
+What `as_completed` and `wait` do about a task that fails.
+A failure is any of these:
+
+- A task whose worker raised.
+  Its `output` is a `RemoteExecutionError`.
+- A task whose parent task failed.
+  Its `output` is a `RemoteExecutionError`.
+- A task canceled on the server, or one whose parent task was canceled.
+- A task the server does not know.
+- A pending task whose queues have no pilot job left to run them.
+
+Both calls give up only on the tasks that cannot finish.
+Unless the policy raises at once,
+they still wait for the rest of the batch.
+
+| Value | Effect |
+| --- | --- |
+| `RAISE_ON_FIRST_ERROR` | The default. Stops at the first failure and raises `RuntimeError`. |
+| `RAISE_AFTER_COMPLETED` | Waits for every task that can still finish, then raises once for all the failures together. `as_completed` treats this as `RAISE_ON_FIRST_ERROR`. |
+| `RAISE_NEVER` | Reports and returns. |
+
+**Both calls warn about every failure on stderr as they meet it**,
+whichever value the call was given.
+The value decides only whether an exception follows.
+The warning carries the task id
+and, for a worker that raised,
+the `error_id` that appears beside the traceback in that worker's log.
+The warning for tasks whose queues have no pilot job
+counts those tasks and names their queues instead.
+
+With `RAISE_NEVER` the caller reads the outcome off the tasks:
+
+```python
+from slurm_workflows import RaiseOnError, RemoteExecutionError
+from slurm_workflows.slurm_pilot_executor import NoOutput
+
+executor.wait(tasks, desc="squaring", raise_on_error=RaiseOnError.RAISE_NEVER)
+
+failed = [t for t in tasks if isinstance(t.output, RemoteExecutionError)]
+never_ran = [t for t in tasks if t.output is NoOutput]
+```
+
+`output` stays `NoOutput` for a task that was canceled
+or is unknown to the server.
+It also stays `NoOutput` for a task still pending
+on queues with no pilot job to run it.
+
 ## The `slurm-pilot-worker` entry point
 
 `pyproject.toml` installs `slurm-pilot-worker`,
 which the generated worker script, `<job-name>.sh`, invokes on the compute node.
-It takes six required options: the server address, the pilot job's name,
-its job group, its actor class name, the work dir and the worker `sys.path`.
+It takes six required options.
+They are the server address, the pilot job's name, its job group,
+its actor class name, the work dir and the worker `sys.path`.
 With `--pilot-job-event start` or `--pilot-job-event exit`,
 it publishes that the pilot job started or exited, and starts no worker.
 The generated batch script runs the worker script with that option
 when the job starts and when it exits.
+
 The worker script passes its own arguments on to the entry point.
 A driver never calls it.
 The `worker_exe` argument
@@ -259,163 +424,6 @@ Inside a task, these environment variables exist:
 
 The worker sets the first four when it starts,
 before it builds its actor and before it claims a task.
-
-## `submit` options
-
-| Argument | Default | Meaning |
-| --- | --- | --- |
-| `task_parents` | `None` | The `Task`s this one waits on. |
-| `task_priority` | `0.0` | Orders the queue. The highest value runs first. |
-
-`task_priority` sets the task's `priority`, and `priority` orders the queue.
-`ds-service` dispatches the highest value first.
-Tasks of equal priority on one queue are served **oldest first**.
-The default is `0.0`,
-so tasks submitted without a priority run in submission order.
-
-`task_parents` makes a task wait for other tasks.
-The server dispatches the task only after every parent finishes.
-If a parent fails, the task fails too.
-If a parent is canceled, the task is canceled.
-Each parent must already be on the server,
-so the parents are submitted first.
-If the server does not know a parent, `submit` raises `KeyError`.
-
-`fn` cannot take keyword arguments named `task_parents` or `task_priority`,
-because `submit` keeps them.
-
-## `Task`
-
-`submit` returns a `Task` with `task_id`, `queue`, `priority`, `function`,
-`input`, `output`, and `parent_task_ids`.
-`output` is a sentinel until the task completes.
-After that it holds the return value,
-or a `RemoteExecutionError(error, error_id)` if the worker raised.
-`wait` and `as_completed` are what fill it in.
-If a parent task failed, the task does not run,
-and `output` is a `RemoteExecutionError` with an empty `error_id`.
-Its `error` is `Dependency failed (task_id=<id>)`,
-and `<id>` is the task that failed.
-`RemoteExecutionError` lives in `slurm_workflows.utils`,
-and imports from the package root like everything else.
-
-`priority` and `parent_task_ids` record what `submit` was given
-as `task_priority` and `task_parents`:
-see [`submit` options](#submit-options).
-A change to `priority` on the `Task` has no effect,
-because the server orders by the value that `submit` sent with the task.
-
-`task_name` is a read-only property, and it is `None`
-until `executor.set_task_name(task, name)` sets it.
-That call stores the name on the server, under `task_name:<task_id>`,
-as UTF-8 rather than a pickle.
-Anything that reads the map can therefore read it too.
-The call also updates the `Task` to match.
-
-Nothing in this library dispatches on the name.
-Whoever looks at the queue reads it,
-which in practice means [`swtop`](swtop.md).
-`ExploreSpaceSobolQMC` and `OptimizeSpaceBotorch` call it themselves
-for every task they submit.
-[`mapreduce`](mapreduce.md) calls it for every map task it submits.
-
-## Errors that end a wait
-
-A task whose queues have no worker can never finish.
-`as_completed` and `wait` therefore do not block on such a task.
-They raise `RuntimeError` and name those queues,
-unless `raise_on_error` is `RAISE_NEVER`.
-They check this twice.
-
-**Before the first wait**, and without a call to Slurm,
-they require at least one of each pending task's queues
-to have a pilot job that `scale_jobs` submitted
-and that `stop()` has not canceled since.
-`submit` does not check queue names,
-so this check is where a mistyped queue name appears.
-Under `RAISE_ON_FIRST_ERROR`, they raise the error before they yield any result.
-
-**Then once a minute while blocked**,
-they ask `squeue` whether each pending task's queues
-still have a job on the cluster.
-That check covers an allocation that ended, jobs that were canceled,
-and jobs that died before they drained their queue.
-The first of these checks is a minute in, not immediate.
-A `squeue` they cannot reach leaves liveness unknown rather than dead.
-They log it, retry it, and do not end the wait.
-
-A task that waits on a parent is also checked on the queues
-of every parent, grandparent and further ancestor
-that is not finished yet.
-A task whose ancestor can never run therefore raises the same error,
-whether or not the wait includes that ancestor.
-
-Both checks only know about workers **this executor** started.
-They refuse an executor that submits to a queue
-where another process launched the pilot jobs.
-
-Two more states end a wait,
-and the executor reads both straight off the server:
-
-- **the server does not know the task id**:
-  `RuntimeError: Task ... is unknown to the task queue server`.
-  In practice this is a `Task` built by hand,
-  or one left over from a server that restarted in the meantime.
-- **the task was canceled**:
-  `RuntimeError: Task ... was canceled on the task queue server`.
-  Nothing in this library cancels a task.
-  Somebody called `task_cancel` through the `ds-service` client directly,
-  on this task or on a task above it in its chain of parents.
-  `ds-service` never dispatches a canceled task again.
-
-For what to do about each, see
-[How to troubleshoot a failing run](../how-to-guides/troubleshoot-a-failing-run.md).
-
-## `RaiseOnError`
-
-What `as_completed` and `wait` do about a task that fails.
-A failure is any of these:
-
-- A task whose worker raised. Its `output` is a `RemoteExecutionError`.
-- A task whose parent task failed. Its `output` is a `RemoteExecutionError`.
-- A task canceled on the server, or one whose parent task was canceled.
-- A task the server does not know.
-- A pending task whose queues have no pilot job left to run them.
-
-Both calls give up only on the tasks that cannot finish.
-Unless the policy raises at once,
-they still wait for the rest of the batch.
-
-| Value | Effect |
-| --- | --- |
-| `RAISE_ON_FIRST_ERROR` | The default. Stop at the first failure and raise `RuntimeError`. |
-| `RAISE_AFTER_COMPLETED` | Wait for every task that can still finish, then raise once for all the failures together. `as_completed` treats this as `RAISE_ON_FIRST_ERROR`. |
-| `RAISE_NEVER` | Report and return. |
-
-**Both calls warn about every failure on stderr as they meet it**,
-whichever value the call was given.
-The value decides only whether an exception follows.
-The warning carries the task id
-and, for a worker that raised,
-the `error_id` that appears beside the traceback in that worker's log.
-The warning for tasks whose queues have no pilot job
-counts those tasks and names their queues instead.
-
-With `RAISE_NEVER` the caller reads the outcome off the tasks:
-
-```python
-from slurm_workflows import RaiseOnError, RemoteExecutionError
-from slurm_workflows.slurm_pilot_executor import NoOutput
-
-executor.wait(tasks, desc="squaring", raise_on_error=RaiseOnError.RAISE_NEVER)
-
-failed = [t for t in tasks if isinstance(t.output, RemoteExecutionError)]
-never_ran = [t for t in tasks if t.output is NoOutput]
-```
-
-`output` stays `NoOutput` for a task that was canceled,
-is unknown to the server,
-or was still pending on queues with no pilot job to run it.
 
 ## Related
 

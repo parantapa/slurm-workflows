@@ -36,7 +36,7 @@ from .utils import (
     objective_value,
 )
 
-# Botorch recommendation: single precision is numerically fragile here.
+# A botorch recommendation: single precision is numerically fragile here.
 DTYPE = torch.double
 
 
@@ -76,7 +76,7 @@ class OptimizationStudy:
 
     The search runs between `min_search_rounds`
     and `max_search_rounds` rounds.
-    It stops early when it stops improving:
+    It stops early when it no longer improves:
 
     min_search_rounds: rounds that always run.
         Stalled rounds below it count toward patience.
@@ -132,9 +132,9 @@ class OptimizationResult:
     """What one study measured, in submission order.
 
     The four lists are index-aligned.
-    The search evaluates `points[i]`,
-    gets the objective's whole result back as `outputs[i]`,
-    models the point by `values[i]`,
+    The search evaluates `points[i]`
+    and gets the objective's whole result back as `outputs[i]`.
+    It models the point by `values[i]`,
     and records `unit_points[i]` as its place in the unit cube.
     `unit_points` is where the objective ran, after any rounding.
     """
@@ -157,17 +157,17 @@ def fit_and_propose(
 ) -> dict[str, Any]:
     """Fit the GP and optimize the acquisition over the unit cube.
 
-    `values` are objective values, lower is better,
-    index-aligned with `unit_points`.
+    `values` are objective values, index-aligned with `unit_points`.
+    A lower value is better.
     Returns the `batch` proposed unit points under `CANDIDATES_KEY`,
     and how long each half took under `FIT_SECONDS_KEY`
     and `PROPOSE_SECONDS_KEY`.
     """
     train_x = torch.tensor(unit_points, dtype=DTYPE)
 
-    # Botorch maximizes and the search minimizes, so this function fits the model to -f.
+    # botorch maximizes and the search minimizes, so this function fits the model to -f.
     # The acquisition values below are in that space too.
-    # Get the sign backwards and the search walks uphill without failing.
+    # If the sign is backwards, the search walks uphill, and nothing fails.
     train_y = torch.tensor([[-v] for v in values], dtype=DTYPE)
 
     model = SingleTaskGP(train_x, train_y, outcome_transform=Standardize(m=1))
@@ -210,11 +210,29 @@ def fit_and_propose(
 
 
 class OptimizeSpaceBotorch:
-    """Botorch batch optimization of one or more search spaces, run together.
+    """Batch optimization of one or more search spaces with botorch, run together.
 
     The search rounds integer and categorical parameters
     from a continuous candidate.
-    So a mostly-discrete space re-evaluates points.
+    So a mostly discrete space re-evaluates points.
+
+    The constructor validates every study now, not when the search runs,
+    and loads the observations each study starts from.
+    `files` names the results files to start from,
+    as `ExploreSpaceSobolQMC.save` or this class's own `save` wrote them.
+    The search models a study on every observation
+    the files hold under its name.
+    `search_parallelism` is the batch size for studies that do not carry their own.
+    The constructor raises `ValueError` for an empty list,
+    for a repeated name,
+    and for a file that does not hold the results shape.
+    It also raises `ValueError` for an invalid study,
+    such as one with no batch size from either source.
+    The constructor raises `RuntimeError`
+    for a study with no observation in the files,
+    and for a saved value that is not a finite number.
+    It also raises `RuntimeError`
+    for a saved point that the study's space cannot place.
 
     `studies` holds copies of the studies with `search_parallelism` filled in.
     `prior` holds what the files held,
@@ -230,22 +248,6 @@ class OptimizeSpaceBotorch:
         files: Iterable[Path | str],
         search_parallelism: int | None = None,
     ) -> None:
-        """Validate every study and load the observations it starts from.
-
-        files: results files to start from,
-            as `ExploreSpaceSobolQMC.save` or this class's own `save` wrote them.
-            The search models a study on every observation
-            they hold under its name.
-            A study with none of them raises `RuntimeError`,
-            as does a saved point that the study's space cannot place,
-            or a saved value that is not a finite number.
-            A file that does not hold the results shape raises `ValueError`.
-        search_parallelism: batch size for studies that do not carry their own.
-            A study with neither raises `ValueError`.
-
-        The search validates every study now, not when it runs.
-        An invalid study, an empty list or a repeated name raises `ValueError`.
-        """
         if not studies:
             raise ValueError("no optimization studies given")
 
@@ -582,7 +584,7 @@ class OptimizeSpaceBotorch:
         self, study: OptimizationStudy, submission: Task, desc: str
     ) -> list[list[float]]:
         """The batch one fit proposed, checked before the run evaluates it."""
-        # Check every key, not just the candidates,
+        # Check every key, not only the candidates,
         # so a stale worker fails with this message and not a KeyError.
         result = submission.output
         expected = (CANDIDATES_KEY, FIT_SECONDS_KEY, PROPOSE_SECONDS_KEY)
@@ -651,7 +653,7 @@ class OptimizeSpaceBotorch:
                 what="objective evaluations",
             )
         except RuntimeError:
-            # Keep what did come back before reporting the failure.
+            # Keep what came back, then report the failure.
             self._record_returned(submitted)
             raise
 
@@ -755,7 +757,8 @@ class OptimizeSpaceBotorch:
     def best_point(self, name: str) -> tuple[dict[str, Any], float]:
         """A study's best point (params, objective value) known so far.
 
-        Over the files it started from as well as this run.
+        The best point covers the files this instance started from,
+        as well as this run.
         """
         known = self._all(self._study(name).name)
         best = min(range(len(known.values)), key=known.values.__getitem__)
@@ -773,8 +776,8 @@ class OptimizeSpaceBotorch:
         The file holds only this run.
         So the caller can pass the files it started from and this one
         to the next `OptimizeSpaceBotorch` together,
-        without counting a point twice.
-        Same shape as `ExploreSpaceSobolQMC.save` writes.
+        and no point counts twice.
+        The file has the same shape as `ExploreSpaceSobolQMC.save` writes.
 
         Overwrites `path`.
         If the search evaluated nothing, it writes empty lists.

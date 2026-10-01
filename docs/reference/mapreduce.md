@@ -6,7 +6,7 @@
 and folds what it produces into a single value.
 The call blocks until every map task is back.
 
-For the problem this solves and how to size a call, see
+For the problem `mapreduce` solves and how to size a call, see
 [How to fold results across workers](../how-to-guides/fold-results-across-workers.md).
 
 ```python
@@ -21,23 +21,23 @@ result = executor.mapreduce(
 )
 ```
 
-| Argument | Meaning |
-| --- | --- |
-| `desc` | Labels the progress `swtop` draws for this call. |
-| `queue` | A job group name, or a list of them, as in `submit`. |
-| `map_fn` | Runs once per item, on a worker. A callable, or the name of a method on the job group's actor. |
-| `reduce_fn` | Folds one mapped value into the running result. |
-| `iterable` | The items. Read out in full before any map task starts. |
-| `init` | Where every fold starts. Must be the identity of `reduce_fn`. |
-| `num_tasks` | How many map tasks drain the item queue, as an upper bound. |
-| `map_extra_args`, `map_extra_kwargs` | Passed to `map_fn` after the item. |
-| `reduce_extra_args`, `reduce_extra_kwargs` | Passed to `reduce_fn` after the two values. |
+| Argument | Default | Meaning |
+| --- | --- | --- |
+| `desc` | required | Labels the progress `swtop` draws for this call. |
+| `queue` | required | A job group name, or a list of them, as in `submit`. |
+| `map_fn` | required | Runs once per item, on a worker. A callable, or the name of a method on the job group's actor. |
+| `reduce_fn` | required | Folds one mapped value into the running result. |
+| `iterable` | required | The items. Read out in full before any map task starts. |
+| `init` | required | Where every fold starts. Must be the identity of `reduce_fn`. |
+| `num_tasks` | required | How many map tasks drain the item queue, as an upper bound. |
+| `map_extra_args`, `map_extra_kwargs` | `None` | Passed to `map_fn` after the item. |
+| `reduce_extra_args`, `reduce_extra_kwargs` | `None` | Passed to `reduce_fn` after the two values. |
 
 Everything here travels by cloudpickle,
 so `map_fn`, `reduce_fn`, `init`, every item
 and every extra argument must be picklable.
 
-Two things follow from `num_tasks` being an upper bound.
+Because `num_tasks` is an upper bound, two things follow.
 A call with fewer items than map tasks submits one map task per item.
 An empty `iterable` returns a copy of `init`,
 creates no queue, submits nothing, and needs no worker.
@@ -58,7 +58,7 @@ result = reduce_fn(
 )
 ```
 
-starting from `init`,
+with `result` set to `init` at the start,
 until the queue holds nothing it can claim.
 It returns that partial result.
 The call then folds the partial results the same way,
@@ -153,7 +153,7 @@ Only that call's own map tasks claim from it.
 Each of them opens a `ds-service` client of its own,
 from the `DS_SERVER_ADDRESS` the worker puts in the environment.
 Each claims its items under `PILOT_WORKER_ID`,
-so while an item is running,
+so while an item runs,
 `task_get_worker_id` on it names the worker that folds it.
 
 Each item becomes an item task on it, `<item-queue>.item.<i>`.
@@ -171,8 +171,8 @@ named `<item-queue>.task.<i>`.
 
 ## What it costs
 
-Enqueueing is one RPC per item, from the driver, before any work starts,
-and there is no batched form of it.
+The driver enqueues each item with an RPC of its own, before any work starts.
+No batched form of that RPC exists.
 The whole iterable is also held in memory twice,
 once on the driver and once on the server.
 How to size an item against that cost
@@ -184,14 +184,14 @@ is in [How to fold results across workers](../how-to-guides/fold-results-across-
 - A `map_fn` given as a method name raises `ValueError`
     where a job group named in `queue` has no actor to find it on.
 - A `queue` where no job group has a pilot job submitted
-    raises `RuntimeError`, before it enqueues anything.
+    raises `RuntimeError`, before the call enqueues anything.
     A pilot job that is still pending is enough.
     An empty `iterable` returns before this check.
     Unlike `submit`, this call blocks,
     so it cannot wait for workers that do not exist yet.
 - A map task that fails raises `RuntimeError`, the way `wait` does.
-    The other map tasks keep draining the item queue,
-    and their results are discarded.
+    The other map tasks still drain the item queue,
+    and the call discards their results.
 
 ## Progress
 

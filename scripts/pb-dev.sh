@@ -1,5 +1,6 @@
 #!/bin/bash
-# The author's own build wrapper. Not required to build the project.
+# The author's own build wrapper.
+# The project does not need it to build.
 #
 # Runs from the repository root.
 # Takes one command, and runs the run_<command> function below.
@@ -21,10 +22,10 @@ run_build-python-package() {
 }
 
 # Upload the sdist and the wheel in dist/ with twine.
+# Nothing cleans dist/, so this also uploads the files
+# that earlier builds left there.
 run_upload-python-package() {
     set -x
-    # Nothing cleans dist/, so the globs also pick up files
-    # that earlier builds left there.
     python -m twine upload dist/*.tar.gz dist/*.whl
 }
 
@@ -35,8 +36,8 @@ show_help() {
     echo "Available commands:"
     echo "    help"
 
-    # The command list is derived from the run_* functions,
-    # so adding a command needs no change here.
+    # show_help builds the command list from the run_* functions,
+    # so a new command needs no change here.
     local fn
     while read -r fn; do
         echo "    ${fn#run_}"

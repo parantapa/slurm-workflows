@@ -7,10 +7,12 @@
 # so start from nothing and add back exactly what belongs in the distribution.
 #
 # The templates are package data loaded at runtime via importlib.resources,
-# so *.jinja must stay listed here or rendering breaks in an installed copy.
+# so *.jinja must stay listed here,
+# or an installed copy cannot render them.
 #
-# pyproject.toml must be listed explicitly or the sdist cannot be rebuilt;
-# setup.cfg and PKG-INFO are injected by setuptools itself.
+# List pyproject.toml explicitly,
+# or a rebuild from the sdist fails.
+# setuptools itself adds setup.cfg and PKG-INFO.
 global-exclude *
 recursive-include src/slurm_workflows *.py *.jinja
 include README.md

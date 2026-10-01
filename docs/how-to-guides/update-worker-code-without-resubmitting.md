@@ -4,7 +4,7 @@
 
 You fixed a bug in a module that your tasks import,
 or in your actor class,
-and the pilot jobs are already running.
+and the pilot jobs are already live.
 If you cancel them and submit new ones,
 you wait in Slurm's queue again.
 Restart the workers instead.
@@ -37,9 +37,9 @@ Edit the files in place,
 or install the new version into the environment that the setup script activates.
 The workers must see the new code at the same path as the old code.
 
-To change the actor arguments as well,
-call `define_job_group` again with the same arguments as the first call
-and the new actor arguments.
+To change the actor arguments as well, call `define_job_group` again.
+Give it the arguments of the first call,
+with the new actor arguments in place of the old ones.
 A definition that differs in anything but the actor arguments
 raises `AssertionError`:
 
@@ -61,7 +61,7 @@ executor.restart_jobs("gpu")
 
 Each worker finishes its current task,
 exits, and starts again in the same pilot job.
-The call blocks until every worker that was running exits.
+The call blocks until every old worker exits.
 After it returns,
 every task that a worker claims runs on the new code.
 

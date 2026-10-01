@@ -46,9 +46,10 @@ A worker's start time is known when it writes `worker_info:<worker-id>`,
 so it is a field of that key.
 
 A new key for each event keeps every key written once.
-`swtop` still reads each description once,
-and it learns which pilot jobs and workers exited
-from two key searches per poll, one for each kind, without a read.
+`swtop` still reads each description once.
+It learns which pilot jobs and workers exited
+from two key searches per poll, one for each kind,
+without a read.
 An exit written into the description instead
 makes a cached description stale,
 and `swtop` has to read every description again on every poll.
@@ -64,8 +65,9 @@ so the times go out through the environment the setup script builds.
 Slurm ends a job with SIGTERM, and with SIGKILL a little later.
 The batch script traps SIGTERM, and the worker turns it into `SystemExit`,
 so each of them publishes its exit in between.
-A process that SIGKILL or a node failure ends publishes nothing,
-and `swtop` goes on listing it.
+If SIGKILL or a node failure ends a process,
+the process publishes nothing,
+and `swtop` still lists it.
 Its monitored series stop, and `swtop` marks them stale.
 
 ## One key per subject, never one per field
@@ -128,8 +130,8 @@ The worker told 1 for `host_monitor:<hostname>:<job-id>:<generation>` takes the 
 the part of the job on that node, and the GPUs that part can see.
 Slurm accounts a job in a separate cgroup on each node,
 so no single worker can read the whole of a job that spans nodes.
-No lock, no designated rank,
-and no need for the workers to know each other exist.
+The election needs no lock and no designated rank,
+and the workers do not need to know each other exist.
 
 The host counter carries the job id
 because a counter never resets while the server runs.

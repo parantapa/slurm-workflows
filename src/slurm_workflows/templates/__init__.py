@@ -162,8 +162,8 @@ def render_template(
 def render_template(template: str, **kwargs: Any) -> str:
     """Render the template named `"<file prefix>:<name>"`.
 
-    The overloads of this function give each template's
-    required keyword arguments.
+    The overloads of this function
+    give each template's required keyword arguments.
     The renderer raises `jinja2.UndefinedError`
     for a variable the template uses and the caller did not pass,
     and `jinja2.TemplateNotFound` for a name no template file holds.

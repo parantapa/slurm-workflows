@@ -17,7 +17,7 @@ exploration = ExploreSpaceSobolQMC(studies, executor, num_exploration_points=Non
 Draws a Sobol' design over each space it is given,
 evaluates every point of every design across the pool,
 and keeps what came back.
-`studies` is a **list** of `ExplorationStudy` objects, one per space.
+`studies` is a list of `ExplorationStudy` objects, one per space.
 `ExploreSpaceSobolQMC` submits them together,
 so a small study does not wait for a large one.
 `num_exploration_points` is the count for studies that do not carry their own.
@@ -33,14 +33,15 @@ It needs neither botorch nor torch, on the driver or on the workers.
 | `objective` | The function to evaluate. Its argument names must match the space's keys. |
 | `objective_queue` | Queue, or queues, the evaluations go to. |
 | `num_exploration_points` | Points to draw. Truncated down to a power of two. Optional if the exploration carries a default. |
-| `seed` | Optional. The same seed redraws the same design. Without one, a seed is drawn and printed. |
+| `seed` | Optional. The same seed redraws the same design. Without one, `ExploreSpaceSobolQMC` draws a seed and prints it. |
 | `objective_key` | Which entry of the objective's result is the value. `"objective"` by default. |
 | `extra_objective_kwargs` | Extra arguments passed to the objective and not varied. |
 | `priority` | The priority of every task the study submits. The highest priority runs first. `0.0` by default. |
 
 `ExploreSpaceSobolQMC` floors the point count to a power of two.
 A Sobol' sequence is balanced at that prefix length.
-100 workers that ask for 100 points evaluate 64 and leave 36 workers idle.
+A study that asks for 100 points on 100 workers evaluates 64,
+and leaves 36 workers idle.
 
 The objective contract is the same for both classes:
 see [The objective](objective.md).
@@ -77,7 +78,7 @@ A different seed draws a different design.
 
 | Attribute | What it holds |
 | --- | --- |
-| `results[name]` | Four index-aligned lists, in submission order: the `points` evaluated, the `values` the points are ranked by, the whole `outputs`, and `unit_points`, the points in the unit cube. |
+| `results[name]` | Four index-aligned lists, in submission order: `points`, `values`, `outputs` and `unit_points`. `values` holds the values that rank the points, and `outputs` the whole results. `unit_points` holds the points in the unit cube. |
 | `studies` | The study list with the point count and seed filled in. `ExploreSpaceSobolQMC` leaves the caller's own `ExplorationStudy` objects alone. |
 
 ## The results file
@@ -85,7 +86,7 @@ A different seed draws a different design.
 `load_results(paths)` reads saved files back.
 It merges them by study name
 into a `dict[str, SavedResults]`.
-Each file is a gzipped plain pickle, measurements rather than code.
+Each file is a gzipped plain pickle of data, not of code.
 The study name is the key, and each entry holds `points`, `values` and `outputs`
 as index-aligned lists in submission order:
 

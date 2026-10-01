@@ -69,8 +69,8 @@ def make_worker(
     slurm_job_id: int = 42,
     hostname: str = "testhost",
     # Long, so the only sample is the one taken at startup
-    # by the first worker of each job on a host,
-    # which is what the tests look at.
+    # by the first worker of each job on a host.
+    # The tests look at that sample.
     monitor_interval: float = 60.0,
 ) -> PilotWorker:
     """A real worker against a real server."""
@@ -91,8 +91,8 @@ def run_worker(worker: PilotWorker, expect_tasks: int) -> None:
     """Run the worker's real main loop until it completes `expect_tasks` tasks.
 
     Queue the tasks before the call, or from another thread.
-    The worker answers an empty queue with a sleep and another request,
-    so a worker that never gets `expect_tasks` tasks
+    The worker answers an empty queue with a sleep and another request.
+    As a result, a worker that never gets `expect_tasks` tasks
     spins until the hang guard ends the test.
     """
     worker.client = cast(DsServiceClient, _StoppingClient(worker.client, expect_tasks))

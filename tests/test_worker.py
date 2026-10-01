@@ -90,7 +90,7 @@ class TestTaskExecution:
         worker.close()
         assert polls == 3, "the worker stopped polling an empty queue"
         # `NoTaskAvailable` left to the catch-all handler still polls,
-        # but logs a traceback every time round.
+        # but logs a traceback every time.
         # Only the absence of that log tells the two apart.
         assert "Unexpected exception" not in caplog.text
 
@@ -342,7 +342,7 @@ class TestActors:
         worker.close()
 
         executor.wait(tasks, desc="test")
-        # Same instance served all four, so the counter accumulated.
+        # The same instance served all four, so the counter accumulated.
         assert sorted(t.output for t in tasks) == [1, 2, 3, 4]
         assert len(support_actor.INSTANCES) == 1
 
@@ -536,7 +536,7 @@ class TestWorkerIdentity:
     def test_identity_is_published_before_the_actor_is_built(
         self, ds_service_address, ds_client, tmp_path
     ):
-        """A worker that dies constructing its actor already published where it was."""
+        """A worker that dies while it builds its actor already published where it was."""
         with pytest.raises(AttributeError):
             make_worker(
                 ds_service_address,
@@ -773,7 +773,8 @@ class _FailingCounterClient:
 
     def counter_get_current_value(self, key: str) -> int:
         self.reads += 1
-        # `fail` gets the number of the read, counting from 1.
+        # `fail` gets the number of the read.
+        # The first read is number 1.
         if self._fail(self.reads):
             self.events.append("read-failed")
             raise TimeoutError("server unreachable")
@@ -943,7 +944,7 @@ class TestRestart:
     ):
         """A failed first read leaves the worker idle, not on the old code.
 
-        A claim then could run a task after `restart_jobs` returned.
+        A claim at that point can run a task after `restart_jobs` returns.
         """
         worker = make_worker(ds_service_address, tmp_path)
         client = _FailingCounterClient(worker.client, fail=lambda n: n <= 3)
@@ -965,11 +966,7 @@ class TestRestart:
 
 
 class TestCli:
-    """The console entry point.
-
-    The cases cover its options, `sys.path`, SIGTERM, the pilot job events,
-    and leaving the output streams alone.
-    """
+    """The console entry point."""
 
     @pytest.fixture(autouse=True)
     def _restore_process_state(self) -> Generator[None]:
@@ -978,7 +975,7 @@ class TestCli:
         # and undoes neither, because in production the process is the worker.
         # Nothing else restores those two.
         # The autouse fixture in `conftest.py` already restores the environment,
-        # so restoring it here as well is only belt and braces.
+        # so the restore here is only a second safeguard.
         env = dict(os.environ)
         path = list(sys.path)
         sigterm = signal.getsignal(signal.SIGTERM)
@@ -1061,7 +1058,7 @@ class TestCli:
         def terminated(self) -> None:
             os.kill(os.getpid(), signal.SIGTERM)
 
-        # captured has already swapped in FakeWorker, so this patches its main.
+        # captured already swapped in FakeWorker, so this patches its main.
         monkeypatch.setattr(worker_mod.PilotWorker, "main", terminated)
 
         exit_code = self.invoke(tmp_path)

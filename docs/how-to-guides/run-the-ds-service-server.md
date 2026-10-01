@@ -37,7 +37,7 @@ Name an `interface` that the compute nodes can reach.
 and `ds.address` is then the `host:port` the workers connect to.
 
 The example uses `ib0`,
-the Infiniband interface of the node the driver runs on.
+the InfiniBand interface of the node the driver runs on.
 That node is a login node,
 or the compute node of the driver's own Slurm job.
 

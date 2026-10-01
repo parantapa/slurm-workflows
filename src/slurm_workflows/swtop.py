@@ -51,7 +51,7 @@ PROGRESS_FIELDS = ["progress_id", "desc", "unit", "total"]
 # With nothing that recent, the display keeps the last count this collector saw.
 PROGRESS_TAIL_S = 60.0
 
-# Must match the key `SlurmPilotExecutor.set_task_name` writes,
+# This prefix must match the key that `SlurmPilotExecutor.set_task_name` writes,
 # which spells it out rather than importing a constant.
 TASK_NAME_PREFIX = "task_name:"
 
@@ -118,10 +118,10 @@ class WorkerInfo:
 
 @dataclass
 class PilotJobInfo:
-    """One pilot job, as the executor described it when it submitted it.
+    """One pilot job, as the executor described it at submission.
 
     `start_time` is what the pilot job published when it started,
-    or `NOT_STARTED` for a job that has not published one.
+    or `NOT_STARTED` for a job that did not publish one yet.
     """
 
     name: str
@@ -192,8 +192,8 @@ class Snapshot:
 
     `worker_jobs` holds the pilot jobs.
     `jobs` holds one entry per Slurm job per node it runs on.
-    `worker_jobs`, `workers` and `jobs` leave out
-    the pilot jobs and the workers that published their exit,
+    `worker_jobs`, `workers` and `jobs`
+    leave out the pilot jobs and the workers that published their exit,
     and the Slurm jobs of those pilot jobs.
     A poll that failed sets `error` and leaves every other reading empty.
     """
@@ -215,7 +215,7 @@ class Snapshot:
 class Collector:
     """Turns the server's RPCs into a `Snapshot`.
 
-    One instance is meant to serve every poll of one server.
+    One instance serves every poll of one server.
     It reads each worker, pilot job and task name once, and caches them.
     """
 
@@ -236,9 +236,9 @@ class Collector:
         """One poll of the server, as a `Snapshot`.
 
         A key the server does not hold does not raise.
-        A missing worker or pilot job description reads as `UNKNOWN`,
-        a missing progress display as no progress,
-        and a running task with no known worker as an empty worker.
+        A missing worker or pilot job description reads as `UNKNOWN`.
+        A missing progress display reads as no progress.
+        A running task with no known worker reads as an empty worker.
         But a server that the client cannot reach raises.
         The caller decides whether to keep polling.
         """
@@ -264,7 +264,8 @@ class Collector:
         exited_jobs, exited_workers = exited
         # The tasks do need the workers:
         # a running task carries the name of the worker that holds it.
-        # Every worker, since one that just exited can still hold a task.
+        # The tasks need every worker,
+        # since a worker that just exited can still hold a task.
         tasks = await self._collect_tasks(workers)
 
         exited_slurm_jobs = {
@@ -273,8 +274,8 @@ class Collector:
 
         return Snapshot(
             address=self.address,
-            # Local time: `when` is only drawn on screen,
-            # never compared with the UTC series times.
+            # Local time: `when` only appears on screen,
+            # and nothing compares it with the UTC series times.
             when=datetime.now(),
             counts={
                 "waiting": counts.waiting,
@@ -363,7 +364,7 @@ class Collector:
         return sorted(listed, key=lambda j: (j.group, j.name))
 
     async def _pilot_job_start(self, name: str) -> None:
-        """Cache when one job started, if its key is readable."""
+        """Cache when one pilot job started, if its key is readable."""
         text = await self._text(f"{PILOT_JOB_START_PREFIX}{name}")
         try:
             start_time = str(json.loads(text)["start_time"])
@@ -374,7 +375,7 @@ class Collector:
         self._pilot_job_starts[name] = start_time
 
     async def _pilot_job_info(self, name: str) -> None:
-        """Cache one job's published description, if it is readable."""
+        """Cache one pilot job's published description, if it is readable."""
         text = await self._text(f"{PILOT_JOB_INFO_PREFIX}{name}")
         try:
             published = json.loads(text)
@@ -539,7 +540,10 @@ def _unknown_pilot_job(name: str) -> PilotJobInfo:
 
 
 def _state_rank(state: str) -> int:
-    """Where a state sorts, with a state `STATE_ORDER` omits sorting last."""
+    """Where a state sorts.
+
+    A state that `STATE_ORDER` omits sorts last.
+    """
     try:
         return STATE_ORDER.index(state)
     except ValueError:
@@ -648,7 +652,7 @@ def host_rows(snapshot: Snapshot) -> list[tuple[str, list[str]]]:
 
 def job_rows(snapshot: Snapshot) -> list[tuple[str, list[str]]]:
     """One row per monitored Slurm job per node, keyed by `<job-id>:<hostname>`."""
-    rows = []
+    rows: list[tuple[str, list[str]]] = []
     for job in snapshot.jobs:
         slurm_job_id, hostname = split_job_subject(job.subject)
         if job.stale:
@@ -658,7 +662,7 @@ def job_rows(snapshot: Snapshot) -> list[tuple[str, list[str]]]:
                 job.subject,
                 [
                     slurm_job_id,
-                    # A subject with no hostname was written by a worker
+                    # A subject with no hostname comes from a worker
                     # from before the job series were per node.
                     hostname or UNKNOWN,
                     _cell(job.values, "memory", _bytes),
@@ -780,7 +784,7 @@ async def run_plain(collector: Collector, interval: float) -> None:
             draw(render(snapshot))
             await asyncio.sleep(interval)
     except KeyboardInterrupt:
-        # Only reached outside `asyncio.run`, which raises a Ctrl-C at its caller.
+        # This runs only outside `asyncio.run`, which raises a Ctrl-C at its caller.
         pass
 
 
@@ -794,8 +798,8 @@ async def watch(server_address: str, interval: float, plain: bool) -> None:
         if plain or not sys.stdout.isatty():
             await run_plain(collector, interval)
         else:
-            # The import sits here, so the text path
-            # and the tests that drive it do not pay for loading Textual.
+            # Imported here for the reason in the `swtop.py` row
+            # of "Where things live" in the developer notes.
             from .swtop_tui import run_app
 
             await run_app(collector, interval)
@@ -819,8 +823,8 @@ async def watch(server_address: str, interval: float, plain: bool) -> None:
 def swtop(server_address: str, interval: float, plain: bool) -> None:
     """Watch the tasks and workers on the ds-service server at SERVER_ADDRESS.
 
-    SERVER_ADDRESS is `host:port`, the same address an executor is given.
-    Runs until interrupted.
+    SERVER_ADDRESS is `host:port`, the same address that an executor connects to.
+    It runs until the viewer interrupts it.
     """
     if interval <= 0:
         raise click.BadParameter("must be greater than 0", param_hint="'--interval'")
@@ -829,5 +833,5 @@ def swtop(server_address: str, interval: float, plain: bool) -> None:
         asyncio.run(watch(server_address, interval, plain))
     except KeyboardInterrupt:
         # `asyncio.run` turns a Ctrl-C into a cancel of the loop,
-        # and raises it here once the loop has stopped.
+        # and raises it here once the loop stops.
         pass

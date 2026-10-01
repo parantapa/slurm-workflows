@@ -53,8 +53,9 @@ filterwarnings = [
     "error::PendingDeprecationWarning",
 ]
 
-# Pinned to the `requires-python` floor so formatting does not drift
-# with whatever Python happens to be running black.
+# The target matches the `requires-python` floor,
+# so the formatting does not drift
+# with the Python version that runs black.
 [tool.black]
 target-version = ["py312"]
 

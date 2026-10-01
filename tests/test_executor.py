@@ -43,7 +43,7 @@ def num_workers(ex: SlurmPilotExecutor, detail: bool = False) -> int | dict[str,
 
 
 # Where a test needs a task to finish,
-# it plays the worker's part with `drain()` rather than launching one,
+# it plays the worker's part with `drain()` rather than launch one,
 # so it tests the executor apart from the worker.
 def drain(ds_client: DsServiceClient, queue: str, count: int) -> list[str]:
     """Act as a worker: pull `count` tasks and post their real results."""
@@ -74,7 +74,7 @@ def fail_one(
 
 
 def ghost_task() -> Task:
-    """A task the server has never heard of, so it polls back as `Undefined`."""
+    """A task the server does not know, so it polls back as `Undefined`."""
 
     return Task(
         task_id="does-not-exist",
@@ -983,7 +983,7 @@ class TestTaskParents:
 
     def test_a_child_waits_for_its_parent(self, executor, ds_client):
         parent = executor.submit("cpu", square, 2)
-        # A higher priority would win, if the child were Ready.
+        # The higher priority wins only when the child is Ready.
         child = executor.submit(
             "cpu", square, 3, task_parents=[parent], task_priority=10.0
         )
@@ -1166,9 +1166,9 @@ class TestAsCompleted:
                 list(executor.as_completed([ghost_task()], desc="test"))
 
     def test_unknown_task_id_raises_from_wait(self, executor, time_limit):
-        # `wait` gets this from `_as_completed`, as `as_completed` does,
-        # so the test pins the guarantee to both entry points
-        # rather than trusting the shared loop to stay.
+        # `wait` gets this from `_as_completed`, as `as_completed` does.
+        # The test pins the guarantee to both entry points
+        # rather than trust the shared loop to stay.
         with time_limit(10, "wait never terminated for an unknown task"):
             with pytest.raises(RuntimeError, match="unknown to the task queue server"):
                 executor.wait([ghost_task()], desc="test")
@@ -1405,7 +1405,7 @@ class TestNoWorkerStarted:
     """The up-front check, before any polling and without asking Slurm."""
 
     def test_a_group_that_was_never_scaled_is_rejected(self, executor, setup_script):
-        """Defining a group submits nothing, so no worker exists for it."""
+        """`define_job_group` submits nothing, so no worker exists for the group."""
         executor.define_job_group("cpu", [], setup_script)
         task = executor.submit("cpu", square, 2)
 
@@ -1453,7 +1453,7 @@ class TestNoWorkerStarted:
     def test_only_the_starved_tasks_are_given_up_on(
         self, executor, ds_client, setup_script
     ):
-        """A queue nobody scaled says nothing about the queues that were."""
+        # See the developer notes, "_as_completed drops a task that can never run, not the batch".
         executor.define_job_group("cpu", [], setup_script)
         executor.scale_jobs("cpu", 1)
         good = [executor.submit("cpu", square, i) for i in range(3)]
@@ -1489,7 +1489,7 @@ class TestNoWorkerStarted:
     def test_the_count_is_of_tasks_not_of_messages(
         self, executor, ds_client, setup_script
     ):
-        """One message covers every task on a dead queue."""
+        # See the developer notes, "_as_completed drops a task that can never run, not the batch".
         executor.define_job_group("cpu", [], setup_script)
         executor.scale_jobs("cpu", 1)
         done = executor.submit("cpu", square, 1)
@@ -1537,7 +1537,7 @@ def check_immediately(monkeypatch: pytest.MonkeyPatch) -> None:
     """Collapse the liveness interval so one poll triggers a check."""
 
     # The real interval lets a submit come before its `scale_jobs` call.
-    # These tests are about what happens after it has elapsed.
+    # These tests are about what happens after the interval elapses.
     monkeypatch.setattr(spe, "LIVE_QUEUE_CHECK_INTERVAL_S", 0.0)
 
 
@@ -1571,7 +1571,7 @@ class TestStrandedTasks:
     def test_a_task_is_fine_while_any_of_its_queues_is_live(
         self, executor, fake_slurm, setup_script, ds_client, check_immediately
     ):
-        """Submitting to several queues survives losing one of them."""
+        """A task submitted to several queues survives the loss of one of them."""
         executor.define_job_group("cpu", [], setup_script)
         executor.define_job_group("gpu", [], setup_script)
         executor.scale_jobs("cpu", 1)

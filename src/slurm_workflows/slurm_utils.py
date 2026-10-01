@@ -4,7 +4,7 @@ import os
 import re
 import subprocess
 from pathlib import Path
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import cache
 
@@ -20,20 +20,19 @@ SCANCEL_EXE = "scancel"
 
 
 @cache
-def get_clean_environ() -> dict[str, str]:
+def get_clean_environ() -> Mapping[str, str]:
     """The environment, less every Slurm-set variable.
 
-    Drops `SLURM_`, `SLURMD_`, `PMI_` and `SRUN_`.
+    The call drops `SLURM_`, `SLURMD_`, `PMI_` and `SRUN_`.
     A job submitted from inside an allocation
     takes none of that allocation's settings.
 
-    The result is built once per process and shared between callers.
-    A later change to `os.environ` does not show in it,
-    and a caller must not modify it.
+    The result is built once per process and shared between callers,
+    so a later change to `os.environ` does not show in it.
     """
-    # `sbatch` reads `SLURM_*` variables as defaults,
-    # so a driver inside an allocation would give every pilot job
-    # its own node count and Slurm task count.
+    # `sbatch` reads `SLURM_*` variables as defaults.
+    # If a driver inside an allocation passes them on,
+    # every pilot job gets the node count and Slurm task count of that allocation.
     sanitized_env: dict[str, str] = {}
     for k, v in os.environ.items():
         if (
@@ -52,7 +51,7 @@ def get_clean_environ() -> dict[str, str]:
 def get_running_jobids() -> set[int]:
     """The ids of this user's Slurm jobs, pending or running.
 
-    Raises `subprocess.CalledProcessError` if `squeue` fails,
+    The call raises `subprocess.CalledProcessError` if `squeue` fails,
     and `subprocess.TimeoutExpired` if it does not answer in time.
     """
     cmd = [SQUEUE_EXE, "--all", "--me", "--noheader", "--format", "%A"]
@@ -80,7 +79,7 @@ def cancel_jobs(
     An empty list is a no-op.
     `term`, `batch` and `full` add `scancel`'s `--signal=TERM`,
     `--batch` and `--full` respectively.
-    Raises `subprocess.CalledProcessError` if `scancel` fails,
+    The call raises `subprocess.CalledProcessError` if `scancel` fails,
     and `subprocess.TimeoutExpired` if it does not answer in time.
     """
     if not job_ids:
@@ -120,11 +119,12 @@ def submit_sbatch_job(
 ) -> SlurmJob:
     """Submit one job, and return it with its id and output file resolved.
 
-    Writes `<name>.sbatch` into `work_dir` and makes it executable.
+    The call writes `<name>.sbatch` into `work_dir` and makes it executable.
     `sbatch` runs in the environment `get_clean_environ()` returns.
-    Raises `RuntimeError` if `sbatch` succeeds but its output holds no job id,
-    `ValueError` if the job id it prints is not a number,
-    `subprocess.CalledProcessError` if `sbatch` fails,
+    The call raises `RuntimeError` if `sbatch` succeeds
+    but its output holds no job id,
+    and `ValueError` if the job id it prints is not a number.
+    The call also raises `subprocess.CalledProcessError` if `sbatch` fails,
     and `subprocess.TimeoutExpired` if it does not answer in time.
     """
     output_file = str(work_dir / f"{name}-%j.out")

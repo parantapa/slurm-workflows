@@ -6,7 +6,7 @@
 the parameter range types both space classes take.
 The objective contract is in [The objective](objective.md).
 
-A space is a mapping from **objective argument name** to a range.
+A space is a mapping from objective argument name to a range.
 
 ```python
 from slurm_workflows import IntRange, FloatRange, CategoricalRange
@@ -22,8 +22,8 @@ SPACE = {
 | --- | --- | --- |
 | `IntRange(min, max)` | An `int` in `[min, max]` | |
 | `FloatRange(min, max)` | A `float` in `[min, max]` | |
-| `FloatRange(min, max, log_range=True)` | A `float` in `[min, max]` | Searched in log space, so each decade gets equal budget. Requires `min > 0`. |
-| `CategoricalRange(num_categories)` | An `int` in `[0, num_categories - 1]` | An index into a caller-supplied list of values. `num_categories = 1` is allowed but is a dead dimension. |
+| `FloatRange(min, max, log_range=True)` | A `float` in `[min, max]` | Searched in log space, so each decade gets an equal budget. Requires `min > 0`. |
+| `CategoricalRange(num_categories)` | An `int` in `[0, num_categories - 1]` | An index into a caller-supplied list of values. `num_categories = 1` is valid, but it is a dead dimension. |
 
 `IntRange` and `FloatRange` need `max > min`,
 and `CategoricalRange` needs at least one category.
@@ -40,5 +40,5 @@ to get back an integer or a categorical parameter.
 Both classes record where the objective actually ran, after rounding,
 not the continuous candidate.
 
-What that rounding costs a search on a mostly-discrete space
+What that rounding costs a search on a mostly discrete space
 is in [Batch Bayesian optimization](../explanation/batch-bayesian-optimization.md).

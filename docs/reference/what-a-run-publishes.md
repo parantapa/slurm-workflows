@@ -39,8 +39,8 @@ so anything can read it:
 | `restart_generation` | The value of the `restart_generation:<group>` counter when it started |
 | `start_time` | When it started, an ISO 8601 timestamp with an offset |
 
-The worker id is what the worker claims tasks under
-(`task_get_worker_id` says which worker holds a running task).
+The worker id is what the worker claims tasks under.
+`task_get_worker_id` says which worker holds a running task.
 It is the path from a task to the worker and the node that ran it.
 Nothing removes the key when a worker exits.
 
@@ -79,6 +79,16 @@ on a queue of its own, under `<executor-name>.mapreduce.`.
 Those tasks outlive the call.
 [`mapreduce`](mapreduce.md) covers the ids and what they hold.
 
+### Task names and actor arguments
+
+**The executor also writes three kinds of key**.
+`task_name:<task-id>` holds the UTF-8 name that `set_task_name` gives a task.
+`actor_class_args:<group>` and `actor_class_kwargs:<group>` hold the cloudpickled constructor arguments
+of a job group's actor.
+[`Task`](executor.md#task)
+and [`define_job_group` options](executor.md#define_job_group-options)
+describe them.
+
 ### The restart counter
 
 **The executor counts the restarts of each job group**
@@ -89,10 +99,11 @@ A counter that does not exist reads as 0.
 Each worker reads it when it starts,
 before it publishes `worker_info:<worker-id>`,
 and records the value there as `restart_generation`.
+
 A worker that sees the counter move past that value
 publishes its exit after its current task, and exits.
 The worker script then starts a new worker in its place.
-The new worker has a new pid,
+The new worker has a new process id,
 so it publishes a `worker_info:` key of its own,
 under a new worker id.
 
@@ -110,8 +121,8 @@ Every 5 seconds they append to these `ds-service` time series:
 - `slurm_job_cpu:<job-id>:<hostname>`
 
 On a node where the job can see a GPU,
-the same worker also samples each GPU it can see,
-and appends to these time series,
+the same worker also samples each GPU it can see.
+It appends to these time series,
 where `<gpu>` is the index NVML gives the GPU, as `nvidia-smi` shows it:
 
 | Series | Value |
@@ -156,6 +167,7 @@ into the same host series.
 After a restart, the new workers elect a new monitor.
 Until the worker that won the old election restarts,
 it samples the node as well, into the same series.
+
 [`swtop`](swtop.md) displays the host and job series.
 It does not display the GPU series yet.
 
@@ -197,15 +209,15 @@ and the attribute `executor.work_dir` holds it:
 
 | File | Contents |
 | --- | --- |
-| `executor.log` | Pilot job submission and cancellation from the executor's side, a line for each `mapreduce` call, a line for each `restart_jobs` call and for the end of its wait, and each liveness check that could not run `squeue` |
+| `executor.log` | Pilot job submission, and cancellation by `scale_jobs`, from the executor's side. A line for each `mapreduce` call that enqueues items. A line for each `restart_jobs` call, and one for the end of its wait. Each liveness check that could not run `squeue`. |
 | `<job-name>.sh`, `<job-name>.sbatch` | The generated scripts |
 | `<job-name>-<job-id>-<rank>.out` | One per Slurm task, shared by each worker a restart starts in it: setup-script output, task-by-task progress, full tracebacks |
 | `<job-name>-<job-id>.out` | The pilot job's own output, and the worker's log too when the job holds a single Slurm task or runs a batch worker |
 
 `<job-name>` is `<executor-name>.job.<group>.<index>`,
 which is the Slurm job name, so `squeue` shows which run a job belongs to.
-The work dir itself defaults to the path that
-[`SlurmPilotExecutor`](executor.md#slurmpilotexecutorname-server_address-work_dirnone) gives.
+The work dir itself defaults to the path
+that [`SlurmPilotExecutor`](executor.md#slurmpilotexecutorname-server_address-work_dirnone) gives.
 
 Slurm writes those files.
 The worker does not redirect its own output.

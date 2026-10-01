@@ -37,13 +37,13 @@ SAMPLE_SPACE = {
 }
 
 
-def inside_quarter_circle(x, y):
+def inside_quarter_circle(x: float, y: float) -> dict[str, float]:
     """Score one sample point: 4 inside the quarter circle, 0 outside."""
     radius = math.hypot(x, y)
     return {"score": 4.0 if radius <= 1.0 else 0.0, "radius": radius}
 
 
-def main():
+def main() -> None:
     with DsServiceServer(interface="ib0") as ds_service:
         ds_service.wait_until_ready()
         address = ds_service.address

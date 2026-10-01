@@ -6,9 +6,7 @@
 report_pilot_job() {
     /bin/bash '{{ worker_script_path }}' --pilot-job-event "$1" || true
 }
-# Slurm sends SIGTERM when it cancels the job or the job reaches its time limit.
-# The TERM trap turns it into a plain `exit 143` (128 + 15),
-# so the job exits with that status after the EXIT trap has run.
+# Turns the SIGTERM Slurm sends into `exit 143` (128 + 15).
 # See the developer notes, Slurm interaction.
 trap 'exit 143' TERM
 trap 'report_pilot_job exit' EXIT
@@ -51,12 +49,10 @@ fi
 set -Eeuo pipefail
 set -x
 
-# A worker that exits with {{ restart_exit_code }} asked for a restart,
-# so a fresh interpreter starts in its place and imports the code from disk again.
-# Only the worker runs again, not the setup script.
+# A worker that exits with {{ restart_exit_code }} asked for a restart.
 # See the developer notes, Restarting workers.
 # `|| status=$?` keeps `set -e` from ending the script on that status.
-# The batch script passes --pilot-job-event through here.
+# The batch script passes `--pilot-job-event` through here.
 while true; do
     status=0
     {{ worker_exe }} \

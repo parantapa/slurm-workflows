@@ -3,8 +3,9 @@
 [<- back to the main README](../../README.md)
 
 In this tutorial we compute $\pi$ again,
-this time with `ExploreSpaceSobolQMC`,
-which owns the submit-and-wait loop we wrote by hand before.
+this time with `ExploreSpaceSobolQMC`.
+That class owns the submit-and-wait loop
+we wrote by hand before.
 The exploration draws a low-discrepancy design over a space,
 evaluates every point of that design across a pool of workers,
 and keeps what came back.
@@ -12,7 +13,7 @@ and keeps what came back.
 We run on the `bii` partition of the Rivanna cluster at UVA,
 under the `bii_nssac` account.
 
-The complete program can be found at
+The complete program is in
 [`examples/example_compute_pi_qmc.py`](../../examples/example_compute_pi_qmc.py).
 
 ## Before we start
@@ -40,7 +41,8 @@ The mean objective value over the design is then an estimate of $\pi$.
 
 The exploration draws the points from a scrambled Sobol' sequence,
 not from uniform sampling.
-A Sobol' sequence gives low-discrepancy points for Quasi Monte Carlo methods.
+A Sobol' sequence gives low-discrepancy points
+for quasi-Monte Carlo (QMC) methods.
 
 ## The whole program
 
@@ -79,13 +81,13 @@ SAMPLE_SPACE = {
 }
 
 
-def inside_quarter_circle(x, y):
+def inside_quarter_circle(x: float, y: float) -> dict[str, float]:
     """Score one sample point: 4 inside the quarter circle, 0 outside."""
     radius = math.hypot(x, y)
     return {"score": 4.0 if radius <= 1.0 else 0.0, "radius": radius}
 
 
-def main():
+def main() -> None:
     with DsServiceServer(interface="ib0") as ds_service:
         ds_service.wait_until_ready()
         address = ds_service.address
@@ -136,12 +138,12 @@ python examples/example_compute_pi_qmc.py
 ```
 
 The program does not print the server address.
-The executor prints its work directory when it starts,
-and the worker script `compute-pi-qmc.job.bii.0.sh` in that directory
+The executor prints its work directory when it starts.
+In that directory, the worker script `compute-pi-qmc.job.bii.0.sh`
 carries the address after `--server-address`.
 
-We open a second shell on the login node
-and point [`swtop`](../how-to-guides/watch-a-run-with-swtop.md)
+We open a second shell on the login node.
+There we point [`swtop`](../how-to-guides/watch-a-run-with-swtop.md)
 at that address.
 Here it is `10.0.0.1:5051`:
 
@@ -152,7 +154,7 @@ swtop 10.0.0.1:5051
 We watch the `ready` count fall from 4096 toward zero,
 as the workers claim the points and post what the objective returned.
 
-Behind that count, this happens, in order:
+Behind that count, these steps happen, in order:
 
 * The server, the pilot job and the workers start
     as in [Computing pi on a Slurm cluster](computing-pi.md).
@@ -161,7 +163,7 @@ Behind that count, this happens, in order:
 * The exploration names the tasks `compute-pi-qmc-explore-0000` and up,
     so each point is recognizable in the tasks block.
 * `run` blocks until every task is back.
-* `save` writes the points, the objective values and the whole outputs to a file.
+* `save` writes the points, the objective values and the whole mappings to a file.
 * The executor cancels the pilot job at the end of its block.
 * The driver averages the objective values.
 

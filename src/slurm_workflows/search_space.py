@@ -23,14 +23,14 @@ class IntRange:
             raise ValueError(f"IntRange needs max > min, got {self.min}, {self.max}")
 
     def standardize(self, x: int) -> float:
-        """Move from [min, max] range to [0, 1] range.
+        """Move from the [min, max] range to the [0, 1] range.
 
         A value outside the range maps outside `[0, 1]`.
         """
         return (x - self.min) / (self.max - self.min)
 
     def unstandardize(self, y: float) -> int:
-        """Move from [0, 1] range to the nearest integer in [min, max]."""
+        """Move from the [0, 1] range to the nearest integer in [min, max]."""
         x = round(self.min + y * (self.max - self.min))
         return int(min(max(x, self.min), self.max))
 
@@ -56,21 +56,21 @@ class FloatRange:
             raise ValueError(f"log_range needs min > 0, got {self.min}")
 
     def standardize(self, x: float) -> float:
-        """Move from [min, max] range to [0, 1] range.
+        """Move from the [min, max] range to the [0, 1] range.
 
         A value outside the range maps outside `[0, 1]`.
-        With `log_range`, raises `ValueError` for an `x` at or below zero.
+        With `log_range`, the call raises `ValueError` for an `x` at or below zero.
         """
         if self.log_range:
-            # Both ends and the value into log space, so the mapping back
-            # in `unstandardize` is the exact inverse.
+            # Both ends and the value go into log space,
+            # so the mapping back in `unstandardize` is the exact inverse.
             lo, hi, x = math.log(self.min), math.log(self.max), math.log(x)
         else:
             lo, hi = self.min, self.max
         return (x - lo) / (hi - lo)
 
     def unstandardize(self, y: float) -> float:
-        """Move from [0, 1] range to [min, max] range.
+        """Move from the [0, 1] range to the [min, max] range.
 
         A `y` outside `[0, 1]` clamps to the nearer bound.
         """
@@ -84,7 +84,7 @@ class FloatRange:
 
 @dataclass
 class CategoricalRange:
-    """Categorical range, standardized as an index in `[0, n - 1]`.
+    """Categorical range: an index in `[0, n - 1]`, standardized to `[0, 1]`.
 
     `num_categories` must be at least 1, or construction raises `ValueError`.
     `CategoricalRange` accepts `num_categories=1`,
@@ -100,13 +100,17 @@ class CategoricalRange:
             raise ValueError(f"num_categories must be >= 1, got {self.num_categories}")
 
     def standardize(self, x: int) -> float:
-        """Move from [0, num_categories - 1] range to [0, 1] range."""
+        """Move from the [0, num_categories - 1] range to the [0, 1] range.
+
+        A value outside the range maps outside `[0, 1]`,
+        except with one category, where every value maps to 0.
+        """
         if self.num_categories == 1:
             return 0.0
         return x / (self.num_categories - 1)
 
     def unstandardize(self, y: float) -> int:
-        """Move from [0, 1] range to [0, num_categories - 1] range.
+        """Move from the [0, 1] range to the [0, num_categories - 1] range.
 
         A `y` outside `[0, 1]` clamps to the nearer bound.
         """
@@ -141,5 +145,8 @@ def to_params(space: SearchSpace, unit: Sequence[float]) -> dict[str, Any]:
 
 
 def to_unit(space: SearchSpace, params: Mapping[str, Any]) -> list[float]:
-    """Map the objective's keyword arguments to a unit point."""
+    """Map the objective's keyword arguments to a unit point.
+
+    The call raises `ValueError` where a log range gets a value at or below zero.
+    """
     return [range_.standardize(params[name]) for name, range_ in space.items()]

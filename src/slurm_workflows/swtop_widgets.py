@@ -43,7 +43,7 @@ class SnapshotView(Protocol):
     def show(self, snapshot: Snapshot) -> None:
         """Draw what the view can of `snapshot`.
 
-        `snapshot` may be a failed poll, with `error` set and every reading empty.
+        `snapshot` can be a failed poll, with `error` set and every reading empty.
         """
         ...
 
@@ -60,7 +60,7 @@ def sync_table(table: DataTable, rows: Sequence[tuple[str, list[str]]]) -> None:
     wanted = {key: cells for key, cells in rows}
     columns = list(table.columns)
 
-    # Never `DataTable.clear()`, which loses the scroll position and the cursor.
+    # Never call `DataTable.clear()`, which loses the scroll position and the cursor.
     for key in [str(row.value) for row in table.rows]:
         if key not in wanted:
             table.remove_row(key)
@@ -79,7 +79,7 @@ def sync_table(table: DataTable, rows: Sequence[tuple[str, list[str]]]) -> None:
 
 
 class SummaryLine(Static):
-    """The task counts, and when the server was last read."""
+    """The task counts, and when the collector last read the server."""
 
     DEFAULT_CSS = """
     SummaryLine {
@@ -154,7 +154,7 @@ class ProgressDisplay(Vertical):
 class BlockTable(Vertical):
     """The rows of one block, or what the block says when it is empty.
 
-    The block's title and count are not drawn here.
+    The table does not draw the block's title and count.
     They belong in the label of the tab that holds the table,
     so the table posts `CountChanged` for whatever holds it.
     """
@@ -301,6 +301,7 @@ class TaskTable(BlockTable):
 
     It shows only the tasks in `states`, which follow its checkboxes.
     Its count, and so the tab label, is the number of tasks it shows.
+    A `TaskStateFilter.Changed` continues to bubble past it.
     """
 
     def __init__(
@@ -326,7 +327,7 @@ class TaskTable(BlockTable):
         return self.spec.empty if not snapshot.tasks else EMPTY_TASKS_IN_STATES
 
     def on_task_state_filter_changed(self, event: TaskStateFilter.Changed) -> None:
-        # The message goes on bubbling, for an app that wants the states too.
+        # The message continues to bubble, for an app that wants the states too.
         self.states = event.states
         self.redraw()
 
@@ -342,7 +343,10 @@ def block_table(spec: BlockSpec, **kwargs: Any) -> BlockTable:
 
 
 class BlockPane(TabPane):
-    """A tab that holds the table of one block, and keeps its count in its label."""
+    """A tab that holds the table of one block, and keeps its count in its label.
+
+    A `BlockTable.CountChanged` continues to bubble past it.
+    """
 
     DEFAULT_CSS = """
     BlockPane { padding: 0; }
@@ -355,7 +359,6 @@ class BlockPane(TabPane):
     def on_block_table_count_changed(self, event: BlockTable.CountChanged) -> None:
         # A `TabPane` has no way to change its own label in Textual 8.2,
         # so ask the `TabbedContent` it sits in for its tab.
-        # The message goes on bubbling, for an app that wants the count too.
         try:
             tabs = self.query_ancestor(TabbedContent)
         except NoMatches:
@@ -397,8 +400,9 @@ class SnapshotPoller(Widget):
     on the app's event loop, and closes it on unmount.
     With `collector`, the caller owns the collector,
     which must belong to the app's event loop.
-    Construction raises `ValueError` if both or neither are given,
+    Construction raises `ValueError` if the caller gives both or neither,
     or if `interval` is not greater than 0.
+    The poller attaches `views` from the start, as `attach` does.
 
     After each poll the poller calls `show` on every attached view,
     and then posts `Polled`.
@@ -434,8 +438,8 @@ class SnapshotPoller(Widget):
         self.address = collector.address if collector is not None else address
         self.collector = collector
         self.interval = interval
-        # Views come only through `attach`, never a DOM query,
-        # which would also find a second poller's views.
+        # Views come only through `views` and `attach`, never through a DOM query,
+        # which also finds the views of a second poller.
         self.views: list[SnapshotView] = list(views)
         # The last snapshot, which a view attached later starts from.
         self.snapshot: Snapshot | None = None
@@ -448,9 +452,9 @@ class SnapshotPoller(Widget):
     def attach(self, *views: SnapshotView) -> None:
         """Show every later snapshot on `views` too.
 
-        A view that is attached after a poll shows that poll's snapshot at once,
+        A view that `attach` adds after a poll shows that poll's snapshot at once,
         so it does not wait for the next interval.
-        A widget must be mounted before it is attached.
+        Attach a widget only after it mounts.
         """
         new = [v for v in views if v not in self.views]
         self.views.extend(new)
@@ -480,24 +484,29 @@ class SnapshotPoller(Widget):
     def poll_now(self) -> None:
         """Poll now rather than at the next interval, without blocking.
 
-        A poll in flight is never cut short.
-        A call while one is in flight polls once more when it ends,
-        so what was asked for still reads the server afresh.
+        A poll in flight always runs to its end.
+        A call that arrives while a poll is in flight
+        starts one more poll when that poll ends,
+        so the caller still gets a fresh read of the server.
         """
         if self._polling:
             self._again = True
             return
 
         # One poll at a time, and each one runs to its end.
-        # See "`SnapshotPoller` lets a slow poll finish" in the developer notes.
+        # The rejected alternative cancels the poll in flight at every tick.
+        # With that alternative, a poll slower than the interval never finishes,
+        # and the screen keeps its first reading with no error to say why.
         self._polling = True
         # The group is per poller, so two pollers leave each other alone.
         self.run_worker(self._poll, group=f"swtop-poll-{id(self)}")
 
     def _tick(self) -> None:
         """Poll on the interval, unless a poll is still in flight."""
-        # A tick during a slow poll is dropped, not queued.
-        # See "`SnapshotPoller` lets a slow poll finish" in the developer notes.
+        # The poller drops a tick that comes during a slow poll,
+        # and does not queue it.
+        # As a result, the poller polls a slow server as often as it answers,
+        # and no more.
         if not self._polling:
             self.poll_now()
 
@@ -529,7 +538,7 @@ class SnapshotPoller(Widget):
         finally:
             self._polling = False
 
-        # Not reached when unmounting cancels the poll,
+        # The code below does not run when an unmount cancels the poll,
         # so a poller on its way out starts nothing new.
         if self._again:
             self._again = False

@@ -118,9 +118,9 @@ class ExplorationResult:
     """What one study measured, in submission order.
 
     The four lists are index-aligned.
-    The exploration evaluates `points[i]`,
-    gets the objective's whole result back as `outputs[i]`,
-    ranks the point by `values[i]`,
+    The exploration evaluates `points[i]`
+    and gets the objective's whole result back as `outputs[i]`.
+    It ranks the point by `values[i]`,
     and records `unit_points[i]` as its place in the unit cube.
     `unit_points` is where the objective ran, after any rounding.
     """
@@ -134,6 +134,15 @@ class ExplorationResult:
 class ExploreSpaceSobolQMC:
     """Sobol' QMC explorations of one or more search spaces, run together.
 
+    The constructor validates every study now, not when the exploration runs,
+    and fills in what each study left to the exploration.
+    `num_exploration_points` is the count for studies that do not carry their own.
+    The constructor raises `ValueError` for an empty list,
+    and for a repeated study name.
+    It also raises `ValueError` for a study that fails validation,
+    such as one with no point count from either source.
+    `self.studies` holds copies with the point count and seed filled in.
+    The caller's own objects stay as they are.
     A method that takes a study name raises `KeyError` for a name no study has.
     """
 
@@ -143,16 +152,6 @@ class ExploreSpaceSobolQMC:
         executor: SlurmPilotExecutor,
         num_exploration_points: int | None = None,
     ) -> None:
-        """Validate every study and fill in what it left to the exploration.
-
-        `num_exploration_points` is the count for studies that do not carry their own.
-        The exploration validates every study now, not when it runs.
-        It raises `ValueError` for an empty list, for a repeated study name,
-        and for a study that fails validation,
-        such as one with no point count from either source.
-        `self.studies` holds copies with the point count and seed filled in.
-        The caller's own objects stay as they are.
-        """
         if not studies:
             raise ValueError("no exploration studies given")
 
@@ -204,14 +203,14 @@ class ExploreSpaceSobolQMC:
                 flush=True,
             )
 
-        # A power-of-two count:
-        # a Sobol' sequence is only balanced on a power-of-two prefix.
         return replace(
             study,
             # A copy of the space as well,
             # so a later change to the caller's mapping
             # cannot move the columns of a unit point.
             space=dict(study.space),
+            # A power-of-two count:
+            # a Sobol' sequence is only balanced on a power-of-two prefix.
             num_exploration_points=floor_power_of_two(points),
             seed=seed,
         )
@@ -230,8 +229,9 @@ class ExploreSpaceSobolQMC:
         return space_dim(self._study(name).space)
 
     def design(self, name: str) -> list[dict[str, Any]]:
-        """The points a study will evaluate, without evaluating them.
+        """The points a study will evaluate.
 
+        The call evaluates none of them.
         Reproducible: the same seed redraws the same design.
         """
         study = self._study(name)
@@ -252,12 +252,12 @@ class ExploreSpaceSobolQMC:
         A second call re-evaluates the same designs,
         and appends to the results the first call recorded.
         The exploration names each point `<study>-explore-<index>` on the server.
-        It prints each study's best point when done.
+        It prints each study's best point when it finishes.
         If any evaluation fails,
         it records every result that came back, then raises `RuntimeError`.
-        Otherwise, if an objective returns a result it cannot rank,
-        it raises `RuntimeError` at that result,
-        and records only the results before it in submission order.
+        Otherwise, if an objective returns a result the exploration cannot rank,
+        the exploration raises `RuntimeError` at that result.
+        It records only the results before that result in submission order.
         """
         # Every submit comes before the one wait.
         # See the developer notes, Sobol' exploration.
@@ -281,7 +281,7 @@ class ExploreSpaceSobolQMC:
         try:
             self._wait(submitted)
         except RuntimeError:
-            # Keep what came back before re-raising.
+            # Keep what came back, then re-raise.
             # See the developer notes, Task flow.
             self._record_returned(submitted)
             raise
@@ -351,7 +351,7 @@ class ExploreSpaceSobolQMC:
         best = self._best_index(name)
         result = self.results[name]
         params = format_mapping(result.points[best])
-        # The whole result, not just the ranked value.
+        # The whole result, not only the ranked value.
         output = format_mapping(result.outputs[best])
         print(
             f"{name}: best of {len(result.values)} points " f"at {params} -> {output}",
@@ -370,7 +370,7 @@ class ExploreSpaceSobolQMC:
     def best_point(self, name: str) -> tuple[dict[str, Any], float]:
         """A study's best point (params, objective value) so far.
 
-        Raises `RuntimeError` if `run` has recorded nothing for the study yet.
+        Raises `RuntimeError` if `run` recorded nothing for the study yet.
         """
         best = self._best_index(name)
         result = self.results[name]
@@ -379,7 +379,7 @@ class ExploreSpaceSobolQMC:
     def best_output(self, name: str) -> dict[str, Any]:
         """The objective's whole result at a study's best point so far.
 
-        Raises `RuntimeError` if `run` has recorded nothing for the study yet.
+        Raises `RuntimeError` if `run` recorded nothing for the study yet.
         """
         return dict(self.results[name].outputs[self._best_index(name)])
 
@@ -390,7 +390,8 @@ class ExploreSpaceSobolQMC:
         Each entry holds `points`, `values` and `outputs`,
         index-aligned and in submission order.
         `load_results` reads it back.
-        Plain `pickle`, so an objective's result must be plainly picklable.
+        The file uses plain `pickle`,
+        so an objective's result must be plainly picklable.
         Overwrites `path`.
         If the exploration evaluated nothing, it writes empty lists.
         """

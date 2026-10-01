@@ -48,6 +48,9 @@ PILOT_JOB_EXIT_PREFIX = "pilot_job_exit:"
 # A worker that sees it move exits with `RESTART_EXIT_CODE`,
 # and the worker script starts it again on that status.
 # 75 is `EX_TEMPFAIL` from `sysexits.h`.
+# It collides with none of the statuses a worker already exits with.
+# Those are 1 for an uncaught exception, 2 for a click usage error,
+# and 143 for SIGTERM.
 # See the developer notes, Restarting workers.
 RESTART_GENERATION_PREFIX = "restart_generation:"
 RESTART_EXIT_CODE = 75
@@ -55,9 +58,13 @@ RESTART_EXIT_CODE = 75
 # How often an idle worker reads the restart counter.
 # A worker that just finished a task reads it at once,
 # and so does a worker about to claim its first task.
+# The limit bounds what idle workers cost the server.
+# An idle worker asks for a task every `NEXT_TASK_RETRY_TIME_S`.
+# A counter read on each of those polls doubles the load of idle workers.
+# A read once a second adds a tenth.
 RESTART_CHECK_INTERVAL_S: float = 1.0
 
-# The actor of the worker running in this process, or None.
+# The actor of the worker that runs in this process, or None.
 # A task reads it through `current_actor()`,
 # which is how a task dispatches a method name of its own.
 _CURRENT_ACTOR: Any | None = None
@@ -105,6 +112,16 @@ class PilotWorker:
     The worker runs on a compute node inside a pilot job.
     The generated worker script starts it.
     User code never constructs it.
+
+    The constructor registers this worker on the server and builds its actor.
+    The constructor puts this worker's identity in the environment,
+    so the actor and every task it runs can read it.
+    The constructor publishes that identity on the server,
+    and can start the monitors of this node.
+    An exception from the import or the constructor of the actor propagates,
+    after this worker publishes its exit
+    and closes its own monitors and client.
+    Otherwise `current_actor()` returns the new actor.
     """
 
     def __init__(
@@ -119,17 +136,6 @@ class PilotWorker:
         pid: int,
         monitor_interval: float = DEFAULT_MONITOR_INTERVAL_S,
     ) -> None:
-        """Register this worker on the server and build its actor.
-
-        Puts this worker's identity in the environment,
-        so the actor and every task it runs can read it.
-        Publishes that identity on the server,
-        and may start the monitors of this node.
-        Whatever importing or constructing the actor raises propagates,
-        after this worker publishes its exit
-        and closes its own monitors and client.
-        Otherwise `current_actor()` returns the new actor.
-        """
         self.group = group
         self.name = name
         self.server_address = server_address
@@ -144,7 +150,7 @@ class PilotWorker:
         self.logger = logging.getLogger("worker_process")
         self._exit_published = False
 
-        # Before the actor is built, so its constructor and every task
+        # Before this worker builds the actor, so its constructor and every task
         # can reach the server and name themselves on it.
         self._publish_environment()
 
@@ -162,8 +168,9 @@ class PilotWorker:
         self._restart_counter_read = False
         self._next_restart_check = 0.0
 
-        # Before the actor is built, so a worker that dies building one
-        # has still said where it died.
+        # Before this worker builds the actor,
+        # so a worker that dies while it builds one
+        # already published where it died.
         self._publish_identity(slurm_job_id, hostname, pid)
 
         self.monitors: list[BaseMonitor] = []
@@ -176,7 +183,7 @@ class PilotWorker:
             # Nothing calls `close()` on a worker whose constructor raised,
             # so it stops what it started before it re-raises.
             # A `BaseException`, so the `SystemExit` of a SIGTERM
-            # that lands while the actor is built cleans up too.
+            # that lands while this worker builds the actor cleans up too.
             self._stop_monitors()
             self._publish_exit()
             self.client.close()
@@ -244,7 +251,7 @@ class PilotWorker:
     def _start_monitors(
         self, hostname: str, slurm_job_id: int, interval: float
     ) -> None:
-        """Monitor this node, the job and its GPUs on it, unless a peer does."""
+        """Monitor this node, the job on it and the job's GPUs, unless a peer does."""
         # Exactly one worker per job, node and restart generation sees 1,
         # and takes the node, the job on it and the job's GPUs.
         # See the developer notes, Monitoring, for why the key holds each part.
@@ -293,7 +300,7 @@ class PilotWorker:
         """Whether the restart counter moved past this worker's generation."""
         clock = time.monotonic()
         # At most one read per `RESTART_CHECK_INTERVAL_S`,
-        # unless `now` is set or no read has succeeded yet.
+        # unless `now` is set or no read succeeded yet.
         if not now and self._restart_counter_read and clock < self._next_restart_check:
             return False
         self._next_restart_check = clock + RESTART_CHECK_INTERVAL_S
@@ -318,10 +325,10 @@ class PilotWorker:
         self.monitors.clear()
 
     def close(self) -> None:
-        """Stop the monitors, publish the exit, and close the connection and actor.
+        """Stop the monitors, publish the exit, and close the connection and the actor.
 
-        Calls the actor's own `close()` if it has one.
-        Clears `current_actor()` if it holds this worker's actor.
+        The call runs the actor's own `close()` if it has one.
+        The call clears `current_actor()` if it holds this worker's actor.
         """
         # Before the client, whose channel they use.
         self._stop_monitors()
@@ -330,7 +337,7 @@ class PilotWorker:
         self.client.close()
         if self.actor_instance is not None:
             # Only this worker's own actor, since a test can build two
-            # in one process and the second one is still running.
+            # in one process and the second one still runs.
             if current_actor() is self.actor_instance:
                 _set_current_actor(None)
             if hasattr(self.actor_instance, "close"):
@@ -340,17 +347,18 @@ class PilotWorker:
     def main(self) -> None:
         """Run tasks from the job group's queue until a restart is requested.
 
-        Returns only when `SlurmPilotExecutor.restart_jobs`
+        The call returns only when `SlurmPilotExecutor.restart_jobs`
         asked this worker's job group to restart.
         The worker checks for that between tasks, never during one.
         Otherwise a worker lives until its Slurm job ends.
         The command line entry point turns the SIGTERM
         that ends the job into a `SystemExit`,
         which this loop does not catch.
+
         The worker catches every `Exception` a task raises,
-        logs it under a generated `error_id`,
-        and returns it to the caller as a `RemoteExecutionError`
-        on a task it marks Failed.
+        and logs it under a generated `error_id`.
+        Then the worker returns the exception to the caller
+        as a `RemoteExecutionError` on a task it marks Failed.
         As a result, one bad task cannot end the worker.
         """
         self.logger.info("Starting worker: %s" % self.worker_id)
@@ -408,7 +416,8 @@ class PilotWorker:
 
                     retval = RemoteExecutionError(error=str(e), error_id=eid)
                     output = cloudpickle.dumps(retval, protocol=pickle.HIGHEST_PROTOCOL)
-                    # Failed, not Finished, so every task waiting on this one fails too.
+                    # Failed, not Finished,
+                    # so every task that waits on this one fails too.
                     self.client.task_done(
                         task.task_id, self.worker_id, output, failed=True
                     )
@@ -472,7 +481,8 @@ def slurm_pilot_worker(
     pid = os.getpid()
 
     # Logs to the inherited stderr, which Slurm writes to the `--output` file.
-    # Redirecting `sys.stdout` or `sys.stderr` here would leave that file empty.
+    # If code here redirects `sys.stdout` or `sys.stderr`,
+    # that file stays empty.
     logging.basicConfig(format=LOG_FORMAT, level=LOG_LEVEL)
 
     python_paths: list[str] = json.loads(python_paths_json)

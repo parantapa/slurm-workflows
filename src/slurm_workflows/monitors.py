@@ -221,7 +221,7 @@ class CgroupSampler:
         self._last: tuple[float, float] | None = None
 
     def sample(self) -> dict[str, float]:
-        """One reading: total memory in bytes, and cores used since the last."""
+        """One reading: total memory in bytes, and cores used since the last reading."""
         now = time.monotonic()
         # The cgroup's own accounting comes first,
         # because it covers every process Slurm put in the job,
@@ -264,7 +264,8 @@ class CgroupSampler:
         """Memory and CPU seconds summed over the processes in the cgroup."""
         # Only a fallback: summed RSS counts shared pages once per process.
         # The root cgroup of a systemd host holds no process with an address space,
-        # so it reads as zero, and this sums the tree of this process instead.
+        # so it reads as zero.
+        # This method then sums the tree of this process instead.
         memory, cpu_seconds = self._sum(self._cgroup_processes())
         if memory > 0.0:
             return memory, cpu_seconds
@@ -320,7 +321,7 @@ class BaseMonitor(threading.Thread):
 
     Runs as a daemon thread.
     `interval` is the time between readings, in seconds.
-    A failed reading is logged, and the thread carries on.
+    The thread logs a failed reading, and continues.
     A subclass defines `append_sample`.
     """
 
@@ -336,6 +337,9 @@ class BaseMonitor(threading.Thread):
         self.client = client
         self.subject = subject
         self.interval = interval
+        # The worker's logger, under its retired name,
+        # so monitor errors land in the worker's log.
+        # See docs/terminology.md, Names that changed.
         self.logger = logger or logging.getLogger("worker_process")
         self._stopping = threading.Event()
 
@@ -359,7 +363,7 @@ class BaseMonitor(threading.Thread):
         """Ask the thread to finish its wait and end, then wait for it to end.
 
         Waits at most `timeout` seconds,
-        and returns then even if the thread has not ended.
+        and returns then even if the thread still runs.
         Idempotent, and safe on a thread that never started.
         """
         self._stopping.set()
@@ -404,8 +408,8 @@ class GpuMonitor(BaseMonitor):
 
     `subject` is the job's subject, `<job-id>:<hostname>`.
     Each GPU gets series of its own, under `<job-id>:<hostname>:<gpu-index>`.
-    The GPU's type, UUID and total memory go in the map under `GPU_INFO_PREFIX`,
-    written when the monitor first sees the GPU,
+    The GPU's type, UUID and total memory go in the map under `GPU_INFO_PREFIX`.
+    The monitor writes them when it first sees the GPU,
     and again only if one of them changes.
     The thread holds an `nvml_session` for as long as it runs.
     A call to `append_sample` from outside the thread needs a session of its own.
@@ -427,12 +431,12 @@ class GpuMonitor(BaseMonitor):
 
     def run(self) -> None:
         # One session for the whole run, not one per reading,
-        # since starting NVML is far slower than reading it.
+        # since an NVML start is far slower than an NVML read.
         try:
             with nvml_session():
                 super().run()
         except pynvml.NVMLError:
-            # Only starting or stopping NVML gets here.
+            # Only a failure to start or stop NVML gets here.
             # `BaseMonitor.run` catches what a reading raises.
             self.logger.exception("Monitor %s cannot use NVML", self.name)
 
@@ -463,7 +467,7 @@ def start_host_monitor(
     interval: float = DEFAULT_MONITOR_INTERVAL_S,
     logger: logging.Logger | None = None,
 ) -> Monitor:
-    """Start sampling this node, and return the running thread.
+    """Start a thread to sample this node, and return it.
 
     `interval` is the time between readings, in seconds.
     """
@@ -486,7 +490,7 @@ def start_slurm_job_monitor(
     interval: float = DEFAULT_MONITOR_INTERVAL_S,
     logger: logging.Logger | None = None,
 ) -> Monitor:
-    """Start sampling this job's cgroup on this node, and return the running thread.
+    """Start a thread to sample this job's cgroup on this node, and return it.
 
     `hostname` must name this node.
     The subject is `<job-id>:<hostname>`.
@@ -511,7 +515,7 @@ def start_gpu_monitor(
     interval: float = DEFAULT_MONITOR_INTERVAL_S,
     logger: logging.Logger | None = None,
 ) -> GpuMonitor | None:
-    """Start sampling the GPUs this job can see on this node, and return the thread.
+    """Start a thread to sample the GPUs this job can see on this node, and return it.
 
     Returns None, and starts nothing, where NVML finds no GPU,
     or cannot start, as on a node with no NVIDIA driver.

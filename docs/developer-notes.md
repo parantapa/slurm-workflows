@@ -16,7 +16,7 @@ the pilot-job executor, and the batch Bayesian optimizer built on it.
 User documentation lives under `docs/`,
 organized by [Diataxis](https://diataxis.fr/) type.
 The README is a landing page:
-what the library is, install,
+what the library is, how to install it,
 one minimal usage example, and the index of everything else.
 The README links every document, so its table is the one index.
 This file does not keep a second copy of it.
@@ -34,9 +34,9 @@ For new user-facing documentation,
 decide which of the four types it is before you decide where it goes.
 Then give it a row in the README's table,
 among the documents of its own type.
-Keep each document inside its type:
-a tutorial that stops to explain links out to `explanation/` instead,
-and reference describes rather than recommends.
+Keep each document inside its type.
+A tutorial that stops to explain links out to `explanation/` instead,
+and a reference page describes rather than recommends.
 
 A reference page covers one thing a user reaches for.
 The page is named after that class, that command or that subject,
@@ -49,7 +49,7 @@ and a row in the README's table.
 
 Nothing user-facing goes in `README.md` beyond that list.
 
-### Docstrings, comments, and this file
+### Docstrings, comments and this file
 
 Prose in the source is not a third documentation set.
 Each kind of prose has one job:
@@ -68,7 +68,7 @@ the next editor changes only one of them.
 
 ## Commands
 
-There is **no CI** in this repository, so nothing runs these for you.
+There is no CI in this repository, so nothing runs these for you.
 The install and test commands are also at the top of [`how-to-run-tests.md`](how-to-run-tests.md).
 
 ```sh
@@ -79,7 +79,8 @@ pytest                      # test suite
 ```
 
 To build the sdist and the wheel into `dist/`,
-run `python -m build`, then `python -m twine check dist/*`.
+run `python -m build`.
+Then run `python -m twine check dist/*.tar.gz dist/*.whl`.
 `scripts/pb-dev.sh build-python-package` runs both.
 Neither `build` nor `twine` is in an extra,
 so install them first.
@@ -89,7 +90,7 @@ with `twine`.
 `pyproject.toml` configures `black` and `pyright`.
 `[tool.pyright]` sets the include paths and `pythonVersion`.
 For this reason, run `pyright` bare.
-**Do not pass paths to `pyright`**, or it ignores that configuration.
+Do not pass paths to `pyright`, or it ignores that configuration.
 
 `pyproject.toml` defines two console entry points.
 `slurm-pilot-worker` is internal:
@@ -98,10 +99,10 @@ and users never call it directly.
 `swtop` is for users.
 The [`swtop` reference](reference/swtop.md) describes it.
 
-To run the library, start a `ds-service` server
-(`DsServiceServer` can launch one),
-then run a driver script, such as one under `examples/`,
-on a node that can call `sbatch`.
+To run the library, start a `ds-service` server.
+`DsServiceServer` can launch one.
+Then, on a node that can call `sbatch`,
+run a driver script, such as one under `examples/`.
 
 Deploy to clusters with `cpush`.
 See `.cpush.json5` for the `rivanna` remote.
@@ -133,6 +134,7 @@ Paths are relative to `src/slurm_workflows/`.
 and a FoxyProxy configuration for Rivanna.
 `scripts/pb-dev.sh` is the author's own wrapper for building and uploading the package.
 Nothing else depends on it.
+
 `MANIFEST.in` decides what the sdist ships:
 the `.py` and `.jinja` files under `src/slurm_workflows`,
 the README, the license and `pyproject.toml`.
@@ -165,7 +167,7 @@ This table says what each one is here for.
 | `cloudpickle` | `slurm_pilot_executor`, `slurm_pilot_worker` | Serializing functions, arguments and return values, so a locally defined function can cross to a compute node. |
 | `jinja2` | `templates/` | Rendering the worker shell script and its sbatch wrapper. |
 | `json5` | `templates/` | Parsing the `{#- name: ... -#}` headers of the multi-template files. |
-| `scipy` (>=1.15) | `explore_space` | `stats.qmc.Sobol` for the exploration design. |
+| `scipy` | `explore_space` | `stats.qmc.Sobol` for the exploration design. |
 | `textual` | `swtop_widgets`, `swtop_tui` | The `swtop` terminal UI, and the widgets other apps embed. |
 | `click` | `swtop`, `slurm_pilot_worker` | Both console entry points. |
 | `psutil` | `monitors` | Host and process sampling. |
@@ -192,7 +194,7 @@ There is no linter beyond `pyright`.
 
 ## Invariants
 
-Things that are easy to break and quiet when broken.
+This section lists the things that are easy to break and quiet when broken.
 
 ### Task flow
 
@@ -211,7 +213,7 @@ Jobs in one job group that reach their time limit
 say nothing about a task on another job group's queue.
 
 A wait that abandons the rest of `pending`
-loses results the server already has, silently under `RAISE_NEVER`.
+loses task outputs the server already has, silently under `RAISE_NEVER`.
 Such a wait also breaks what `RAISE_AFTER_COMPLETED` promises.
 The failure count in the deferred exception counts *tasks* for the same reason:
 one message covers every task on a dead queue.
@@ -254,16 +256,21 @@ and the poll loop checks for that prefix before it unpickles.
 The worker passes its own `worker_id`,
 and the server refuses the call from any other worker.
 The id given to `task_done`
-has to be the one that claimed the task in `task_get`.
+must be the id of the worker that claimed the task in `task_get`.
 
 **One executor per `ds-service` server.**
-A server's queues, its `pilot_job_info:`, `pilot_job_start:`,
-`pilot_job_exit:`, `worker_info:`, `worker_exit:`, `task_name:`,
-`actor_class_args:`, `actor_class_kwargs:` and `progress_display` keys,
-its progress series, its monitor series and `slurm_job_gpu_info:` keys,
-its monitor counters and its `restart_generation:` counters
-are one flat namespace with no executor in it.
-For this reason, the design assumes a server belongs to a single executor.
+A server holds one flat namespace with no executor in it.
+The namespace covers these things:
+
+- the queues
+- the `pilot_job_info:`, `pilot_job_start:`, `pilot_job_exit:`,
+  `worker_info:`, `worker_exit:`, `task_name:`, `actor_class_args:`,
+  `actor_class_kwargs:` and `progress_display` keys
+- the progress series, the monitor series and the `slurm_job_gpu_info:` keys
+- the monitor counters and the `restart_generation:` counters
+
+Because that namespace names no executor,
+the design assumes a server belongs to a single executor.
 Two executors on one server share queues by group name
 and overwrite each other's actor arguments.
 
@@ -295,8 +302,8 @@ into `actor_class_args:<group>` and `actor_class_kwargs:<group>`,
 and `PilotWorker.__init__` reads them back under the same names.
 The two sides agree by convention alone,
 so the key format is part of the contract.
-Change it in one place, and workers silently construct actors
-with default arguments.
+If the key format changes in one place only,
+workers silently construct actors with default arguments.
 
 `define_job_group` writes a key only when the caller gives a value.
 For this reason, the worker treats `KeyError` as "the caller passed none"
@@ -323,6 +330,7 @@ as soon as `sbatch` returns, so a queued job is visible before it runs.
 a JSON object, before it builds the actor.
 A worker that dies in its actor's constructor
 therefore still records which job and node it died on.
+
 Each is one key and not one per field, because `swtop` caches what it reads.
 A reader that lands between two writes otherwise remembers
 a worker whose host it never learned.
@@ -331,7 +339,7 @@ Nothing ever updates either key, which is what makes both cacheable.
 `WORKER_INFO_PREFIX` lives in `slurm_pilot_worker.py`
 and `PILOT_JOB_INFO_PREFIX` in `slurm_pilot_executor.py`.
 `swtop.py` imports both, so the writers and the reader cannot drift apart.
-Nothing deletes the key:
+Nothing deletes either key:
 the map is in memory and dies with the server,
 which is the only cleanup there is.
 
@@ -342,11 +350,12 @@ through `slurm-pilot-worker --pilot-job-event`.
 `PilotWorker.close()` writes `worker_exit:<worker-id>`,
 and so does `PilotWorker.__init__` when the actor fails to build.
 A worker's start time is the `start_time` field of its `worker_info:` key.
-An exit written into the description key breaks the cache above,
+An exit written into the description key breaks the cache in `swtop`,
 so do not merge them.
-`swtop` hides a pilot job or a worker once its exit key exists,
-along with the Slurm job of a pilot job that exited,
-and finds those keys with one `map_search_key` per prefix per poll,
+
+`swtop` hides a pilot job or a worker once its exit key exists.
+It also hides the Slurm job of a pilot job that exited.
+`swtop` finds those keys with one `map_search_key` per prefix per poll,
 rather than a read per key.
 `swtop` shows a pilot job with no `pilot_job_start:` key as not yet started.
 The prefixes live in `slurm_pilot_worker.py`, beside `WORKER_INFO_PREFIX`.
@@ -396,6 +405,7 @@ The wait can return before that worker publishes.
 That worker then checks before it claims anything,
 sees the new generation, and exits without running a task.
 So every task that a worker claims after the wait returns runs on a new worker.
+
 For this reason, `main()` claims no task until one read of the counter succeeds.
 A failed first read leads to a sleep and another read, not a claim.
 The rate limit does not apply until a read succeeds.
@@ -405,33 +415,21 @@ The check right after a task keeps a busy worker
 from claiming one more task on the old code.
 
 The rate limit, `RESTART_CHECK_INTERVAL_S`, bounds what idle workers cost the server.
-An idle worker asks for a task every `NEXT_TASK_RETRY_TIME_S` (0.1 s).
-A counter read on each of those polls doubles the load of idle workers.
-A read once a second adds a tenth.
 Without `wait`, this interval is the window
 in which a worker can still claim a task or two on the old code.
 
 **Only the worker process is inside the shell loop.**
 The worker script sources `/etc/profile`, runs the setup script,
 and only then loops over `slurm-pilot-worker`.
-The setup script runs once per Slurm task,
-and once more for each pilot job start and exit the batch script publishes,
-each time in a bash of its own.
+The setup script runs once per Slurm task.
+It also runs once for each pilot job start and exit the batch script publishes.
+Each run is in a bash of its own.
 
 Nothing makes a setup script safe to run twice.
 For a batch worker, the batch shell sources the worker script,
 so a second run stacks its effects in that shell.
 A new worker therefore inherits the environment the setup script built.
 A change to the setup script or to `sbatch_args` needs new pilot jobs.
-
-The loop reads the status with `|| status=$?`,
-because otherwise `set -e` ends the script on status 75.
-Any other status, including 143 from SIGTERM, leaves the loop,
-and the worker script exits with it.
-75 is `EX_TEMPFAIL` from `sysexits.h`.
-It collides with none of the statuses a worker already exits with.
-Those are 1 for an uncaught exception, 2 for a click usage error,
-and 143 for SIGTERM.
 
 **The restart generation is part of the monitor election key.**
 Counters never reset while the server runs.
@@ -444,11 +442,11 @@ With the generation in the key, the new workers hold a fresh election.
 
 During a restart, an old and a new worker can both sample one node.
 Two workers of one job that read different generations do the same.
-Either way, the second worker only adds points to the same series.
+Either way, the second worker only adds points to the same time series.
 
 **The wait tracks worker ids, not pilot jobs.**
-`_wait_for_restart` sorts each `worker_info:` key once:
-a new worker, an old one to wait on,
+`_wait_for_restart` sorts each `worker_info:` key once.
+The key names a new worker, an old one to wait on,
 or one in a pilot job this job group does not track.
 `_wait_for_restart` matches on the job name, not on the worker id,
 since a hostname can hold dots.
@@ -466,28 +464,28 @@ since the executor cannot lower the counter again.
 
 **`mapreduce` puts every item task on the item queue
 before it submits the first map task.**
-This is the whole basis of the call,
+This ordering is the whole basis of the call,
 and it is what lets a map task read `NoTaskAvailable` as "the work is done".
 `task_get` raises it when no queue it polled has a *ready* task.
 On its own that means everything is claimed,
 not that nothing more arrives.
 The ordering supplies the other half:
 no map task can run before every item task exists,
-and `mapreduce` adds nothing to the item queue afterward.
+and `mapreduce` enqueues nothing on the item queue afterward.
 
 Break that ordering, by streaming the iterable or by topping the item queue up.
 A fast map task then drains what is there and sees an empty item queue.
 It returns a partial result that covers part of the input.
 Nothing raises.
 The call returns a plausible wrong answer.
-That is why `mapreduce` reads the iterable out into a list first,
-and why a test asserts on the order of the `task_add` calls.
+For this reason, `mapreduce` reads the iterable out into a list first,
+and a test asserts on the order of the `task_add` calls.
 
 **A mapreduce call gets an item queue of its own,
 and no job group serves it.**
 Workers poll their own job group's queue only,
 so that call's own map tasks drain the item queue and nothing else does.
-It also stays clear of `_starved_tasks` and `_stranded_tasks`.
+The item queue also stays clear of `_starved_tasks` and `_stranded_tasks`.
 Both look at the queues of the tasks handed to the wait,
 never at the item queue.
 
@@ -527,10 +525,6 @@ Without the copy it is not correct on the driver.
 There it writes into the caller's own value,
 and a second call starts from the answer of the first.
 
-The copy is a cloudpickle round trip rather than `copy.deepcopy`.
-The local fold and the remote folds then get the same kind of copy,
-and an `init` that cannot travel fails at the call.
-
 The copy does not remove the requirement that `init` be an identity.
 Every map task folds it in once, and the call folds it in once more.
 
@@ -540,7 +534,7 @@ Every map task folds it in once, and the call folds it in once more.
 (`slurm_workflows.executor.<name>`), and does not propagate.
 A name shared between executors collects one `FileHandler` per executor.
 Every line then lands in every work dir opened in this process,
-so the first executor's log fills up with the second's records.
+so the first executor's log fills with the second's records.
 `close()` removes and closes the handler.
 The logger itself stays in the logging registry, inert.
 For this reason, a test that reuses an executor name
@@ -549,7 +543,7 @@ inherits whatever handlers the previous one left on it.
 ### Templates (`templates/`)
 
 `render_template` renders the sbatch and worker shell scripts
-from Jinja2 templates in a **custom multi-template-per-file format**.
+from Jinja2 templates in a custom multi-template-per-file format.
 Each `.jinja` file holds one or more named templates,
 each one under a `{#- name: "..." -#}` JSON5 header.
 `templates/__init__.py` parses those headers.
@@ -558,7 +552,7 @@ for example `"slurm_pilot:worker_script"`.
 
 `render_template` carries `@overload` signatures
 that document each template's required keyword arguments.
-**Keep those overloads in sync when you change a template variable.**
+**When you change a template variable, keep those overloads in sync.**
 `restart_exit_code` is one of those template variables.
 The executor passes `RESTART_EXIT_CODE` from `slurm_pilot_worker`,
 so the worker and the shell loop agree on one constant.
@@ -574,10 +568,10 @@ Use `{#` without the dash inside a body.
 **Never import torch or botorch here.**
 This rule is the whole point of the split.
 A search space is arithmetic on one value at a time,
-so code that builds or tests a search space runs where the optimizer cannot be installed.
+so code that builds or tests one runs where the optimizer cannot be installed.
 `tests/test_search_space.py` therefore runs without the `importorskip`
 that skips every botorch test.
-`optimize_space_botorch` imports only what it uses of it
+`optimize_space_botorch` imports only what it uses from `search_space`
 and re-exports nothing.
 Every importer takes a range from `search_space` alone.
 
@@ -600,7 +594,8 @@ This order is what "simultaneously" means here:
 one `submit` loop over every study's design, then a single `wait`.
 A submit and a wait per study leaves the pool idle
 whenever a small study finishes ahead of a large one.
-That order also serializes studies that name different queues,
+A submit and a wait per study also serializes studies
+that name different queues,
 even though nothing makes them wait for each other.
 
 **`ExploreSpaceSobolQMC` shares the shape of `OptimizeSpaceBotorch`, not its code.**
@@ -641,10 +636,11 @@ each against its own `patience`, floor and ceiling.
   `_fit_and_propose` submits `fit_and_propose` to `optimizer_queue`
   as one task per study per round, the fit and the acquisition together.
   A fitted GP shipped back to the driver costs more than the fit did.
-  Keep it a module-level function that takes and returns plain Python.
+  Keep `fit_and_propose` a module-level function
+  that takes and returns plain Python.
   Then cloudpickle sends it by reference,
   and no torch object has to survive a hop between hosts.
-  Its workers need botorch.
+  The workers of `optimizer_queue` need botorch.
   The workers of `objective_queue` do not.
 - **The four acquisition knobs belong to the study, not to the process.**
   `num_restarts`, `raw_samples`, `mc_samples` and `acqf_timeout_s`
@@ -657,7 +653,7 @@ each against its own `patience`, floor and ceiling.
   never against a literal.
 - **One acquisition, one `optimize_acqf` call per study per round**,
   for the whole batch.
-  Its `X_baseline` has to be the `train_x` from this round's fit,
+  Its `X_baseline` must be the `train_x` from this round's fit,
   not a stale copy.
 - **Never import this module eagerly from the package `__init__.py`.**
   `OptimizeSpaceBotorch` and `OptimizationStudy` are importable
@@ -682,16 +678,19 @@ each against its own `patience`, floor and ceiling.
 The worker told 1 for `host_monitor:<hostname>:<job-id>:<generation>` takes the node,
 the part of its job on that node, and the GPUs that part can see.
 `<generation>` is the restart generation the worker read at startup.
+
 A job's cgroup is local to each node,
 so the job series carry the hostname as well as the job id.
 The key carries the job id because counters never reset while the server runs.
 Without it, a node that a later pilot job lands on gets no monitor.
 Two live jobs on one node both sample it,
-and only add points to the same series.
-Restarting workers says why the key carries the generation.
-No lock, no designated rank, and no need for the workers to know each other.
+and only add points to the same time series.
+The section Restarting workers says why the key carries the generation.
+
+The election needs no lock and no designated rank,
+and the workers do not need to know each other.
 Nothing hands a subject back when that worker dies:
-the series stops, and `swtop` marks it stale.
+the time series stops, and `swtop` marks it stale.
 `swtop` hides the Slurm job of a pilot job that published its exit.
 A re-election needs a heartbeat and a lease, and this design has neither.
 
@@ -700,7 +699,9 @@ A re-election needs a heartbeat and a lease, and this design has neither.
 It loads the driver's library only when `nvmlInit` runs,
 so it installs on a CPU node and costs nothing there.
 It reads the GPUs in-process,
-where `nvidia-smi` would start a process every interval and need its text parsed.
+where `nvidia-smi` starts a process every interval
+and needs its text parsed.
+
 `start_gpu_monitor` counts the GPUs in a short NVML session of its own,
 and starts nothing where that fails or finds no GPU.
 The thread then holds one session for as long as it runs.
@@ -714,13 +715,13 @@ so it goes in the map, under `GPU_INFO_PREFIX`.
 That variable belongs to the CUDA runtime, and NVML ignores it.
 The monitor needs NVML's view anyway.
 Slurm sets the variable per task,
-so the elected worker would see its own GPU and not the job's others.
+so through it the elected worker sees its own GPU and not the job's others.
 Where Slurm constrains devices, NVML lists the GPUs of the job step on the node.
 Where it does not, NVML lists every GPU on the node.
 
 **Sampling threads are daemons that swallow their errors.**
 A monitor must not hold open a worker that Slurm kills at its time limit,
-and a failed sample must not end the series.
+and a failed sample must not end the time series.
 A node briefly unreachable is the common case, and a gap beats a stop.
 `close()` stops them before closing the client whose channel they use.
 
@@ -736,13 +737,14 @@ That limit belongs to the server, and this library does not work around it.
 **`Collector` reads an identity once.**
 `Collector` caches every worker's fields,
 every pilot job's fields and start time,
-and every task's name,
-because nothing ever changes any of them after the first write.
+and every task's name.
+Nothing ever changes any of them after the first write.
 It does not cache which pilot jobs and workers exited.
 That set only grows,
 and one key search per exit prefix, each poll, reads the whole of it.
 Without the cache, a 400-worker pool costs 400 reads every 2 seconds,
 plus one for every named task.
+
 `Collector` does not cache a name that is not there yet.
 `set_task_name` runs just after `submit`,
 so a task polled between the two
@@ -760,30 +762,19 @@ because the last good reading beats a blank screen
 while a server restarts.
 
 **`swtop` reads with the asyncio client.**
-A poll is a handful of key searches plus a read per worker,
-per pilot job, per named task, per running task
-and per monitored series.
+A poll is a handful of key searches.
+It adds a read per worker, per pilot job, per named task,
+per running task and per monitored time series.
 One after another, that is a round trip apiece,
 and a few hundred workers do not fit in a two-second interval.
+
 `Collector` issues each set of reads with `asyncio.gather`,
 so a poll costs about one round trip however wide the pool is.
 The cache means `Collector` reads only what is new.
-That holds on a fast network.
+The one round trip per poll holds on a fast network.
 Through an ssh tunnel, the first poll of a pool of 2500 workers
-and 2500 named tasks took 4.4 s,
-and every later poll about 0.8 s.
-
-**`SnapshotPoller` lets a slow poll finish.**
-A poll in flight is never cut short.
-A tick of the interval which comes while one is in flight is dropped,
-and `poll_now` called then polls once more when it ends.
-Canceling the poll in flight at every tick was rejected.
-A poll slower than the interval then never finishes,
-and while the cache filled only at the end of a poll,
-every poll started as cold as the first.
-The screen keeps its first reading, with no error to say why.
-Dropping the tick means a slow server is polled as often as it answers,
-and no more.
+and 2500 named tasks took 4.4 s.
+Every later poll took about 0.8 s.
 
 **Both displays read the same row builders.**
 `BLOCKS` in `swtop.py` is the one definition of the blocks.
@@ -796,20 +787,21 @@ The text frames and the UI differ only in how they draw them.
 out of a snapshot that holds every task.
 A change of states then redraws the last snapshot at once,
 with no poll to wait for.
-It also leaves the snapshot the same for every view,
+The filter in the widget also leaves the snapshot the same for every view,
 so the text frames, the summary line and an embedding app
 still see every task.
 The cost is that each poll still reads the state of every task.
 
 **The widgets bind no keys, and set no ids.**
 An app that embeds the widgets sets up its own keys,
-and a key a widget binds would take one from that app.
-An id that a widget sets could collide with one of the app's.
+and a key that a widget binds takes one from that app.
+An id that a widget sets can collide with one of the app's.
 So only `SwtopApp` binds keys, including the tab keys in `TAB_KEYS`,
 and only `SwtopApp` gives ids to its areas.
 The panes from `block_pane` are the exception:
 a `TabbedContent` needs pane ids,
 so their default ids carry an `swtop-` prefix.
+
 Each widget carries its styles in `DEFAULT_CSS`,
 since an app that embeds it loads no stylesheet of `swtop`'s.
 Those styles select on a widget type or on an `swtop-` class, never on an id.
@@ -818,13 +810,13 @@ Those styles select on a widget type or on an `swtop-` class, never on an id.
 
 `is_batch_worker=False` wraps the worker script in `srun`
 and passes `--output <work_dir>/<name>-%j-%t.out`.
-That is why the `worker_sbatch_script` template takes `name` and `work_dir`.
+For this reason, the `worker_sbatch_script` template takes `name` and `work_dir`.
 [`reference/what-a-run-publishes.md`](reference/what-a-run-publishes.md#logs) documents for users
 which file a worker's log ends up in.
 This section says why the shell decides it rather than Python.
 
 **The generated script drops `--output` for a job of exactly one Slurm task**,
-which then writes to the batch job's own output file.
+which then writes to the pilot job's own output file.
 A file per Slurm task only duplicates it.
 The job decides at run time, in the shell,
 because Python cannot know the answer when it renders the script.
@@ -843,12 +835,13 @@ and keeps a file for each of them.
 
 **The batch script traps SIGTERM, and the worker turns it into `SystemExit`.**
 Slurm sends SIGTERM to every process of the job
-when it cancels the job or the job reaches its time limit,
-and SIGKILL `KillWait` seconds later.
+when it cancels the job or the job reaches its time limit.
+It sends SIGKILL `KillWait` seconds later.
 The TERM trap only calls `exit 143`,
-so the job ends with that status rather than dying of the signal,
-and the EXIT trap publishes the pilot job's exit.
+so the job ends with that status rather than dying of the signal.
+Then the EXIT trap publishes the pilot job's exit.
 Bash 5.2 runs the EXIT trap on an untrapped SIGTERM as well.
+
 Bash runs a trap only after the foreground `srun` returns.
 `srun` got the same SIGTERM, so it returns once its workers exit,
 and the pilot job's exit comes after theirs.
@@ -875,7 +868,7 @@ so a driver inside a Slurm job submits the same jobs as one on a login node.
   `black` rewrites lines,
   so a type check before formatting
   can report positions that no longer exist.
-  Neither tool is advisory here.
+  None of the three tools is advisory here.
 
   If `pyright` objects to a deliberate test double,
   say so with a `cast` and a comment.
@@ -894,9 +887,9 @@ so a driver inside a Slurm job submits the same jobs as one on a login node.
   Break at clause boundaries, not at a column limit.
   Start a new line after each sentence,
   and at punctuation that already separates clauses (`.` `:` `,`).
-  Start one before a conjunction or preposition that opens a new phrase.
+  Start one before a conjunction or a preposition that opens a new phrase.
   Never end a line mid-phrase,
-  on an article, conjunction, preposition or auxiliary,
+  on an article, a conjunction, a preposition or an auxiliary,
   which is what fixed-width wrapping produces.
   The result is a ragged right margin, and that margin is the point.
   A diff then shows only the clause that actually changed,
@@ -922,8 +915,8 @@ so a driver inside a Slurm job submits the same jobs as one on a login node.
 - **[`terminology.md`](terminology.md) decides what a thing is called.**
   It binds prose and identifiers alike,
   so a name carries the same word the prose does.
-  Where a concept has no row there, add one
-  rather than coin a second word for something the tables already name.
+  Where a concept has no row there, add one.
+  Do not coin a second word for something the tables already name.
 - Each class releases what it holds in its own method:
   `close()` on `SlurmPilotExecutor` and `PilotWorker`,
   and `stop()` on a monitor thread.

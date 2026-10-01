@@ -7,7 +7,7 @@ import random
 import string
 import logging
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Mapping
 
 
 def gen_random_string(k: int = 32) -> str:
@@ -29,7 +29,8 @@ class RemoteExecutionError:
     `error_id` appears verbatim beside the full traceback in that worker's log,
     under the executor's work dir.
     For a task that never ran because a task it waits on failed,
-    `error_id` is empty.
+    `error` is the server's `Dependency failed (task_id=...)` text
+    and `error_id` is empty.
     """
 
     error: str
@@ -37,13 +38,13 @@ class RemoteExecutionError:
 
 
 def objective_value(
-    name: str, objective_key: str, params: Mapping[str, Any], output: Any
+    name: str, objective_key: str, params: Mapping[str, object], output: object
 ) -> float:
     """The value to rank one evaluation by.
 
-    Raises `RuntimeError` if the result is not a mapping,
-    if it lacks `objective_key`,
-    or if the value there does not convert to a float
+    Raises `RuntimeError` if the result is not a mapping
+    or lacks `objective_key`.
+    Raises it as well if the value there does not convert to a float
     or is not finite.
     The message names what came back and at which point.
     """
@@ -76,7 +77,7 @@ def objective_value(
 
 
 def floor_power_of_two(n: int) -> int:
-    """Largest power of two <= n.
+    """The largest power of two <= n.
 
     Raises `ValueError` if `n` is below 1.
     """
@@ -95,7 +96,7 @@ def format_param(value: object) -> str:
     return f"{value:.6g}" if isinstance(value, float) else str(value)
 
 
-def format_mapping(mapping: Mapping[str, Any]) -> str:
+def format_mapping(mapping: Mapping[str, object]) -> str:
     """Render a whole mapping for a progress line."""
     return ", ".join(f"{k}={format_param(v)}" for k, v in mapping.items())
 

@@ -286,7 +286,7 @@ class TestResults:
     def test_the_documented_gather_shape_works(
         self, executor, pilot_jobs, worker_thread
     ):
-        """Mapping to a one-item list and concatenating, as the guide shows."""
+        """A map to a one-item list, then a concatenation, as the guide shows."""
         pilot_jobs("cpu")
         worker_thread(expect_tasks=2)
 
@@ -437,7 +437,8 @@ class TestMapreduceTask:
         queue = "mr-direct"
         for index in range(60):
             # Any priority will do.
-            # The order the items are served in does not matter to these tests.
+            # The order in which the server serves the items
+            # does not matter to these tests.
             ds_client.task_add(
                 task_id=f"{queue}.item.{index}",
                 parent_task_ids=[],
@@ -470,7 +471,8 @@ class TestMapreduceTask:
         queue = "mr-done"
         for index in range(5):
             # Any priority will do.
-            # The order the items are served in does not matter to these tests.
+            # The order in which the server serves the items
+            # does not matter to these tests.
             ds_client.task_add(
                 task_id=f"{queue}.item.{index}",
                 parent_task_ids=[],
@@ -660,7 +662,7 @@ class TestEdgeCases:
     def test_fewer_items_than_tasks(
         self, executor, ds_client, pilot_jobs, worker_thread
     ):
-        """`num_tasks` is an upper bound: no task is submitted for no item."""
+        """`num_tasks` is an upper bound: the call submits no task without an item."""
         pilot_jobs("cpu")
         worker_thread(expect_tasks=3)
 

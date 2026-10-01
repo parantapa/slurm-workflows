@@ -19,7 +19,7 @@ SBATCH_ARGS = [
 ]
 
 
-def do_step_pi(start, stop, step, stepsize):
+def do_step_pi(start: int, stop: int, step: int, stepsize: float) -> float:
     """Sum every `step`-th midpoint slice, from `start`."""
     x, s = 0.0, 0.0
     for i in range(start, stop, step):
@@ -28,7 +28,7 @@ def do_step_pi(start, stop, step, stepsize):
     return s
 
 
-def main():
+def main() -> None:
     with DsServiceServer(interface="ib0") as ds_service:
         ds_service.wait_until_ready()
         address = ds_service.address

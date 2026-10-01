@@ -2,10 +2,10 @@
 
 [<- back to the main README](../../README.md)
 
-If your work produces one number, not one task output per item,
-such as counting the rows that match a filter across ten thousand files,
-or totaling the events a whole set of runs recorded,
-use `mapreduce` rather than one task per item.
+Sometimes your work produces one number, not one task output per item.
+For example, it counts the rows that match a filter across ten thousand files,
+or totals the events that a whole set of runs recorded.
+In that case, use `mapreduce` rather than one task per item.
 One task per item makes the driver hold every task output,
 and makes each item pay a task's overhead.
 `mapreduce` hands out the items and folds them on the worker that mapped them,
@@ -13,7 +13,7 @@ so each map task brings back one partial result.
 
 ## Write a function that maps one item
 
-It runs on a worker, once per item, and returns a value to fold:
+The function runs on a worker, once per item, and returns a value to fold:
 
 ```python
 def count_hits(path, threshold):
@@ -58,7 +58,7 @@ See [What it refuses](../reference/mapreduce.md#what-it-refuses).
 Each map task folds the items it claimed,
 and the call folds the partial results those map tasks return.
 Both folds use the same function,
-so **`reduce_fn` must be associative**, and **`init` must be its identity**.
+so `reduce_fn` must be associative, and `init` must be its identity.
 The partial results come back in the order the map tasks finish.
 So `reduce_fn` must also be commutative
 to give the same answer on every run.
@@ -74,7 +74,7 @@ map_fn=lambda path: [summarize(path)], reduce_fn=add, init=[]
 Concatenation is not commutative.
 The list holds every value, but in no fixed order.
 
-Appending instead of concatenating looks equivalent and is not.
+An append in place of a concatenation looks equivalent, and is not.
 `acc + [partial]` puts a whole partial result inside the answer.
 
 For the wrong pairings worked through, see
@@ -84,28 +84,28 @@ For the wrong pairings worked through, see
 
 An expensive load belongs in an actor, once per worker.
 On a job group you gave an `actor_class_name`,
-give `map_fn` the name of one of its methods instead of a callable:
+give `map_fn` an actor method name instead of a callable:
 
 ```python
 map_fn="predict", reduce_fn=add, init=0
 ```
 
-The actor's expensive load runs once per worker, whatever the number of items,
-because each map task resolves the name against the actor
-its worker built at startup.
+The actor's expensive load runs once per worker, whatever the number of items.
+This happens because each map task resolves the name against the actor
+that its worker built at startup.
 For the rules, and for what a job group without an actor raises, see
 [Mapping with an actor's method](../reference/mapreduce.md#mapping-with-an-actors-method).
 
 ## Set `num_tasks` by the pool, not by the item count
 
-Nothing divides the items up in advance,
+Nothing divides the items in advance,
 so each map task claims the next item whenever it is free.
 
-Set `num_tasks` to how many map tasks you want draining the item queue,
+Set `num_tasks` to the number of map tasks that drain the item queue,
 not to the number of items.
 Size it by the pool, as you size any batch of tasks.
 A few times the number of workers is a reasonable start.
-A map task that claims slow items then does not hold up the end of the run.
+A map task that claims slow items then does not delay the end of the run.
 
 ## Chunk the items when each one is small
 

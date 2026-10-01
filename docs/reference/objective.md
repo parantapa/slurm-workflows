@@ -13,21 +13,21 @@ are in [Search spaces](search-space.md).
 The objective runs on a worker, once per point.
 Its argument names must match the keys of `space`,
 and it receives them as keyword arguments.
-The executor cloudpickles it like any other task,
+The executor serializes it with cloudpickle like any other task,
 so it can be a closure or a lambda.
 What it imports must exist on the compute node.
 
-It returns a **mapping**, not a bare number.
+It returns a mapping, not a bare number.
 The entry under `objective_key` is the objective value, and lower is better.
-The objective must return the negative of a quantity to be maximized.
+An objective that maximizes a quantity must return its negative.
 Both classes rank or model only that entry.
 They record every other entry, which is where a runtime,
 a checkpoint path or an unoptimized metric goes.
 
-Both classes raise on a bare float, on a mapping without the key,
-on a value that `float()` cannot convert,
+Both classes raise on a bare float, or on a mapping without the key.
+They also raise on a value that `float()` cannot convert,
 or on a value that is not finite.
-That covers `NaN` and `inf`,
+This last case covers `NaN` and `inf`,
 because either one silently poisons a GP fit.
 
 `extra_objective_kwargs` carries what the objective needs
@@ -51,10 +51,10 @@ and an `OptimizeSpaceBotorch` run can start from them.
 
 This holds for an objective that raises.
 In a batch where no objective raised,
-an objective that returns a result the contract rejects,
-such as a bare float or a `NaN`,
-raises as soon as its class records it,
-and the points after it in submission order are not recorded.
+an objective can return a result the contract rejects,
+such as a bare float or a `NaN`.
+Its class then raises as soon as it records that result,
+and does not record the points after it in submission order.
 In a batch where an objective also raised,
 the class skips the rejected point,
 records the rest,

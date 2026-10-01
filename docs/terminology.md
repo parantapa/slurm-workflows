@@ -32,13 +32,13 @@ Do not spend a source's word on something that source does not mean by it.
 Two facts from `ds_service_client` settle the hard cases,
 so they are worth stating before the tables:
 
-* `task_get(worker_id, queue)` is documented
+* `ds_service_client` documents `task_get(worker_id, queue)`
   as "Claim a task for `worker_id` from the first queue holding one".
   In `ds-service` a **worker** is whatever claims a task.
   Here the claimant is the process,
   because `PilotWorker` passes its own `worker_id`.
   A worker is therefore a process, and nothing else is a worker.
-* `task_add` is documented
+* `ds_service_client` documents `task_add`
   as "Register a task, and enqueue it on each of its queues once it is Ready".
   A **task** is the `ds-service` unit of work.
   Slurm also calls a process inside a job step a task.
@@ -102,13 +102,13 @@ So: "the driver runs on a login node",
 
 ### Job group, not worker group
 
-A group is a recipe for **pilot jobs**.
-Scaling a group sets how many jobs it has,
-and the group holds `SlurmJob` objects.
-How many workers those jobs start
-is decided by the Slurm task count in its sbatch arguments and by `is_batch_worker`,
-which the group does not control.
-One group scaled to a single job can hold eighty workers.
+A job group is a recipe for **pilot jobs**.
+`scale_jobs` sets how many jobs a job group has,
+and the job group holds `SlurmJob` objects.
+The Slurm task count in the sbatch arguments of the job group
+and `is_batch_worker` decide how many workers those jobs start.
+The job group does not control that number.
+One job group scaled to a single job can hold eighty workers.
 
 Write **job group** in full, never bare "group".
 Slurm's own "group" is the Unix group in `--gid`.
@@ -117,9 +117,9 @@ Slurm's own "group" is the Unix group in `--gid`.
 
 The two pi examples name a job group `bii`,
 after the partition its jobs run on.
-That is legal.
+That name is legal.
 But it reads as though the two were the same thing.
-Name a group after what its workers do (`eval`, `optimizer`, `cpu`),
+Name a job group after what its workers do (`eval`, `optimizer`, `cpu`),
 and leave `bii` to `--partition`.
 
 ## Work
@@ -187,12 +187,12 @@ One process, one name.
 | Term | What it names | Do not use |
 | --- | --- | --- |
 | **the `ds-service` server**, short form **the server** | The one process everything talks through. | queue server, task queue server, task-queue server, pilot server, DS server, the queue |
-| **the map** | The key value datastructure, reached by `map_set` and `map_get`. | key value store, the store, key space |
-| **time series** | The datastructure `time_series_append` writes. | series alone, metric, stream |
+| **the map** | The key-value data structure, reached by `map_set` and `map_get`. | key value store, the store, key space |
+| **time series** | The data structure `time_series_append` writes. | series alone, metric, stream |
 | **counter** | What `counter_get_next_value` hands out, which is how the workers elect a monitor and how `restart_jobs` requests a restart. | sequence, ticket, lock |
 | **key** | One entry in the map, quoted with its prefix. | field, entry, record |
 
-`ds-service` also has **journal** and **mutex** datastructures
+`ds-service` also has **journal** and **mutex** data structures
 that this library does not use.
 Do not spend either word on something else.
 
@@ -204,7 +204,7 @@ Everywhere else, write "the server".
 ## The search side
 
 Neither Slurm nor `ds-service` has a word here.
-These come from this library's own API,
+These words come from this library's own API,
 from botorch where the code calls into it,
 and from scipy for the design.
 
@@ -213,12 +213,12 @@ and from scipy for the design.
 | **study** | One space, its objective and its settings. | Optuna | task, job, problem, experiment |
 | **exploration** | What `ExploreSpaceSobolQMC` does. | `num_exploration_points` | sweep, sampling, scan |
 | **search** | What `OptimizeSpaceBotorch` does. | `search_parallelism` | optimization as the activity, calibration, tuning |
-| **round** | One fit, propose, evaluate cycle. | this library | iteration, phase, wave, generation |
+| **round** | One fit-propose-evaluate cycle. | this library | iteration, phase, wave, generation |
 | **design** | The set of points a Sobol' draw produces. | scipy qmc | sample, batch, grid |
 | **point** | A parameter assignment, in objective coordinates. | this library | sample, config, trial |
 | **unit point** | The same point in the unit cube. | `unit_points` | standardized point, normalized point |
-| **candidate** | A point the acquisition proposed and nothing has evaluated. | botorch | proposal as a noun, suggestion |
-| **observation** | A point that has been evaluated, with its value. | botorch, GP literature | result, measurement, data point |
+| **candidate** | A point the acquisition proposed and nothing evaluated yet. | botorch | proposal as a noun, suggestion |
+| **observation** | An evaluated point, with its value. | botorch, GP literature | result, measurement, data point |
 | **objective** | The function under study. | this library | target, cost function, model |
 | **objective value** | The number under `objective_key`. Lower is better. | `objective_value()` | score, cost, fitness, result |
 | **incumbent** | The best value known so far. | BO literature | the best, current best |
@@ -228,7 +228,7 @@ and from scipy for the design.
 **study**, not task.
 A study is not a unit of work.
 One study expands into thousands of real tasks,
-so calling it a task collides with the one word
+so to call it a task collides with the one word
 that has to stay unambiguous.
 
 **propose** stays as a verb,
@@ -257,16 +257,16 @@ because rule 4 leaves no room for a second word for the same thing.
 | **time limit** | Slurm's `--time`. | Slurm | walltime, wall time, wall clock |
 | **wall clock** | Elapsed real time, as in `acqf_timeout_s`. | ordinary usage | walltime, runtime |
 
-A **monitor** writes a series and `swtop` reads it.
+A **monitor** writes a time series and `swtop` reads it.
 They are opposite ends of one pipe.
 Where a document calls `swtop` a monitor,
 the section on monitor election becomes unreadable.
 
 ## Names that changed
 
-The vocabulary above was applied to the whole repository in one pass.
+One pass applied the vocabulary of this file to the whole repository.
 This table is what moved,
-for anyone reading an older branch, an older log file
+for anyone who reads an older branch, an older log file
 or a results file written before the change.
 
 | Was | Is |
@@ -306,12 +306,12 @@ even where one of them is clear on its own.
 **In identifiers.**
 A name carries the same word the prose does.
 An argument that holds a job group name is `group` or `job_group`,
-or `name` on `define_job_group` and `scale_jobs`,
-which act on a job group.
+or `name` on `define_job_group` and `scale_jobs`.
+Those two methods act on a job group.
 It is never `worker`.
 
 **In error messages and CLI help.**
-These reach a user who has read nothing else,
+Error messages and CLI help reach a user who read nothing else,
 so they carry the fullest form:
 "job group", "pilot job", "the `ds-service` server".
 An error that names an API call names the current one,

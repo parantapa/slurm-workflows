@@ -21,7 +21,7 @@ The suite needs no Slurm cluster.
 The suite takes about 55s end to end.
 Everything but the botorch tests takes about 20s,
 and GP fits take the rest.
-Most tests start a ds-service process of their own,
+Most tests start a `ds-service` process of their own,
 and a test against the real server pays for that start.
 
 The `[test]` extra installs botorch, and so torch.
@@ -52,7 +52,7 @@ So a machine with GPUs runs the suite as one without.
 The patch reaches only the test's own process.
 A worker process that a test starts reads the real NVML.
 
-**ds-service is real.**
+**`ds-service` is real.**
 Each test gets its own server process on a random port.
 So the tests run against the real server,
 not against a stand-in that can drift from it.
@@ -64,7 +64,7 @@ so a fresh process per test also means no state leaks between tests.
 `$DS_SERVICE_BIN` if you set it, otherwise `ds-service` on `$PATH`.
 `$DS_SERVICE_BIN` can be a whole command line rather than a path.
 
-If neither finds it, the tests that need a server skip.
+If neither one finds the binary, the tests that need a server skip.
 The tests that need no server still run,
 such as the template, `slurm_utils`, search space and `utils` tests.
 
@@ -86,7 +86,7 @@ Paths are relative to [`tests/`](../tests).
 | `test_explore_space.py` | `ExploreSpaceSobolQMC`: the design it draws and what it records (no botorch needed) |
 | `test_utils.py` | The shared helpers |
 | `test_optimize_space_botorch.py` | `OptimizeSpaceBotorch`: the observations it starts from, rounds, acquisition, search behavior, resuming (skips without botorch) |
-| `conftest.py` | Fixtures: real ds-service, fake Slurm, fake NVML, executor, hang guards |
+| `conftest.py` | Fixtures: real `ds-service`, fake Slurm, fake NVML, executor, hang guards |
 | `worker_harness.py` | Runs a real worker's main loop for a bounded number of tasks, or of queue polls, or until it returns for a restart |
 | `support_actor.py` | Actor classes. They must stay importable by name for the actor tests |
 
@@ -97,7 +97,7 @@ Paths are relative to [`tests/`](../tests).
   and swallows every `Exception`, so a bad task cannot kill a worker.
   `run_worker()` stops it with a `BaseException` from `task_done`,
   after the expected number of tasks.
-  That is why `StopWorker` is not an `Exception`.
+  For this reason, `StopWorker` is not an `Exception`.
   `poll_worker()` counts `task_get` calls instead of completions,
   which is the only way to bound a worker with nothing to run.
   An empty queue completes no tasks,
@@ -106,8 +106,8 @@ Paths are relative to [`tests/`](../tests).
   `test_swtop_tui.py` runs each scenario through `App.run_test()`
   inside `asyncio.run`, so the suite needs no async plugin.
   A Textual worker runs each poll,
-  so a test that waits for a poll waits
-  on `app.workers.wait_for_complete()`, not on a sleep.
+  so a test that waits for a poll
+  waits on `app.workers.wait_for_complete()`, not on a sleep.
   The collector's client belongs to the loop that made it.
   So a test against the real server builds the client
   inside the scenario (`open_collector`).
@@ -126,12 +126,12 @@ Paths are relative to [`tests/`](../tests).
   A GP fit already dominates each test,
   so a queue round trip adds nothing.
   `TestRealExecutor` keeps the stand-in honest,
-  and runs a whole optimization
+  and runs a whole search
   through the real executor, the real queue and a real worker.
 - **A test whose driver blocks runs its real worker in a thread.**
   `mapreduce`, the exploration and the optimizer
-  all block in a wait the moment they submit,
-  so nothing on the test's own thread could run the worker.
+  all block in a wait the moment they submit.
+  So nothing on the test's own thread can run the worker.
 - **Four botorch tests assert search behavior, not bookkeeping.**
   They catch a flipped sign on the objective:
   botorch maximizes, and the optimizer minimizes.
@@ -163,7 +163,7 @@ Paths are relative to [`tests/`](../tests).
   `DsServiceServer.wait_until_ready()` polls the TCP socket instead.
   For this reason, `conftest` calls it rather than a probe of its own.
   An RPC probe makes the suite ~100x slower.
-- **Server lifecycle belongs to `ds-service-client`, not to `conftest`.**
+- **The server lifecycle belongs to `ds-service-client`, not to `conftest`.**
   `DsServiceServer` finds the binary, picks a free port,
   waits for the socket and terminates the process.
   `conftest` only chooses the interface to bind,

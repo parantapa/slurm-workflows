@@ -165,7 +165,7 @@ class TestCancelJobs:
     def test_flags_are_passed_through(self, fake_slurm, monkeypatch):
         seen = []
         real_run = fake_slurm.run
-        # Record each command line, then run it as the fake would have.
+        # Record each command line, then run it as the unpatched fake does.
         monkeypatch.setattr(
             fake_slurm,
             "run",

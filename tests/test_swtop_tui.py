@@ -361,7 +361,7 @@ class TestDisplay:
                 )
 
                 # The tab label follows a message the table posts,
-                # so let it be handled.
+                # so let the app handle it.
                 await pilot.pause()
 
                 assert label_of(app, "workers") == "workers (3)"
@@ -784,7 +784,7 @@ class TestSlowPoll:
         drive(scenario)
 
     def test_one_poll_is_in_flight_at_a_time(self):
-        """A tick during a poll is dropped rather than queued."""
+        """The poller drops a tick during a poll, and does not queue it."""
         slow = SlowCollector(0.3)
 
         async def scenario():
@@ -793,7 +793,7 @@ class TestSlowPoll:
                 await pilot.pause(1.0)
 
                 assert slow.most_in_flight == 1
-                # About 1.0 / 0.3 polls, where queued ticks would make it 20.
+                # About 1.0 / 0.3 polls. With queued ticks, the count is 20.
                 assert slow.started <= 5
 
         drive(scenario)
@@ -1041,6 +1041,8 @@ class TestRealServer:
 
         async def scenario():
             async with open_collector(ds_service_address) as collector:
+                # The 60 s interval matches the 60 s alarm on every test,
+                # so no second poll fires before the test ends.
                 app = SwtopApp(collector, 60.0)
                 async with app.run_test() as pilot:
                     await app.workers.wait_for_complete()
@@ -1081,7 +1083,7 @@ class TestRealServer:
         drive(scenario)
 
     def test_an_unreachable_server_is_reported_not_fatal(self):
-        """A failed poll is reported, and the app keeps running."""
+        """The app reports a failed poll, and does not stop."""
 
         async def scenario():
             async with open_collector("127.0.0.1:1") as collector:
