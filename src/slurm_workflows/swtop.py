@@ -4,8 +4,9 @@ See `docs/reference/swtop.md` for the blocks and what fills them.
 """
 
 # "Where things live" in `docs/developer-notes.md`
-# maps this module and its two siblings,
-# and "Monitoring" there says why `swtop` collects the way it does.
+# maps this module and its two siblings.
+# "Monitoring" there says why `swtop` collects the way it does.
+# Its paragraph "`swtop.py` imports no Textual." says why this module imports none.
 
 from __future__ import annotations
 
@@ -52,7 +53,7 @@ PROGRESS_FIELDS = ["progress_id", "desc", "unit", "total"]
 PROGRESS_TAIL_S = 60.0
 
 # This prefix must match the key that `SlurmPilotExecutor.set_task_name` writes,
-# which spells it out rather than importing a constant.
+# which writes the prefix out in full and imports no constant.
 TASK_NAME_PREFIX = "task_name:"
 
 # `task_search_id` matches task ids against a regular expression,
@@ -203,7 +204,7 @@ class Snapshot:
     counts: dict[str, int] = field(default_factory=dict)
     progress: ProgressInfo | None = None
     # The pilot jobs, under the field's old name.
-    # See docs/terminology.md, Names that changed.
+    # See docs/terminology.md, Identifiers that keep a retired word.
     worker_jobs: list[PilotJobInfo] = field(default_factory=list)
     workers: list[WorkerInfo] = field(default_factory=list)
     tasks: list[TaskInfo] = field(default_factory=list)
@@ -242,7 +243,7 @@ class Collector:
         But a server that the client cannot reach raises.
         The caller decides whether to keep polling.
         """
-        # None of these needs an answer from another,
+        # None of these reads needs an answer from another,
         # so they go out together and the poll waits once.
         # Two groups, since `asyncio.gather` types at most six at a time.
         (counts, progress, worker_jobs, workers, hosts, jobs), exited = (
@@ -471,7 +472,7 @@ class Collector:
 
     async def _collect_subjects(self, prefixes: Mapping[str, str]) -> list[SubjectInfo]:
         """The latest reading of every subject one monitor writes about."""
-        # The keys of one series name every subject.
+        # The keys of one time series name every subject.
         first = next(iter(prefixes.values()))
         subjects = sorted(
             key[len(first) :]
@@ -509,7 +510,7 @@ class Collector:
         try:
             worker_id = await self.client.task_get_worker_id(task_id)
         except (KeyError, TaskStateError):
-            # The task can leave Running between the status call and this read.
+            # The task can leave `Running` between the status call and this read.
             return ""
         return worker_names.get(worker_id, worker_id)
 
@@ -518,7 +519,7 @@ class Collector:
 async def open_collector(address: str) -> AsyncIterator[Collector]:
     """A collector on a client of its own, closed on the way out.
 
-    The client belongs to the event loop that enters this,
+    The client belongs to the event loop that enters this context manager,
     so the collector works only on that loop.
     """
     async with DsServiceClientAsync(address) as client:
@@ -540,10 +541,7 @@ def _unknown_pilot_job(name: str) -> PilotJobInfo:
 
 
 def _state_rank(state: str) -> int:
-    """Where a state sorts.
-
-    A state that `STATE_ORDER` omits sorts last.
-    """
+    """Where a state sorts, with a state that `STATE_ORDER` omits last."""
     try:
         return STATE_ORDER.index(state)
     except ValueError:
@@ -786,7 +784,8 @@ async def run_plain(collector: Collector, interval: float) -> None:
             draw(render(snapshot))
             await asyncio.sleep(interval)
     except KeyboardInterrupt:
-        # This runs only outside `asyncio.run`, which raises a Ctrl-C at its caller.
+        # This handler runs only outside `asyncio.run`,
+        # which raises a Ctrl-C at its caller.
         pass
 
 
@@ -800,8 +799,9 @@ async def watch(server_address: str, interval: float, plain: bool) -> None:
         if plain or not sys.stdout.isatty():
             await run_plain(collector, interval)
         else:
-            # Imported here for the reason in the `swtop.py` row
-            # of "Where things live" in the developer notes.
+            # Imported here for the reason in the paragraph
+            # "`swtop.py` imports no Textual." under "Monitoring"
+            # in the developer notes.
             from .swtop_tui import run_app
 
             await run_app(collector, interval)
@@ -826,7 +826,7 @@ def swtop(server_address: str, interval: float, plain: bool) -> None:
     """Watch the tasks and workers on the ds-service server at SERVER_ADDRESS.
 
     SERVER_ADDRESS is `host:port`, the same address that an executor connects to.
-    It runs until the viewer interrupts it.
+    The command runs until the viewer interrupts it.
     """
     if interval <= 0:
         raise click.BadParameter("must be greater than 0", param_hint="'--interval'")

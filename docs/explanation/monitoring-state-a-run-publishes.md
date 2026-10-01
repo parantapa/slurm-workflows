@@ -1,36 +1,37 @@
-# The trail a run leaves
+# The monitoring state a run publishes
 
 [<- back to the main README](../../README.md)
 
-A run leaves a trail on the `ds-service` server.
-The trail holds which pilot jobs the executor submitted
+A run publishes monitoring state on the `ds-service` server.
+That state holds which pilot jobs the executor submitted
 and which workers started.
 It also holds what the nodes and the jobs do,
 and how far a wait got.
 No task needs any of it.
-The trail exists so that somebody can watch a run from outside itself,
+It exists so that somebody can watch a run from outside itself,
 which is what [`swtop`](../reference/swtop.md) does.
 
 For the field names and the exact keys, see
 [What a run publishes](../reference/what-a-run-publishes.md).
 
-## Two halves, because they are known at different times
+## Two halves, because the executor and the worker learn them at different times
 
-The executor writes `pilot_job_info:<job-name>`
+The executor writes the pilot job's description
 as soon as `sbatch` returns.
-Each worker writes `worker_info:<worker-id>`
+Each worker writes its own description
 when it starts.
 
-Nothing merges the two,
-and that is the point.
+Nothing merges the two descriptions,
+and this separation is deliberate.
 A pilot job exists from the moment the executor submits it.
 But nobody knows the node it will land on or the pids it will run
 until Slurm starts it.
 Two keys mean that a queued job is visible before it runs.
-The *difference* between the two blocks is a fact worth reading.
-A pilot job with no worker against it is still queued,
-still inside its setup script,
-or runs workers that cannot reach the server.
+The difference between the two keys is a fact worth reading.
+A pilot job with no worker is in one of three states:
+it is still queued,
+it still runs its setup script,
+or its workers cannot reach the server.
 
 One pilot job usually holds many workers, one per Slurm task,
 so the two counts differ even when everything is healthy.
@@ -40,27 +41,27 @@ so the two counts differ even when everything is healthy.
 A pilot job starts after the executor submits it,
 and a pilot job and a worker both exit after they describe themselves.
 Each of those times goes in a key of its own:
-`pilot_job_start:<job-name>`, `pilot_job_exit:<job-name>`
-and `worker_exit:<worker-id>`.
-A worker's start time is known when it writes `worker_info:<worker-id>`,
-so it is a field of that key.
+a start key and an exit key for the pilot job,
+and an exit key for the worker.
+A worker knows its start time when it writes its description,
+so the start time is a field of that key.
 
-A new key for each event keeps every key written once.
+With a new key for each event, nothing writes a key twice.
 `swtop` still reads each description once.
 It learns which pilot jobs and workers exited
 from two key searches per poll, one for each kind,
 without a read.
-An exit written into the description instead
-makes a cached description stale,
-and `swtop` has to read every description again on every poll.
+If a worker writes its exit into its description instead,
+a cached description goes stale.
+Then `swtop` must read every description again on every poll.
 
 The batch script publishes the pilot job's two times,
 because only the batch script lives exactly as long as the job.
-A worker can exit while the job runs on,
+A worker can exit while the pilot job continues,
 and a job can end before any of its workers starts.
 The batch script has no Python of its own.
 It runs the worker script with `--pilot-job-event`,
-so the times go out through the environment the setup script builds.
+so the times reach the server through the environment that the setup script builds.
 
 Slurm ends a job with SIGTERM, and with SIGKILL a little later.
 The batch script traps SIGTERM, and the worker turns it into `SystemExit`,
@@ -80,18 +81,18 @@ Worse, a reader that caches what it read
 remembers that half-described worker for the rest of the run.
 One key makes a worker either absent or complete.
 
-A worker writes its identity *before* it builds its actor.
+A worker writes its identity first, and builds its actor after that.
 A worker that dies in its actor's constructor
 therefore still records which job and node it died on.
 
 Nothing ever updates or deletes these keys,
 or the start and exit keys beside them.
-That is what makes them cacheable.
+Because of this, a reader can cache them.
 `swtop` reads each worker's fields once and never again.
-On a large pool that is the difference between one read per poll
+On a large pool, this caching is the difference between one read per poll
 and four hundred reads per poll.
 The server holds these keys in memory, and they die with the server.
-That is the only cleanup there is.
+The exit of the server is the only cleanup there is.
 
 ## Why a wait publishes its progress instead of drawing it
 
@@ -108,14 +109,16 @@ The same run therefore shows a bar to somebody
 who watches from another shell,
 and leaves a clean log when nobody does.
 
-The cadence and the overwrite rule follow from the same choice.
+A wait appends its count at most once a second,
+and each new wait overwrites the key.
+Both rules follow from the same choice.
 A display that a reader polls costs a write per second,
 not a write per task.
 Only the newest wait is worth a key of its own.
-[Watching a wait](../reference/what-a-run-publishes.md#watching-a-wait)
+[Wait progress](../reference/what-a-run-publishes.md#wait-progress)
 has the fields.
 
-## Why sampling is elected, and never re-elected
+## Why the workers elect a monitor once, and never again
 
 The workers sample the node and job readings themselves,
 so the cluster runs no extra process.
@@ -124,10 +127,12 @@ and a pilot job spans many nodes.
 Most workers must therefore not sample,
 or every reading arrives forty times over.
 
-The election uses a `ds-service` counter.
-`counter_get_next_value` returns distinct, gap-free values.
-The worker told 1 for `host_monitor:<hostname>:<job-id>:<generation>` takes the node,
-the part of the job on that node, and the GPUs that part can see.
+The election uses a `ds-service` counter, the host counter,
+keyed on the hostname, the job id and the restart generation.
+The counter hands out distinct, gap-free values.
+The worker that gets the value 1 samples the node,
+the part of the job on that node,
+and the GPUs that part can see.
 Slurm accounts a job in a separate cgroup on each node,
 so no single worker can read the whole of a job that spans nodes.
 The election needs no lock and no designated rank,
@@ -135,62 +140,63 @@ and the workers do not need to know each other exist.
 
 The host counter carries the job id
 because a counter never resets while the server runs.
-Keyed on the hostname alone,
-it lets only the first job that lands on a node sample it.
+If the key holds the hostname alone,
+only the first job that lands on a node samples that node.
 A later job on the same node then has no sampler,
 and the node looks stale while that job keeps it busy.
 With the job id in the key,
 every pilot job samples every node it runs on.
 Two jobs that share a node both sample it,
 and their readings land in the same series,
-since they measure the same machine.
+since they measure the same node.
 
 The host counter also carries the job group's restart generation,
 for the same reason.
 [`restart_jobs`](../reference/executor.md#restart_jobs) replaces every worker of a job,
 and the sampler exits with the rest.
-Keyed on the job id alone,
+If the key holds the job id alone,
 the counter is already past 1 when the new workers ask.
 As a result, the job has no sampler after its first restart.
 
-Nothing hands a subject back when the worker that samples it dies,
-until a restart of its job group holds a new election.
+When the worker that samples a subject dies,
+no other worker samples that subject
+until a restart of the worker's job group holds a new election.
 The series stops,
 and a reader that sees no point in the last minute
 calls the subject `(stale)`.
-A second election needs a heartbeat and a lease,
-which is a lot of machinery for a monitoring convenience.
+A second election needs a heartbeat and a lease.
+That machinery costs more than a monitoring convenience is worth.
 The trade is that a run which scales down
-loses the readings for what it gave up,
+loses the readings for each node it gave up,
 until another pilot job lands on that node.
 
-Sampling threads are daemons that swallow their own errors,
-for the same reason a worker swallows a bad task's exception.
+Monitors are daemon threads that catch and discard their own errors,
+for the same reason that a worker catches a bad task's exception.
 A monitor must not hold a worker open at the end of its time limit.
 A node that is briefly unreachable
 must leave a gap in the series rather than end it.
 
 ## Why `swtop` draws a failed poll instead of raising
 
-A program that exits when the server blinks
-takes the screen down with it,
+A program that exits when the server is briefly unreachable
+clears its screen as it exits,
 usually at the least convenient moment.
 So `swtop` reports an unreachable server and keeps polling.
 The terminal UI reports it below the blocks,
 with the last good reading left on screen.
 The same behavior lets `swtop` start before the server exists.
-There is no meaningful difference between a server that is not up yet
-and one that is briefly away.
+To `swtop`, a server that does not exist yet
+looks the same as a server that is briefly unreachable.
 
-## The limits of what can be shown
+## The limits of what `swtop` can show
 
-`swtop` can only show what an RPC can answer.
-The server can count tasks by state and enumerate task ids,
-but nothing enumerates workers, hosts or jobs.
-`swtop` therefore builds those blocks from a search
+`swtop` can only show what a remote procedure call (RPC) to the server can answer.
+The server can count tasks by state and list task ids,
+but nothing lists workers, hosts or jobs.
+`swtop` therefore builds those blocks from a search of the map and the time series
 for the keys the workers and monitors publish.
 `swtop` cannot list a worker that never published its identity.
-That is a property of the server, not a gap to work around.
+This limit is a property of the server, not a gap to work around.
 
 ## Related
 
@@ -199,4 +205,4 @@ That is a property of the server, not a gap to work around.
 - [What a run publishes](../reference/what-a-run-publishes.md),
     for the keys and fields
 - [The pilot-job model](pilot-job-model.md),
-    for the processes that leave this trail
+    for the processes that publish this state

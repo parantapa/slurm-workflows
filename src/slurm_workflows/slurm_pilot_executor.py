@@ -48,7 +48,9 @@ from .slurm_pilot_worker import (
 
 # What a `Task`'s `output` holds until the task finishes.
 # A task that was canceled, is unknown to the server,
-# or has no pilot job left to run it keeps it.
+# or has no pilot job left to run it keeps `NoOutput`.
+# So does a finished task with `_fetch_output` False,
+# whose output only another task reads.
 NoOutput = object()
 
 # One JSON key per submitted pilot job, keyed on the job name.
@@ -65,24 +67,35 @@ PROGRESS_SERIES_PREFIX = "progress:"
 # How often the executor appends the count while tasks come back.
 PROGRESS_INTERVAL_S: float = 1.0
 
-# The queue one `mapreduce` or `map` call puts its items on,
+# The queue one `map_reduce` or `map` call puts its items on,
 # and the id of each item task on that queue.
-# The `mapreduce` and `map` segments keep these ids clear of `<name>.task.<n>`,
+# The `map_reduce` and `map` segments keep these ids clear of `<name>.task.<n>`,
 # and clear of each other.
 # The token keeps two runs of one executor name clear of each other:
 # the index restarts at 0 in each executor,
 # and `task_add` refuses a duplicate id.
-MAPREDUCE_QUEUE_TEMPLATE = "{name}.mapreduce.{index}.{token}"
+MAP_REDUCE_QUEUE_TEMPLATE = "{name}.map_reduce.{index}.{token}"
 MAP_QUEUE_TEMPLATE = "{name}.map.{index}.{token}"
-MAPREDUCE_ITEM_TEMPLATE = "{queue}.item.{index}"
+MAP_REDUCE_ITEM_TEMPLATE = "{queue}.item.{index}"
 
 # How many hex characters of a UUID4 an item queue name carries.
-MAPREDUCE_TOKEN_LEN: int = 8
+MAP_REDUCE_TOKEN_LEN: int = 8
+
+# How many map tasks a `map` or `map_reduce` call submits
+# when the caller gives no `num_tasks`.
+# The executor cannot know how many workers a job group starts,
+# since that depends on the sbatch arguments and on how many jobs Slurm runs.
+# Map tasks claim items from one shared queue,
+# so a count above the number of workers costs little:
+# a task that starts after the queue is empty returns at once.
+# The bound keeps a call on a long iterable
+# from adding one task record per item to the server.
+DEFAULT_MAP_TASKS: int = 1024
 
 # What an item task carries in place of a function,
 # and what it records as its output.
 # Only a map task claims an item task,
-# and that task reads the item out of the task's input,
+# and the map task reads the item out of the item task's input,
 # so nothing ever deserializes either field.
 NO_FUNCTION = b""
 NO_TASK_OUTPUT = b""
@@ -120,7 +133,7 @@ class RaiseOnError(Enum):
     RAISE_NEVER = auto()
     """Report the failures and return.
 
-    The caller reads `task.output`.
+    The driver reads `task.output`.
     """
 
 
@@ -163,7 +176,6 @@ class Task:
     Afterward `output` holds the return value,
     or a `RemoteExecutionError` if the worker raised
     or a parent task failed.
-    `parent_task_ids` holds the ids of the tasks this one waits on.
     """
 
     task_id: str
@@ -176,6 +188,10 @@ class Task:
     _task_name: str | None = None
     # The parents themselves, so a wait can check their queues too.
     _parents: list["Task"] = field(default_factory=list, repr=False, compare=False)
+    # False for a task whose output only another task reads,
+    # so a wait leaves that output on the server.
+    # A failure is still read, since it carries the error.
+    _fetch_output: bool = field(default=True, repr=False, compare=False)
 
     # Read-only: the map holds the other copy,
     # so a setter here can rename the task in this process alone.
@@ -237,7 +253,7 @@ class _Progress:
 
 
 def _resolve_map_method(name: str, what: str) -> Callable:
-    """Look one map method name up on the actor of the worker that runs it."""
+    """Find one map method, by name, on the actor of the worker that runs it."""
     actor = current_actor()
     if actor is None:
         raise RuntimeError(
@@ -247,7 +263,7 @@ def _resolve_map_method(name: str, what: str) -> Callable:
     return getattr(actor, name)
 
 
-def _mapreduce_task(
+def _map_reduce_task(
     mr_queue: str,
     map_fn: Callable | str,
     reduce_fn: Callable,
@@ -266,18 +282,18 @@ def _mapreduce_task(
     # the worker keeps its actor until it exits,
     # so the bound method is the same for every item.
     if isinstance(map_fn, str):
-        map_fn = _resolve_map_method(map_fn, "mapreduce")
+        map_fn = _resolve_map_method(map_fn, "map_reduce")
 
     result = init
 
     # A client of this task's own.
     # `DsServiceClient()` reads the address the worker put in the environment.
-    # See Mapreduce and map in the developer notes.
+    # See "map_reduce and map" in the developer notes.
     with DsServiceClient() as client:
         while True:
             # No retry on `TimeoutError`: `task_get` is not idempotent.
-            # The deadline can fire after the server recorded the claim,
-            # and a retry then skips that item, which stays `Running` for good.
+            # The deadline can fire after the server recorded the claim.
+            # A retry then skips that item, which stays `Running` forever.
             # The error propagates instead, and the wait raises.
             try:
                 item_task = client.task_get(worker_id, mr_queue)
@@ -290,8 +306,31 @@ def _mapreduce_task(
             value = map_fn(item, *map_args, **map_kwargs)
             result = reduce_fn(result, value, *reduce_args, **reduce_kwargs)
 
-            # After the fold, so an item goes Finished only after this task counts it.
+            # After the fold,
+            # so an item goes `Finished` only after this task counts it.
             client.task_done(item_task.task_id, worker_id, NO_TASK_OUTPUT)
+
+
+def _reduce_task(
+    map_task_ids: list[str],
+    reduce_fn: Callable,
+    init: Any,
+    reduce_args: tuple[Any, ...],
+    reduce_kwargs: dict[str, Any],
+) -> Any:
+    """Fold the partial results of the map tasks of one `map_reduce` call."""
+    # `init` came through cloudpickle,
+    # so this fold cannot write into the driver's own value.
+    result = init
+
+    # This task runs only after every map task finished,
+    # so every output is on the server.
+    # One at a time, so the worker never holds every partial result at once.
+    with DsServiceClient() as client:
+        for task_id in map_task_ids:
+            partial = cloudpickle.loads(client.task_get_output(task_id))
+            result = reduce_fn(result, partial, *reduce_args, **reduce_kwargs)
+    return result
 
 
 def _map_task(
@@ -301,7 +340,7 @@ def _map_task(
     map_kwargs: dict[str, Any],
 ) -> list[tuple[str, Any]]:
     """Map the items this task claims, as `(item task id, value)` pairs."""
-    # Everything `_mapreduce_task` says about the worker id, the method name,
+    # Everything `_map_reduce_task` says about the worker id, the method name,
     # the client and the retry holds here too.
     worker_id = os.environ["PILOT_WORKER_ID"]
 
@@ -321,13 +360,20 @@ def _map_task(
             values.append((item_task.task_id, map_fn(item, *map_args, **map_kwargs)))
 
             # The value travels home in this task's output, not the item task's.
-            # See Mapreduce and map in the developer notes.
+            # See "map_reduce and map" in the developer notes.
             client.task_done(item_task.task_id, worker_id, NO_TASK_OUTPUT)
 
 
 # `docs/explanation/pilot-job-model.md` explains the model this class implements.
 class SlurmPilotExecutor:
     """Runs Python callables on a Slurm cluster through a pool of workers.
+
+    `define_job_group` and `scale_jobs` set up the pool.
+    The simple interface is `map` and `map_reduce`:
+    each call runs one function over a whole iterable and blocks until it is done.
+    The advanced interface is `submit`, with `wait` or `as_completed`.
+    It gives a handle per task, task names, priorities, parent tasks,
+    and a choice of what a failure does.
 
     Each executor needs a `ds-service` server of its own,
     because everything on a server belongs to one run.
@@ -368,7 +414,7 @@ class SlurmPilotExecutor:
 
         self.name = name
         self.next_task_index = 0
-        self.next_mapreduce_index = 0
+        self.next_map_reduce_index = 0
         self.next_map_index = 0
 
         self.server_address = server_address
@@ -422,8 +468,8 @@ class SlurmPilotExecutor:
 
         `actor_class_name` is a dotted `module.Class` path
         that each worker imports and constructs at startup.
-        The actor arguments need an `actor_class_name` to construct,
-        and raise `ValueError` without one.
+        The actor arguments need an `actor_class_name`,
+        and the call raises `ValueError` for them without one.
         Actor arguments a later call passes replace the earlier ones,
         even for an otherwise identical definition.
 
@@ -467,8 +513,7 @@ class SlurmPilotExecutor:
         else:
             self.groups[group.name] = group
 
-        # These go into the map, cloudpickled and keyed on the job group name.
-        # Each worker reads them at startup, under the same keys.
+        # Each worker reads these arguments at startup, under the same keys.
         # See Task flow in the developer notes.
         if actor_class_args is not None:
             self.client.map_set(
@@ -552,7 +597,10 @@ class SlurmPilotExecutor:
         The call raises `AssertionError`
         for a job group that `define_job_group` did not register.
         A failed `squeue` or `scancel` raises `RuntimeError`.
-        A failed `sbatch` raises what `submit_sbatch_job` raises.
+        A failed `sbatch` raises `subprocess.CalledProcessError`,
+        or `subprocess.TimeoutExpired` if it does not answer in time.
+        An `sbatch` whose output holds no job id raises `RuntimeError`,
+        and one whose job id is not a number raises `ValueError`.
         """
         assert name in self.groups, "Unknown job group"
 
@@ -752,6 +800,343 @@ class SlurmPilotExecutor:
             return False
         return True
 
+    def _require_actor_queues(self, queue: list[str], what: str) -> None:
+        """Refuse a method name where a job group has no actor to find it on."""
+        plain = sorted(
+            name
+            for name in queue
+            if (group := self.groups.get(name)) is not None
+            and not group.actor_class_name
+        )
+        if plain:
+            raise ValueError(
+                f"{what} names a method, which only a job group with an "
+                f"actor can resolve, and these groups have none: {plain}"
+            )
+
+    def _require_started_queues(self, queue: list[str], what: str) -> None:
+        """Refuse a blocking call whose queues have no pilot job submitted."""
+        started = {name for name, group in self.groups.items() if group.jobs}
+        if not set(queue) & started:
+            raise RuntimeError(
+                f"{what} targets queues with no worker started: {sorted(queue)}. "
+                f"Call scale_jobs() for a job group of that name first."
+            )
+
+    def _check_map_call(
+        self,
+        queue: str | list[str],
+        map_fn: Callable | str,
+        num_tasks: int | None,
+        what: str,
+    ) -> list[str]:
+        """Refuse what `map_reduce` and `map` refuse up front, and list the queues."""
+        if num_tasks is not None and num_tasks < 1:
+            raise ValueError(f"num_tasks must be at least 1, not {num_tasks}")
+
+        if isinstance(queue, str):
+            queue = [queue]
+        if isinstance(map_fn, str):
+            self._require_actor_queues(queue, what)
+        return queue
+
+    def _enqueue_items(
+        self, template: str, index: int, what: str, desc: str, items: list[Any]
+    ) -> tuple[str, list[str]]:
+        """Put every item on a new item queue, and return the queue and the item ids."""
+        item_queue = template.format(
+            name=self.name,
+            index=index,
+            token=uuid.uuid4().hex[:MAP_REDUCE_TOKEN_LEN],
+        )
+        self.logger.info("%s %s: %d items on %s", what, desc, len(items), item_queue)
+
+        item_ids: list[str] = []
+        for item_index, item in enumerate(items):
+            item_id = MAP_REDUCE_ITEM_TEMPLATE.format(
+                queue=item_queue, index=item_index
+            )
+            self.client.task_add(
+                task_id=item_id,
+                parent_task_ids=[],
+                queue=[item_queue],
+                # One priority for all, so the queue serves them oldest first.
+                priority=0.0,
+                function=NO_FUNCTION,
+                input=cloudpickle.dumps(item, protocol=pickle.HIGHEST_PROTOCOL),
+            )
+            item_ids.append(item_id)
+        return item_queue, item_ids
+
+    def _submit_map_tasks(
+        self,
+        queue: list[str],
+        item_queue: str,
+        count: int,
+        fn: Callable,
+        *args: Any,
+    ) -> list[Task]:
+        """Submit `count` map tasks that drain `item_queue`, and name each one."""
+        tasks: list[Task] = []
+        for index in range(count):
+            task = self._submit(queue, [], 0.0, fn, *args)
+            self.set_task_name(task, f"{item_queue}.task.{index}")
+            tasks.append(task)
+        return tasks
+
+    @typechecked
+    def map_reduce(
+        self,
+        queue: str | list[str],
+        map_fn: Callable | str,
+        reduce_fn: Callable,
+        iterable: Iterable[Any],
+        init: Any,
+        *,
+        num_tasks: int | None = None,
+        desc: str | None = None,
+        map_extra_args: tuple[Any, ...] | list[Any] | None = None,
+        map_extra_kwargs: dict[str, Any] | None = None,
+        reduce_extra_args: tuple[Any, ...] | list[Any] | None = None,
+        reduce_extra_kwargs: dict[str, Any] | None = None,
+    ) -> Any:
+        """Map an iterable across the pool, fold the results, and return one value.
+
+        Map tasks on `queue` claim the items,
+        and each one folds what it claims into a partial result.
+        One more task on `queue`, the reduce task,
+        depends on every map task.
+        It runs after they all finish,
+        and folds their partial results into the value this call returns.
+        The partial results go from worker to worker through the server,
+        and never reach this process.
+        This call blocks until the reduce task is back.
+
+        For every item it claims, a task computes:
+
+            reduce_fn(previous, map_fn(item, *map_extra_args, **map_extra_kwargs),
+                      *reduce_extra_args, **reduce_extra_kwargs)
+
+        The first `previous` is `init`.
+
+        `map_fn` is a callable, or the name of a method
+        on the actor of the job group it runs on.
+        A method name reaches the actor that worker built at startup,
+        so an expensive load happens once per worker rather than once per item.
+        `reduce_fn` is always a callable.
+
+        Each map task starts its fold at `init`, and so does the reduce task,
+        so `init` must be the identity of `reduce_fn`.
+        Which items a task claims depends on how busy the pool is,
+        and so does the order the partial results come back in.
+        `reduce_fn` must therefore be associative and commutative.
+        It must also take a partial result as its second argument
+        as readily as a mapped one.
+        Every task folds into its own copy of `init`,
+        so a `reduce_fn` that folds in place
+        cannot write into the driver's own value.
+
+        `num_tasks` is an upper bound on the map tasks this call submits,
+        and defaults to `DEFAULT_MAP_TASKS`.
+        A call with fewer items than that submits one map task per item.
+        `desc` labels the progress `swtop` draws for this call,
+        which counts the map tasks and the reduce task rather than items.
+        It defaults to `map_reduce-<n>`,
+        where `n` counts this executor's earlier `map_reduce` calls
+        that submitted tasks,
+        as in the item queue name.
+        This call reads `iterable` out in full before any task starts.
+        An empty one returns a copy of `init` without submitting anything.
+
+        The call raises `ValueError` for a `num_tasks` below 1.
+        The call raises it as well for a `map_fn` given as a method name
+        where a job group named in `queue` has no actor to find it on.
+        The call raises `RuntimeError` when no job group named in `queue`
+        has a pilot job submitted.
+        The call raises it as well when any of the tasks fails, as `wait` does.
+        A failed map task fails the reduce task too,
+        and the call reports the map task's own error first.
+        """
+        queue = self._check_map_call(queue, map_fn, num_tasks, "map_reduce")
+
+        map_args = tuple(map_extra_args or ())
+        map_kwargs = dict(map_extra_kwargs or {})
+        reduce_args = tuple(reduce_extra_args or ())
+        reduce_kwargs = dict(reduce_extra_kwargs or {})
+
+        # Read out in full, never streamed.
+        # See "map_reduce and map" in the developer notes.
+        items = list(iterable)
+        if not items:
+            # A copy, as every task folds into one.
+            # A cloudpickle round trip rather than `copy.deepcopy`,
+            # so it is the same kind of copy a task gets.
+            # Also, an `init` that cannot travel fails here, as it does in a task.
+            return cloudpickle.loads(
+                cloudpickle.dumps(init, protocol=pickle.HIGHEST_PROTOCOL)
+            )
+
+        # Before anything reaches the server,
+        # so a queue nobody serves costs no item task.
+        self._require_started_queues(queue, "map_reduce")
+
+        if desc is None:
+            desc = f"map_reduce-{self.next_map_reduce_index}"
+        mr_queue, _ = self._enqueue_items(
+            MAP_REDUCE_QUEUE_TEMPLATE,
+            self.next_map_reduce_index,
+            "map_reduce",
+            desc,
+            items,
+        )
+        self.next_map_reduce_index += 1
+
+        # Only after `_enqueue_items` returns.
+        # See "map_reduce and map" in the developer notes.
+        # No more tasks than items: another one can only return `init`.
+        tasks = self._submit_map_tasks(
+            queue,
+            mr_queue,
+            min(num_tasks or DEFAULT_MAP_TASKS, len(items)),
+            _map_reduce_task,
+            mr_queue,
+            map_fn,
+            reduce_fn,
+            init,
+            map_args,
+            map_kwargs,
+            reduce_args,
+            reduce_kwargs,
+        )
+
+        # The reduce task reads the partial results off the server,
+        # so the wait below leaves them there.
+        for task in tasks:
+            task._fetch_output = False
+
+        reduce_task = self._submit(
+            queue,
+            tasks,
+            0.0,
+            _reduce_task,
+            [task.task_id for task in tasks],
+            reduce_fn,
+            init,
+            reduce_args,
+            reduce_kwargs,
+        )
+        self.set_task_name(reduce_task, f"{mr_queue}.reduce")
+
+        # The wait covers the map tasks too, not the reduce task alone.
+        # So the wait reports a failed map task with its own error,
+        # rather than as the dependency failure of the reduce task.
+        # They come first, so a wait meets their failure first.
+        self.wait([*tasks, reduce_task], desc=desc, unit="task")
+        return reduce_task.output
+
+    @typechecked
+    def map(
+        self,
+        queue: str | list[str],
+        map_fn: Callable | str,
+        iterable: Iterable[Any],
+        *,
+        num_tasks: int | None = None,
+        desc: str | None = None,
+        map_extra_args: tuple[Any, ...] | list[Any] | None = None,
+        map_extra_kwargs: dict[str, Any] | None = None,
+    ) -> list[Any]:
+        """Map an iterable across the pool, and return the values in input order.
+
+        Tasks on `queue` claim the items, as they do for `map_reduce`,
+        and each one returns the values it computed.
+        This call blocks until every task is back,
+        and returns a list with one value per item:
+
+            map_fn(item, *map_extra_args, **map_extra_kwargs)
+
+        The list is in the order of `iterable`,
+        whichever task mapped an item and whenever it finished.
+
+        `map_fn` is a callable, or the name of a method
+        on the actor of the job group it runs on,
+        as in `map_reduce`.
+
+        `num_tasks` is an upper bound on the tasks this call submits,
+        and defaults to `DEFAULT_MAP_TASKS`.
+        A call with fewer items than that submits one task per item.
+        `desc` labels the progress `swtop` draws for this call,
+        which counts tasks rather than items.
+        It defaults to `map-<n>`,
+        where `n` counts this executor's earlier `map` calls that submitted tasks,
+        as in the item queue name.
+        This call reads `iterable` out in full before any task starts.
+        An empty one returns an empty list without submitting anything.
+
+        The call raises `ValueError` for a `num_tasks` below 1.
+        The call raises it as well for a `map_fn` given as a method name
+        where a job group named in `queue` has no actor to find it on.
+        The call raises `RuntimeError` when no job group named in `queue`
+        has a pilot job submitted.
+        The call raises it as well when any of the tasks fails, as `wait` does.
+        The call also raises `RuntimeError` if an item comes back with no value,
+        which signals a bug in this library.
+        """
+        queue = self._check_map_call(queue, map_fn, num_tasks, "map")
+
+        map_args = tuple(map_extra_args or ())
+        map_kwargs = dict(map_extra_kwargs or {})
+
+        # Read out in full, never streamed.
+        # See "map_reduce and map" in the developer notes.
+        items = list(iterable)
+        if not items:
+            return []
+
+        # Before anything reaches the server,
+        # so a queue nobody serves costs no item task.
+        self._require_started_queues(queue, "map")
+
+        if desc is None:
+            desc = f"map-{self.next_map_index}"
+        item_queue, item_ids = self._enqueue_items(
+            MAP_QUEUE_TEMPLATE, self.next_map_index, "map", desc, items
+        )
+        self.next_map_index += 1
+        index_of = {item_id: index for index, item_id in enumerate(item_ids)}
+
+        # Only after `_enqueue_items` returns.
+        # See "map_reduce and map" in the developer notes.
+        # No more tasks than items: another one can only return nothing.
+        tasks = self._submit_map_tasks(
+            queue,
+            item_queue,
+            min(num_tasks or DEFAULT_MAP_TASKS, len(items)),
+            _map_task,
+            item_queue,
+            map_fn,
+            map_args,
+            map_kwargs,
+        )
+
+        # A list of slots rather than a list of values,
+        # since the tasks finish, and claim items, in no fixed order.
+        values: list[Any] = [NoOutput] * len(items)
+        for task in self.as_completed(tasks, desc=desc, unit="task"):
+            for item_id, value in task.output:
+                values[index_of[item_id]] = value
+
+        # Every task came back, so an empty slot means
+        # the ordering this call rests on broke.
+        # See "map_reduce and map" in the developer notes.
+        missing = sum(1 for value in values if value is NoOutput)
+        if missing:
+            raise RuntimeError(
+                f"map {desc}: {missing} of {len(items)} items "
+                f"on {item_queue} came back with no value"
+            )
+        return values
+
     def _submit(
         self,
         queue: list[str],
@@ -839,300 +1224,6 @@ class SlurmPilotExecutor:
             queue, task_parents or [], task_priority, fn, *args, **kwargs
         )
 
-    def _require_actor_queues(self, queue: list[str], what: str) -> None:
-        """Refuse a method name where a job group has no actor to find it on."""
-        plain = sorted(
-            name
-            for name in queue
-            if (group := self.groups.get(name)) is not None
-            and not group.actor_class_name
-        )
-        if plain:
-            raise ValueError(
-                f"{what} names a method, which only a job group with an "
-                f"actor can resolve, and these groups have none: {plain}"
-            )
-
-    def _require_started_queues(self, queue: list[str], what: str) -> None:
-        """Refuse a blocking call whose queues have no pilot job submitted."""
-        started = {name for name, group in self.groups.items() if group.jobs}
-        if not set(queue) & started:
-            raise RuntimeError(
-                f"{what} targets queues with no worker started: {sorted(queue)}. "
-                f"Call scale_jobs() for a job group of that name first."
-            )
-
-    def _check_map_call(
-        self, queue: str | list[str], map_fn: Callable | str, num_tasks: int, what: str
-    ) -> list[str]:
-        """Refuse what `mapreduce` and `map` refuse up front, and list the queues."""
-        if num_tasks < 1:
-            raise ValueError(f"num_tasks must be at least 1, not {num_tasks}")
-
-        if isinstance(queue, str):
-            queue = [queue]
-        if isinstance(map_fn, str):
-            self._require_actor_queues(queue, what)
-        return queue
-
-    def _enqueue_items(
-        self, template: str, index: int, what: str, desc: str, items: list[Any]
-    ) -> tuple[str, list[str]]:
-        """Put every item on a new item queue, and return the queue and the item ids."""
-        item_queue = template.format(
-            name=self.name,
-            index=index,
-            token=uuid.uuid4().hex[:MAPREDUCE_TOKEN_LEN],
-        )
-        self.logger.info("%s %s: %d items on %s", what, desc, len(items), item_queue)
-
-        item_ids: list[str] = []
-        for item_index, item in enumerate(items):
-            item_id = MAPREDUCE_ITEM_TEMPLATE.format(queue=item_queue, index=item_index)
-            self.client.task_add(
-                task_id=item_id,
-                parent_task_ids=[],
-                queue=[item_queue],
-                # One priority for all, so the queue serves them oldest first.
-                priority=0.0,
-                function=NO_FUNCTION,
-                input=cloudpickle.dumps(item, protocol=pickle.HIGHEST_PROTOCOL),
-            )
-            item_ids.append(item_id)
-        return item_queue, item_ids
-
-    def _submit_map_tasks(
-        self,
-        queue: list[str],
-        item_queue: str,
-        count: int,
-        fn: Callable,
-        *args: Any,
-    ) -> list[Task]:
-        """Submit `count` map tasks that drain `item_queue`, and name each one."""
-        tasks: list[Task] = []
-        for index in range(count):
-            task = self._submit(queue, [], 0.0, fn, *args)
-            self.set_task_name(task, f"{item_queue}.task.{index}")
-            tasks.append(task)
-        return tasks
-
-    @typechecked
-    def mapreduce(
-        self,
-        desc: str,
-        queue: str | list[str],
-        map_fn: Callable | str,
-        reduce_fn: Callable,
-        iterable: Iterable[Any],
-        init: Any,
-        num_tasks: int,
-        map_extra_args: tuple[Any, ...] | list[Any] | None = None,
-        map_extra_kwargs: dict[str, Any] | None = None,
-        reduce_extra_args: tuple[Any, ...] | list[Any] | None = None,
-        reduce_extra_kwargs: dict[str, Any] | None = None,
-    ) -> Any:
-        """Map an iterable across the pool, fold the results, and return one value.
-
-        Tasks on `queue` claim the items,
-        and each one folds what it claims into a partial result.
-        This call blocks until every task is back,
-        and folds the partial results into the value it returns.
-
-        For every item it claims, a task computes:
-
-            reduce_fn(previous, map_fn(item, *map_extra_args, **map_extra_kwargs),
-                      *reduce_extra_args, **reduce_extra_kwargs)
-
-        The first `previous` is `init`.
-
-        `map_fn` is a callable, or the name of a method
-        on the actor of the job group it runs on.
-        A method name reaches the actor that worker built at startup,
-        so an expensive load happens once per worker rather than once per item.
-        `reduce_fn` is always a callable,
-        because the fold also runs here, where there is no actor.
-
-        Each task starts its fold at `init`, and so does this call,
-        so `init` must be the identity of `reduce_fn`.
-        Which items a task claims depends on how busy the pool is,
-        and so does the order the partial results come back in.
-        `reduce_fn` must therefore be associative and commutative.
-        It must also take a partial result as its second argument
-        as readily as a mapped one.
-        This call folds into a copy of `init`,
-        so a `reduce_fn` that folds in place
-        cannot write into the caller's own value.
-
-        `desc` labels the progress `swtop` draws for this call,
-        which counts tasks rather than items.
-        `num_tasks` is an upper bound.
-        A call with fewer items than that submits one task per item.
-        This call reads `iterable` out in full before any task starts.
-        An empty one returns a copy of `init` without submitting anything.
-
-        The call raises `ValueError` for a `num_tasks` below 1.
-        The call raises it as well for a `map_fn` given as a method name
-        where a job group named in `queue` has no actor to find it on.
-        The call raises `RuntimeError` when no job group named in `queue`
-        has a pilot job submitted.
-        The call raises it as well when any of the tasks fails, as `wait` does.
-        """
-        queue = self._check_map_call(queue, map_fn, num_tasks, "mapreduce")
-
-        map_args = tuple(map_extra_args or ())
-        map_kwargs = dict(map_extra_kwargs or {})
-        reduce_args = tuple(reduce_extra_args or ())
-        reduce_kwargs = dict(reduce_extra_kwargs or {})
-
-        # A copy, so a `reduce_fn` that folds in place
-        # cannot write into the caller's `init`.
-        # A cloudpickle round trip rather than `copy.deepcopy`,
-        # so the local fold gets the same kind of copy each map task folds into,
-        # and an `init` that cannot travel fails at the call.
-        result = cloudpickle.loads(
-            cloudpickle.dumps(init, protocol=pickle.HIGHEST_PROTOCOL)
-        )
-
-        # Read out in full, never streamed.
-        # See Mapreduce and map in the developer notes.
-        items = list(iterable)
-        if not items:
-            return result
-
-        # Before anything reaches the server,
-        # so a queue nobody serves costs no item task.
-        self._require_started_queues(queue, "mapreduce")
-
-        mr_queue, _ = self._enqueue_items(
-            MAPREDUCE_QUEUE_TEMPLATE,
-            self.next_mapreduce_index,
-            "mapreduce",
-            desc,
-            items,
-        )
-        self.next_mapreduce_index += 1
-
-        # Only after `_enqueue_items` returns.
-        # See Mapreduce and map in the developer notes.
-        # No more tasks than items: another one can only return `init`.
-        tasks = self._submit_map_tasks(
-            queue,
-            mr_queue,
-            min(num_tasks, len(items)),
-            _mapreduce_task,
-            mr_queue,
-            map_fn,
-            reduce_fn,
-            init,
-            map_args,
-            map_kwargs,
-            reduce_args,
-            reduce_kwargs,
-        )
-
-        # Folded as they arrive,
-        # so the driver never holds every partial result at once.
-        for task in self.as_completed(tasks, desc=desc, unit="task"):
-            result = reduce_fn(result, task.output, *reduce_args, **reduce_kwargs)
-        return result
-
-    @typechecked
-    def map(
-        self,
-        desc: str,
-        queue: str | list[str],
-        map_fn: Callable | str,
-        iterable: Iterable[Any],
-        num_tasks: int,
-        map_extra_args: tuple[Any, ...] | list[Any] | None = None,
-        map_extra_kwargs: dict[str, Any] | None = None,
-    ) -> list[Any]:
-        """Map an iterable across the pool, and return the values in input order.
-
-        Tasks on `queue` claim the items, as they do for `mapreduce`,
-        and each one returns the values it computed.
-        This call blocks until every task is back,
-        and returns a list with one value per item:
-
-            map_fn(item, *map_extra_args, **map_extra_kwargs)
-
-        The list is in the order of `iterable`,
-        whichever task mapped an item and whenever it finished.
-
-        `map_fn` is a callable, or the name of a method
-        on the actor of the job group it runs on,
-        as in `mapreduce`.
-
-        `desc` labels the progress `swtop` draws for this call,
-        which counts tasks rather than items.
-        `num_tasks` is an upper bound.
-        A call with fewer items than that submits one task per item.
-        This call reads `iterable` out in full before any task starts.
-        An empty one returns an empty list without submitting anything.
-
-        The call raises `ValueError` for a `num_tasks` below 1.
-        The call raises it as well for a `map_fn` given as a method name
-        where a job group named in `queue` has no actor to find it on.
-        The call raises `RuntimeError` when no job group named in `queue`
-        has a pilot job submitted.
-        The call raises it as well when any of the tasks fails, as `wait` does.
-        The call also raises `RuntimeError` if an item comes back with no value,
-        which means the ordering the call rests on broke.
-        """
-        queue = self._check_map_call(queue, map_fn, num_tasks, "map")
-
-        map_args = tuple(map_extra_args or ())
-        map_kwargs = dict(map_extra_kwargs or {})
-
-        # Read out in full, never streamed.
-        # See Mapreduce and map in the developer notes.
-        items = list(iterable)
-        if not items:
-            return []
-
-        # Before anything reaches the server,
-        # so a queue nobody serves costs no item task.
-        self._require_started_queues(queue, "map")
-
-        item_queue, item_ids = self._enqueue_items(
-            MAP_QUEUE_TEMPLATE, self.next_map_index, "map", desc, items
-        )
-        self.next_map_index += 1
-        index_of = {item_id: index for index, item_id in enumerate(item_ids)}
-
-        # Only after `_enqueue_items` returns.
-        # See Mapreduce and map in the developer notes.
-        # No more tasks than items: another one can only return nothing.
-        tasks = self._submit_map_tasks(
-            queue,
-            item_queue,
-            min(num_tasks, len(items)),
-            _map_task,
-            item_queue,
-            map_fn,
-            map_args,
-            map_kwargs,
-        )
-
-        # A list of slots rather than a list of values,
-        # since the tasks finish, and claim items, in no fixed order.
-        values: list[Any] = [NoOutput] * len(items)
-        for task in self.as_completed(tasks, desc=desc, unit="task"):
-            for item_id, value in task.output:
-                values[index_of[item_id]] = value
-
-        # Every task came back, so an empty slot means
-        # the ordering this call rests on broke.
-        # See Mapreduce and map in the developer notes.
-        missing = sum(1 for value in values if value is NoOutput)
-        if missing:
-            raise RuntimeError(
-                f"map {desc}: {missing} of {len(items)} items "
-                f"on {item_queue} came back with no value"
-            )
-        return values
-
     def _warn(self, message: str) -> None:
         """Report one failure on stderr as it happens."""
         print(f"warning: {message}", file=sys.stderr, flush=True)
@@ -1196,8 +1287,9 @@ class SlurmPilotExecutor:
                 if state == TaskState.Finished:
                     # `task_get_status` returns states only,
                     # so each finished task costs one more read.
-                    output = self.client.task_get_output(task.task_id)
-                    task.output = cloudpickle.loads(output)
+                    if task._fetch_output:
+                        output = self.client.task_get_output(task.task_id)
+                        task.output = cloudpickle.loads(output)
                     completed += 1
                     yield task
                 elif state == TaskState.Failed:
@@ -1237,7 +1329,7 @@ class SlurmPilotExecutor:
                     # Keep waiting.
                     # A state that falls through here waits forever,
                     # so every state a task cannot leave needs a branch above.
-                    # A new state in a `ds-service` release is how this breaks.
+                    # A new state in a `ds-service` release is how this loop breaks.
                     next_pending.append(task)
 
             pending = next_pending
@@ -1434,7 +1526,7 @@ class SlurmPilotExecutor:
             )
         except (subprocess.SubprocessError, OSError):
             # An unreachable `squeue` leaves liveness unknown, not dead,
-            # so this gives up no task, and the next interval retries.
+            # so the check drops no task, and the next interval retries.
             self.logger.warning(
                 "Could not check whether queues are still live; "
                 "will retry at the next interval",
@@ -1516,7 +1608,7 @@ class SlurmPilotExecutor:
         """Cancel every pilot job and close the connection to the server.
 
         The executor is spent afterward.
-        Python calls this at the end of a `with` block.
+        Python calls this method at the end of a `with` block.
         The call prints or logs a failure to list or cancel the jobs,
         and does not raise it.
         """

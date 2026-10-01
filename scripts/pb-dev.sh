@@ -1,9 +1,9 @@
 #!/bin/bash
-# The author's own build wrapper.
+# This script is the author's own build wrapper.
 # The project does not need it to build.
 #
-# Runs from the repository root.
-# Takes one command, and runs the run_<command> function below.
+# Expects the repository root as the working directory.
+# Takes one command, and runs the matching run_<command> function.
 # Exits 1 on an unknown command,
 # and otherwise with the status of the command.
 #
@@ -11,8 +11,8 @@
 
 set -Eeuo pipefail
 
-# Build the sdist and the wheel into dist/,
-# and check them with twine.
+# Builds the sdist and the wheel into dist/,
+# and checks them with twine.
 # The package is pure Python,
 # so one wheel serves every platform.
 run_build-python-package() {
@@ -21,15 +21,15 @@ run_build-python-package() {
     python -m twine check dist/*.tar.gz dist/*.whl
 }
 
-# Upload the sdist and the wheel in dist/ with twine.
-# Nothing cleans dist/, so this also uploads the files
+# Uploads the sdist and the wheel in dist/ with twine.
+# Nothing cleans dist/, so this command also uploads the files
 # that earlier builds left there.
 run_upload-python-package() {
     set -x
     python -m twine upload dist/*.tar.gz dist/*.whl
 }
 
-# Print the usage and the list of commands.
+# Prints the usage and the list of commands.
 show_help() {
     echo "Usage: $0 (help | command)"
     echo

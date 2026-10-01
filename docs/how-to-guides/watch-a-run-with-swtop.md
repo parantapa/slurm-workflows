@@ -2,12 +2,9 @@
 
 [<- back to the main README](../../README.md)
 
-A run in progress tells you almost nothing.
-The driver prints little,
-and the work is on nodes you are not logged in to.
-`swtop` gives you a live view of the tasks, the pilot jobs and the workers,
-and of the compute nodes they run on.
-It needs nothing on the cluster side.
+To watch a run live, run `swtop`.
+`swtop` shows the tasks, the pilot jobs, the workers and the compute nodes of the run.
+`swtop` needs nothing on the cluster side.
 
 For the options, the keys, the blocks and the columns,
 see the [`swtop` reference](../reference/swtop.md).
@@ -22,7 +19,7 @@ you gave the executor:
 swtop 10.0.0.1:5051
 ```
 
-If the driver prints its address, copy it from there.
+If the driver prints the server address, copy it from there.
 If not, use `ds.address`
 from the [`ds-service` server](run-the-ds-service-server.md) you started.
 
@@ -30,13 +27,13 @@ You can start `swtop` before the server is up.
 `swtop` waits, and fills the tabs once there is something to read.
 
 Each block is a tab.
-To switch tabs, press `p`, `w`, `h`, `j` or `t`
-for the pilot jobs, workers, hosts, slurm jobs or tasks tab.
+Press `p`, `w`, `h`, `j` or `t`
+to switch to the pilot jobs, workers, hosts, slurm jobs or tasks tab.
 
 ## Make the tasks tab readable
 
-If you run an exploration, a search, a `mapreduce` or a `map`, skip this section.
-`ExploreSpaceSobolQMC`, `OptimizeSpaceBotorch`, `mapreduce` and `map` name what they submit,
+If you run only `map` or `map_reduce`, skip this section.
+`map` and `map_reduce` name what they submit,
 and the tasks tab is readable without your help.
 
 Otherwise, name your tasks.
@@ -52,7 +49,7 @@ because `my-run.task.412` says nothing about what the task does.
 You can name a task after you submit it,
 and the name appears at the next poll.
 
-The tasks tab shows only waiting, ready and running tasks at start.
+The tasks tab shows only `Waiting`, `Ready` and `Running` tasks at start.
 To see the tasks that failed, check `Failed` in the row of checkboxes
 above the table.
 The other states work the same way.
@@ -87,5 +84,5 @@ The default is every 2 seconds.
 
 - [How to troubleshoot a failing run](troubleshoot-a-failing-run.md)
 - [How to embed `swtop` in a Textual app](embed-swtop-in-a-textual-app.md)
-- [The trail a run leaves](../explanation/the-trail-a-run-leaves.md),
+- [The monitoring state a run publishes](../explanation/monitoring-state-a-run-publishes.md),
     for why a block can be empty while the run is healthy

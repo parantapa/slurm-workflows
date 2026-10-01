@@ -9,10 +9,10 @@ from typing import Any, NoReturn
 import pytest
 import cloudpickle
 from typeguard import TypeCheckError
-from ds_service_client import TaskState
+from ds_service_client import DsServiceClient, TaskState
 
 from slurm_workflows import slurm_pilot_executor
-from slurm_workflows.slurm_pilot_executor import MAPREDUCE_TOKEN_LEN, _map_task
+from slurm_workflows.slurm_pilot_executor import MAP_REDUCE_TOKEN_LEN, _map_task
 from slurm_workflows.slurm_pilot_worker import current_actor
 from slurm_workflows.swtop import ALL_TASK_IDS
 
@@ -45,7 +45,7 @@ def explode(x: int) -> NoReturn:
     raise ValueError(f"no good: {x}")
 
 
-def add_items(ds_client, queue: str, count: int) -> None:
+def add_items(ds_client: DsServiceClient, queue: str, count: int) -> None:
     """Put `count` items on `queue`, the way `map` does."""
     for index in range(count):
         ds_client.task_add(
@@ -181,7 +181,7 @@ class TestActors:
     """`map_fn` as the name of a method on the job group's actor."""
 
     @pytest.fixture
-    def actor_group(self, executor):
+    def actor_group(self, executor) -> None:
         """A job group whose workers build a `MapActor` with `factor=3`."""
         executor.define_job_group(
             "act",
@@ -207,7 +207,7 @@ class TestActors:
     def test_the_actor_is_the_one_the_worker_built(
         self, executor, actor_group, worker_thread
     ):
-        """One actor per worker, not one per item, is the whole point."""
+        """The whole point: one actor per worker, not one per item."""
         worker_thread(
             expect_tasks=1, group="act", actor_class_name="support_actor.MapActor"
         )
@@ -217,7 +217,7 @@ class TestActors:
         )
 
         # The worker runs in a thread of this process,
-        # and current_actor() is process-wide.
+        # and `current_actor()` is process-wide.
         actor = current_actor()
         assert isinstance(actor, support_actor.MapActor)
         assert actor.calls == 6
@@ -312,7 +312,7 @@ class TestMapTask:
         for index in range(5):
             task_id = f"{queue}.item.{index}"
             assert ds_client.task_get_status(task_id) == TaskState.Finished
-            # See the developer notes, "A map task marks its item task done".
+            # See the developer notes, "map_reduce and map".
             assert ds_client.task_get_output(task_id) == b""
 
     def test_an_empty_queue_returns_nothing(self, ds_service_address, map_task_env):
@@ -367,22 +367,22 @@ class TestQueuesAndIds:
         assert all(i.startswith(prefix) for i in items)
         # `<name>.map.<index>.<token>.item.<i>`, and the token is hex.
         token = items[0][len(prefix) :].split(".")[0]
-        assert len(token) == MAPREDUCE_TOKEN_LEN
+        assert len(token) == MAP_REDUCE_TOKEN_LEN
         assert int(token, 16) >= 0
 
         # The submitted tasks kept the plain numbering, and nothing collided.
         assert executor.submit("cpu", identity, 1).task_id == f"{executor.name}.task.2"
 
-    def test_map_and_mapreduce_use_queues_of_their_own(
+    def test_map_and_map_reduce_use_queues_of_their_own(
         self, executor, ds_client, pilot_jobs, worker_thread
     ):
         pilot_jobs("cpu")
-        worker_thread(expect_tasks=2)
+        worker_thread(expect_tasks=3)
 
         executor.map(
             desc="square", queue="cpu", map_fn=square, iterable=range(4), num_tasks=1
         )
-        executor.mapreduce(
+        executor.map_reduce(
             desc="sum",
             queue="cpu",
             map_fn=identity,
@@ -396,7 +396,7 @@ class TestQueuesAndIds:
         # A queue is `<name>.<kind>.<index>.<token>`.
         assert {tuple(q.split(".")[1:3]) for q in queues} == {
             ("map", "0"),
-            ("mapreduce", "0"),
+            ("map_reduce", "0"),
         }
 
     def test_two_calls_use_two_queues(
@@ -546,7 +546,7 @@ class TestEdgeCases:
     def test_a_missing_value_raises(
         self, executor, pilot_jobs, worker_thread, monkeypatch
     ):
-        """A broken ordering shows up as an error, never as a gap in the list."""
+        """A broken ordering appears as an error, never as a gap in the list."""
         pilot_jobs("cpu")
         worker_thread(expect_tasks=1)
         real_map_task = slurm_pilot_executor._map_task
@@ -560,3 +560,54 @@ class TestEdgeCases:
             executor.map(
                 desc="lossy", queue="cpu", map_fn=square, iterable=range(4), num_tasks=1
             )
+
+
+# --------------------------------------------------------------------------
+# defaults
+# --------------------------------------------------------------------------
+
+
+class TestDefaults:
+    def test_queue_function_and_iterable_are_enough(
+        self, executor, ds_client, pilot_jobs, worker_thread
+    ):
+        """The short form: one task per item, and a generated label."""
+        pilot_jobs("cpu")
+        worker_thread(expect_tasks=5)
+
+        got = executor.map("cpu", square, range(5))
+
+        assert got == [x * x for x in range(5)]
+        submitted = [i for i in ds_client.task_search_id(ALL_TASK_IDS) if ".task." in i]
+        assert len(submitted) == 5
+        display = json.loads(ds_client.map_get("progress_display"))
+        assert display["desc"] == "map-0"
+
+    def test_the_default_label_counts_the_calls(
+        self, executor, ds_client, pilot_jobs, worker_thread
+    ):
+        pilot_jobs("cpu")
+        worker_thread(expect_tasks=2)
+
+        executor.map("cpu", square, [1])
+        executor.map("cpu", square, [2])
+
+        display = json.loads(ds_client.map_get("progress_display"))
+        assert display["desc"] == "map-1"
+
+    def test_the_default_task_count_is_bounded(
+        self, executor, ds_client, pilot_jobs, worker_thread, monkeypatch
+    ):
+        monkeypatch.setattr(slurm_pilot_executor, "DEFAULT_MAP_TASKS", 2)
+        pilot_jobs("cpu")
+        worker_thread(expect_tasks=2)
+
+        got = executor.map("cpu", square, range(10))
+
+        assert got == [x * x for x in range(10)]
+        submitted = [i for i in ds_client.task_search_id(ALL_TASK_IDS) if ".task." in i]
+        assert len(submitted) == 2
+
+    def test_num_tasks_and_desc_are_keyword_only(self, executor):
+        with pytest.raises(TypeError):
+            executor.map("cpu", square, range(4), 2)

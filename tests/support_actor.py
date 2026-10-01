@@ -51,14 +51,14 @@ class ConfiguredActor:
 
 
 class NoCloseActor:
-    """Has no close(). Exercises the optional-cleanup branch."""
+    """Has no `close()`. Exercises the optional-cleanup branch."""
 
     def ping(self) -> str:
         return "pong"
 
 
 class MapActor:
-    """Maps one item with state built once, for the mapreduce and map tests."""
+    """Maps one item with state built once, for the map_reduce and map tests."""
 
     def __init__(self, factor: int = 1) -> None:
         self.factor = factor

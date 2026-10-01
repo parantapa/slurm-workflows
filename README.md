@@ -1,43 +1,44 @@
 # slurm-workflows: HPC workflow helpers for Slurm clusters
 
-`slurm-workflows` lets you run Python functions on a Slurm cluster
-without hand-written sbatch scripts.
+`slurm-workflows` runs Python functions on a Slurm cluster
+from a Python script.
 It provides an interface
 inspired by [`concurrent.futures`](https://docs.python.org/3/library/concurrent.futures.html).
 The interface launches long-lived **workers** inside pilot jobs.
 It then dispatches tasks to those workers.
-You pay Slurm's scheduling latency once per pilot job, not once per task.
+You pay Slurm's scheduling latency once per pilot job.
+Every later task runs on a worker that started earlier.
 
 ![Futuristic banner image.](extra/banner-image.png "Futuristic banner image.")
 
 Use it in three cases:
 
-- You have many Python tasks to run on one cluster allocation.
-- An exploration or a search has to spread across a pool of workers.
-- Per-worker state is expensive, and you want it to stay warm between tasks.
+- You have one Python function to run over many inputs on one cluster allocation.
+- You have many Python tasks to run, some of which wait on others.
+- Per-worker state is expensive to build, and you want to keep it between tasks.
+
+For a search over a parameter space, use
+[`slurm-workflows-optimize`](https://github.com/parantapa/slurm-workflows-optimize),
+which builds on this package.
 
 ## Installation
 
-A run needs:
-
-- Python >= 3.12
-- Access to a Slurm cluster (`sbatch`, `squeue`, `scancel` on `PATH`)
-- The [`ds-service`](https://github.com/parantapa/ds-service) binary on `PATH`
+A run needs Slurm's `sbatch`, `squeue` and `scancel`,
+and the [`ds-service`](https://github.com/parantapa/ds-service) binary, on `PATH`.
 
 ```sh
 pip install -U slurm-workflows
-# For OptimizeSpaceBotorch:
-pip install -U "slurm-workflows[botorch]"
 ```
 
-To set up on UVA's Rivanna cluster, read
+To install on UVA's Rivanna cluster, read
 [How to install slurm-workflows on Rivanna](docs/how-to-guides/install-on-rivanna.md).
 
 ## Usage
 
 Replace the Slurm account (`-A`), the partition (`-p`)
 and the setup script with the ones for your cluster.
-The driver must run on a node with the `ib0` interface.
+The driver, the Python script that uses the executor,
+must run on a node with the `ib0` interface.
 For another interface, read
 [How to run the `ds-service` server](docs/how-to-guides/run-the-ds-service-server.md).
 
@@ -51,10 +52,11 @@ def square(x):
 
 
 SETUP_SCRIPT = """
-module load gcc/14.2.0
-conda activate my-env
+module load miniforge/26.3.2
+conda activate slurm-workflows
 """
 
+# The network interface the workers can reach.
 with DsServiceServer(interface="ib0") as ds_service:
     ds_service.wait_until_ready()
 
@@ -69,14 +71,12 @@ with DsServiceServer(interface="ib0") as ds_service:
         # 2. Launch 4 pilot jobs of that job group.
         executor.scale_jobs("cpu", 4)
 
-        # 3. Submit tasks to a named queue. That job group's workers claim them.
-        tasks = [executor.submit("cpu", square, i) for i in range(100)]
-
-        # 4. Block until every result is in.
-        executor.wait(tasks, desc="squaring")
+        # 3. Map `square` over the inputs on the "cpu" job group's workers.
+        #    The call blocks until every value is back, in input order.
+        squares = executor.map("cpu", square, range(100))
 
 # The executor canceled every pilot job at the end of the block.
-print(sum(task.output for task in tasks))
+print(sum(squares))
 ```
 
 ```text
@@ -84,37 +84,34 @@ work directory: '/home/<user>/.cache/slurm-workflows/my-run/<timestamp>'
 328350
 ```
 
-You can submit tasks before the workers exist.
-They wait on the queue until a worker starts and claims them.
+`map` blocks, and hands its inputs to the workers as they start.
+For one value instead of a list, `map_reduce` folds the values on the workers.
+For a handle per task, `submit` enqueues one task and returns at once,
+even before the workers exist.
+To choose between them, read [The pilot-job model](docs/explanation/pilot-job-model.md).
 
 ## Documentation
 
-| Document | What it covers |
-| --- | --- |
-| [Computing pi on a Slurm cluster](docs/tutorials/computing-pi.md) | The main features of `slurm-workflows`, by creating a pool of workers to compute $\pi$. |
-| [Computing pi with a Sobol' QMC exploration](docs/tutorials/computing-pi-qmc.md) | Using `ExploreSpaceSobolQMC` to create a space-filling design and evaluate it. |
-| [Optimizing Himmelblau's function](docs/tutorials/optimizing-himmelblau.md) | Using `OptimizeSpaceBotorch` to run a batch Bayesian search. |
-| [How to install slurm-workflows on Rivanna](docs/how-to-guides/install-on-rivanna.md) | Installing the package and the `ds-service` binary on Rivanna. |
-| [How to run the `ds-service` server](docs/how-to-guides/run-the-ds-service-server.md) | Starting a `ds-service` server from the driver and binding it where workers can reach it. |
-| [How to keep per-worker state with actors](docs/how-to-guides/keep-per-worker-state-with-actors.md) | Loading an expensive model or connection once per worker instead of once per task. |
-| [How to fold results across workers](docs/how-to-guides/fold-results-across-workers.md) | Using `mapreduce` to run one function over a whole collection and bring back a single value, or `map` to bring back every value. |
-| [How to watch a run with `swtop`](docs/how-to-guides/watch-a-run-with-swtop.md) | Following a live run from another shell, and keeping a record of one. |
-| [How to embed `swtop` in a Textual app](docs/how-to-guides/embed-swtop-in-a-textual-app.md) | Putting the `swtop` tabs, summary line, progress bar and error line in your own Textual app. |
-| [How to troubleshoot a failing run](docs/how-to-guides/troubleshoot-a-failing-run.md) | Finding the right log, and what each `RuntimeError` means. |
-| [How to resume a search](docs/how-to-guides/resume-a-search.md) | Carrying a search on across a Slurm time limit. |
-| [How to update worker code without resubmitting](docs/how-to-guides/update-worker-code-without-resubmitting.md) | Restarting the workers in running pilot jobs, so they run new code without a second wait in Slurm's queue. |
-| [`SlurmPilotExecutor`](docs/reference/executor.md) | The executor, `Task`, `RaiseOnError`, the job group options, restarting workers, and the worker entry point. |
-| [`mapreduce`](docs/reference/mapreduce.md) | Mapping an iterable across the pool, the fold contract, and what the call creates on the server. |
-| [`map`](docs/reference/map.md) | Mapping an iterable across the pool and getting every value back in order. |
-| [What a run publishes](docs/reference/what-a-run-publishes.md) | The keys and time series a run writes, and the logs. |
-| [`ExploreSpaceSobolQMC`](docs/reference/explore-space.md) | The Sobol' exploration, its study fields, and the results file. |
-| [`OptimizeSpaceBotorch`](docs/reference/optimize-space.md) | The batch Bayesian search, its study fields, and its stopping rule. |
-| [Search spaces](docs/reference/search-space.md) | `IntRange`, `FloatRange` and `CategoricalRange`. |
-| [The objective](docs/reference/objective.md) | The contract an objective function meets, and what a failed evaluation does to a run. |
-| [`swtop`](docs/reference/swtop.md) | The CLI, the keys, the blocks on screen, what the host and job readings measure, and the widgets an app can embed. |
-| [The pilot-job model](docs/explanation/pilot-job-model.md) | Why pilot jobs, the three processes, where the driver runs, and which class to reach for. |
-| [Batch Bayesian optimization](docs/explanation/batch-bayesian-optimization.md) | Why a search has rounds, where the fit runs, and when it is worth the overhead. |
-| [The trail a run leaves](docs/explanation/the-trail-a-run-leaves.md) | Why a run is observable from outside itself, and the limits of that. |
+| Type | Document | What it covers |
+| --- | --- | --- |
+| Tutorial | [Computing pi on a Slurm cluster](docs/tutorials/computing-pi.md) | The main features of `slurm-workflows`, by using `map_reduce` on a pool of workers to compute $\pi$. |
+| Tutorial | [Computing pi with `submit` and `wait`](docs/tutorials/computing-pi-with-submit.md) | The advanced interface: one task at a time, with task names, priorities, parent tasks and a failure policy. |
+| How-to guide | [How to install slurm-workflows on Rivanna](docs/how-to-guides/install-on-rivanna.md) | Installing the package and the `ds-service` binary on Rivanna. |
+| How-to guide | [How to run the `ds-service` server](docs/how-to-guides/run-the-ds-service-server.md) | Starting a `ds-service` server from the driver and binding it where workers can reach it. |
+| How-to guide | [How to keep per-worker state with actors](docs/how-to-guides/keep-per-worker-state-with-actors.md) | Loading an expensive model or connection once per worker instead of once per task. |
+| How-to guide | [How to watch a run with `swtop`](docs/how-to-guides/watch-a-run-with-swtop.md) | Following a live run from another shell, and keeping a record of one. |
+| How-to guide | [How to embed `swtop` in a Textual app](docs/how-to-guides/embed-swtop-in-a-textual-app.md) | Putting the `swtop` tabs, summary line, progress bar and error line in your own Textual app. |
+| How-to guide | [How to troubleshoot a failing run](docs/how-to-guides/troubleshoot-a-failing-run.md) | Finding the right log, and what each `RuntimeError` means. |
+| How-to guide | [How to update worker code without resubmitting](docs/how-to-guides/update-worker-code-without-resubmitting.md) | Restarting the workers in running pilot jobs, so they run new code without a second wait in Slurm's queue. |
+| Reference | [`map`](docs/reference/map.md) | Mapping an iterable across the pool and getting every value back in order. |
+| Reference | [`map_reduce`](docs/reference/map-reduce.md) | Mapping an iterable across the pool, the fold contract, and what the call creates on the server. |
+| Reference | [`submit`, `wait` and `as_completed`](docs/reference/submit-and-wait.md) | The advanced interface: `submit` options, `Task`, `RaiseOnError`, and the errors that end a wait. |
+| Reference | [`SlurmPilotExecutor`](docs/reference/executor.md) | The executor, the job group options, restarting workers, and the worker entry point. |
+| Reference | [What a run publishes](docs/reference/what-a-run-publishes.md) | The keys and time series a run writes, and the logs. |
+| Reference | [`swtop`](docs/reference/swtop.md) | The CLI, the keys, the blocks on screen, and what the host and job readings measure. |
+| Reference | [`slurm_workflows.swtop_widgets`](docs/reference/swtop-widgets.md) | The `swtop` widgets and the poller an app can embed. |
+| Explanation | [The pilot-job model](docs/explanation/pilot-job-model.md) | Why pilot jobs, the three processes, where the driver runs, and the two interfaces. |
+| Explanation | [The monitoring state a run publishes](docs/explanation/monitoring-state-a-run-publishes.md) | Why a run is observable from outside itself, and the limits of that. |
 
 ## For contributors
 

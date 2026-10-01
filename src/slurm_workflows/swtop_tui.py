@@ -60,7 +60,7 @@ class SwtopApp(App):
     def on_mount(self) -> None:
         self.title = "swtop"
         self.sub_title = self.collector.address
-        # The poller mounts first, so its first poll can land before this.
+        # The poller mounts first, so its first poll can land before `on_mount` runs.
         # `attach` shows that poll on the views, so none misses it.
         self.poller.attach(
             self.query_one(SummaryLine),
@@ -86,6 +86,6 @@ class SwtopApp(App):
 async def run_app(collector: Collector, interval: float) -> None:
     """Run the terminal UI until the viewer quits.
 
-    The collector's client must belong to the loop that awaits this.
+    The collector's client must belong to the loop that awaits `run_app`.
     """
     await SwtopApp(collector, interval).run_async()

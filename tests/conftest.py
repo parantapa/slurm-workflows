@@ -8,20 +8,26 @@ from __future__ import annotations
 import os
 import sys
 import signal
-import subprocess
 import threading
 from pathlib import Path
 from types import FrameType, SimpleNamespace
-from typing import Any, Callable, Generator, Iterator, NoReturn
+from typing import Callable, Generator, Iterator, NoReturn
 from dataclasses import dataclass
 from contextlib import AbstractContextManager, contextmanager
 
 import pynvml
 import pytest
-from ds_service_client import DsServiceClient, DsServiceServer
 
-from slurm_workflows import slurm_utils
-from slurm_workflows.slurm_pilot_executor import SlurmPilotExecutor
+# Before the import below, which would otherwise load the plugin
+# ahead of pytest's assertion rewriting.
+pytest.register_assert_rewrite("slurm_workflows.testing")
+
+from slurm_workflows.slurm_pilot_worker import PilotWorker  # noqa: E402
+from slurm_workflows.testing import make_worker, run_worker  # noqa: E402
+
+# The server, the fake Slurm, the executor and the in-process worker helpers.
+# Other packages that build on this one load the same plugin.
+pytest_plugins = ["slurm_workflows.testing"]
 
 # Test-support modules (for example, support_actor) must be importable by name,
 # both for `import` in the test modules
@@ -66,7 +72,7 @@ def time_limit() -> Callable[[float, str], AbstractContextManager[None]]:
 
 @pytest.fixture(autouse=True)
 def _hang_guard() -> Generator[None]:
-    """Backstop so no single test can hang the suite."""
+    """Fail any test that runs past 60 s, so that no single test can hang the suite."""
 
     with _time_limit(60.0, "test exceeded its 60s time limit"):
         yield
@@ -108,8 +114,9 @@ class FakeGpu:
 class FakeNvml:
     """Stands in for the functions of `pynvml` that the GPU monitor calls.
 
-    It lists the GPUs in `gpus`, none until a test adds some,
-    which reads as a node whose driver finds no GPU.
+    It lists the GPUs in `gpus`.
+    The list is empty until a test adds a GPU,
+    and an empty list reads as a node whose driver finds no GPU.
     With `no_driver` set, `nvmlInit` fails as it does on a node with no driver.
     It raises the real `pynvml` errors.
     """
@@ -209,7 +216,7 @@ def _srun_lines(script: str) -> list[str]:
     # because the non-batch worker script indents its `srun` calls
     # inside the shell `if` that chooses between them.
     # Test each line rather than the whole text,
-    # since a path baked into the script can itself contain "srun".
+    # since a path written into the script can itself contain "srun".
     return [ln.strip() for ln in script.splitlines() if ln.strip().startswith("srun")]
 
 
@@ -218,206 +225,6 @@ def srun_lines() -> Callable[[str], list[str]]:
     """Extract the `srun` command lines from a generated script."""
 
     return _srun_lines
-
-
-# --------------------------------------------------------------------------
-# ds-service (real)
-# --------------------------------------------------------------------------
-
-
-@pytest.fixture
-def ds_service_address() -> Generator[str]:
-    """Run a private ds-service for one test and yield its address.
-
-    The test skips when no `ds-service` executable is found.
-    """
-    # A fresh in-memory server per test starts in about 10 ms.
-    # Why `DsServiceServer` owns the lifecycle and why it binds `lo`:
-    # see docs/how-to-run-tests.md, "Notes for future changes".
-    try:
-        server = DsServiceServer(interface="lo")
-    except FileNotFoundError:
-        pytest.skip(
-            "ds-service executable not found; "
-            "put `ds-service` on PATH or point DS_SERVICE_BIN at it"
-        )
-
-    try:
-        server.wait_until_ready(timeout=10)
-        yield server.address
-    finally:
-        server.close()
-
-
-@pytest.fixture
-def ds_client(ds_service_address: str) -> Generator[DsServiceClient]:
-    """A directly usable client against the test's ds-service."""
-    client = DsServiceClient(ds_service_address)
-    yield client
-    client.close()
-
-
-# --------------------------------------------------------------------------
-# Slurm (mocked)
-# --------------------------------------------------------------------------
-
-
-@dataclass
-class Submission:
-    """One captured `sbatch` call."""
-
-    job_id: int
-    script_path: Path
-    script_text: str
-    env: dict[str, str]
-
-    @property
-    def job_name(self) -> str:
-        for line in self.script_text.splitlines():
-            if line.startswith("#SBATCH --job-name"):
-                return line.split(maxsplit=2)[2].strip('"')
-        raise AssertionError("no --job-name in submitted script")
-
-    @property
-    def sbatch_directives(self) -> list[str]:
-        """`#SBATCH` lines, minus the name and output ones the library adds."""
-        out: list[str] = []
-        for line in self.script_text.splitlines():
-            if not line.startswith("#SBATCH "):
-                continue
-            body = line[len("#SBATCH ") :]
-            if body.startswith(("--job-name", "--output")):
-                continue
-            out.append(body)
-        return out
-
-
-class FakeSlurm:
-    """Stands in for the `subprocess` module inside `slurm_utils`."""
-
-    def __init__(self) -> None:
-        self.submissions: list[Submission] = []
-        self.running_job_ids: list[int] = []
-        self.cancelled_job_ids: list[int] = []
-        self.next_job_id = 1000
-        self.fail: dict[str, tuple[int, str, str]] = {}
-        self.sbatch_stdout_override: str | None = None
-
-    # -- failure injection --------------------------------------------------
-
-    def fail_command(
-        self, exe: str, returncode: int = 1, stdout: str = "", stderr: str = "boom"
-    ) -> None:
-        """Make future calls to `exe` raise CalledProcessError."""
-        self.fail[exe] = (returncode, stdout, stderr)
-
-    # -- the subprocess surface --------------------------------------------
-
-    def run(self, cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
-        exe = Path(cmd[0]).name
-
-        if exe in self.fail:
-            returncode, stdout, stderr = self.fail[exe]
-            raise subprocess.CalledProcessError(returncode, cmd, stdout, stderr)
-
-        if exe == "sbatch":
-            return self._sbatch(cmd, **kwargs)
-        if exe == "squeue":
-            return self._squeue(cmd)
-        if exe == "scancel":
-            return self._scancel(cmd)
-
-        raise AssertionError(f"unexpected command in test: {cmd!r}")
-
-    # `run` covers only the three Slurm commands.
-    # Every other attribute, such as an exception type,
-    # comes from the real `subprocess`.
-    def __getattr__(self, name: str) -> Any:
-        return getattr(subprocess, name)
-
-    # -- individual commands ------------------------------------------------
-
-    def _sbatch(
-        self, cmd: list[str], **kwargs: Any
-    ) -> subprocess.CompletedProcess[str]:
-        script_path = Path(cmd[1])
-        job_id = self.next_job_id
-        self.next_job_id += 1
-
-        self.submissions.append(
-            Submission(
-                job_id=job_id,
-                script_path=script_path,
-                script_text=script_path.read_text(),
-                env=dict(kwargs.get("env") or {}),
-            )
-        )
-        self.running_job_ids.append(job_id)
-
-        stdout = self.sbatch_stdout_override
-        if stdout is None:
-            stdout = f"Submitted batch job {job_id}\n"
-        return subprocess.CompletedProcess(cmd, 0, stdout, "")
-
-    def _squeue(self, cmd: list[str]) -> subprocess.CompletedProcess[str]:
-        stdout = "".join(f"{job_id}\n" for job_id in self.running_job_ids)
-        return subprocess.CompletedProcess(cmd, 0, stdout, "")
-
-    def _scancel(self, cmd: list[str]) -> subprocess.CompletedProcess[str]:
-        for arg in cmd[1:]:
-            if arg.startswith("-"):
-                continue
-            job_id = int(arg)
-            self.cancelled_job_ids.append(job_id)
-            if job_id in self.running_job_ids:
-                self.running_job_ids.remove(job_id)
-        return subprocess.CompletedProcess(cmd, 0, "", "")
-
-
-@pytest.fixture
-def fake_slurm(monkeypatch: pytest.MonkeyPatch) -> Generator[FakeSlurm]:
-    """Intercept Slurm commands, so a test needs no cluster."""
-    fake = FakeSlurm()
-    monkeypatch.setattr(slurm_utils, "subprocess", fake)
-    # `@cache` wraps `get_clean_environ`.
-    # Clear the cache so each test sees its own environment.
-    slurm_utils.get_clean_environ.cache_clear()
-    yield fake
-    slurm_utils.get_clean_environ.cache_clear()
-
-
-# --------------------------------------------------------------------------
-# Executor
-# --------------------------------------------------------------------------
-
-
-@pytest.fixture
-def executor(
-    ds_service_address: str, fake_slurm: FakeSlurm, tmp_path: Path
-) -> Generator[SlurmPilotExecutor]:
-    """An executor wired to the real server and the fake Slurm."""
-    ex = SlurmPilotExecutor(
-        name="testex", server_address=ds_service_address, work_dir=tmp_path / "work"
-    )
-    yield ex
-    ex.close()
-
-
-@pytest.fixture
-def pilot_jobs(executor: SlurmPilotExecutor) -> Callable[..., None]:
-    """Declare a pilot job for each named group, as any test that waits needs."""
-
-    # `as_completed` refuses a queue this executor never started a worker for,
-    # even where `drain()` or an in-process worker drains it.
-    # The Slurm job stands in for the allocation,
-    # and `drain()` or the in-process worker for the process inside it.
-
-    def declare(*names: str) -> None:
-        for name in names:
-            executor.define_job_group(name, [])
-            executor.scale_jobs(name, 1)
-
-    return declare
 
 
 @pytest.fixture
@@ -446,9 +253,7 @@ def worker_thread(
     ds_service_address: str, tmp_path: Path
 ) -> Generator[Callable[..., None]]:
     """Run a real worker in a thread until it completes `expect_tasks`."""
-    from worker_harness import make_worker, run_worker
-
-    started: list[tuple] = []
+    started: list[tuple[PilotWorker, threading.Thread]] = []
 
     def start(
         expect_tasks: int,

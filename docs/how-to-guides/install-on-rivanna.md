@@ -20,7 +20,6 @@ conda create -y -n slurm-workflows python=3.12
 conda activate slurm-workflows
 ```
 
-The Python version must be >= 3.12.
 If `conda activate` fails with a message about `conda init`,
 source conda's shell hook.
 Then activate the environment again:
@@ -36,24 +35,17 @@ conda activate slurm-workflows
 pip install -U slurm-workflows
 ```
 
-If you run a Bayesian search,
-install the `botorch` extra instead:
+To run a Sobol' exploration or a Bayesian search,
+also install the separate
+[`slurm-workflows-optimize`](https://github.com/parantapa/slurm-workflows-optimize)
+package.
+Its own README gives the install command.
 
-```sh
-pip install -U "slurm-workflows[botorch]"
-```
-
-That extra brings in botorch and torch,
-which the Bayesian optimizer needs.
-Leave it out for anything else,
-and you leave torch out with it.
-
-## 4. Install the ds-service binary
+## 4. Install the `ds-service` binary
 
 `ds-service` is a static binary.
-The project releases it separately from this package.
-Always download the latest release.
-Put it somewhere on your `PATH`:
+It has its own releases, separate from this package.
+Download the latest `ds-service` release onto your `PATH`:
 
 ```sh
 mkdir -p ~/bin

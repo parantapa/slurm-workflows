@@ -15,7 +15,7 @@ from ds_service_client import DsServiceClient, DsServiceClientAsync
 from slurm_workflows import swtop as swtop_mod
 from slurm_workflows.swtop import UNNAMED, Collector, Snapshot, render, swtop
 from slurm_workflows.slurm_pilot_worker import publish_pilot_job_event
-from worker_harness import make_worker
+from slurm_workflows.testing import make_worker
 from test_monitors import wait_for
 
 T = TypeVar("T")
@@ -73,8 +73,9 @@ class CountingClient:
         self._inner = inner
         self.keys_read: list[str] = []
 
-    # Counted by prefix, because a poll reads the progress display every time
-    # on top of the identities it caches.
+    # The double counts by prefix,
+    # because a poll reads the progress display every time,
+    # in addition to the identities it caches.
     def reads(self, prefix: str) -> int:
         return sum(1 for key in self.keys_read if key.startswith(prefix))
 
@@ -83,8 +84,8 @@ class CountingClient:
         return await self._inner.map_get(key)
 
     # Forwards everything it does not count,
-    # as the worker harness's doubles do,
-    # so it stands in for a client without subclassing one.
+    # as the doubles in `slurm_workflows.testing` do,
+    # so it stands in for a client and is not a subclass of one.
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
 
@@ -108,7 +109,7 @@ class StallingClient(CountingClient):
 
 class TestCollectTasks:
     @pytest.fixture(autouse=True)
-    def _pilot_jobs(self, pilot_jobs):
+    def _pilot_jobs(self, pilot_jobs: Callable[..., None]) -> None:
         pilot_jobs("cpu")
 
     def test_an_idle_server_reports_nothing(self, collector):
@@ -331,7 +332,7 @@ class TestCollectWorkerJobs:
         assert listed.slurm_job_id == "?"
 
     def test_a_job_is_read_once(self, ds_service_address, executor):
-        """Written once when the executor submits the job, so never read twice."""
+        """The executor writes the job's info once, so the collector reads it once."""
         executor.define_job_group("cpu", [])
         executor.scale_jobs("cpu", 1)
         bound = LoopBound(ds_service_address, wrap=CountingClient)
@@ -623,7 +624,7 @@ class TestCollectMonitored:
 
 class TestRender:
     @pytest.fixture(autouse=True)
-    def _pilot_jobs(self, pilot_jobs):
+    def _pilot_jobs(self, pilot_jobs: Callable[..., None]) -> None:
         pilot_jobs("cpu")
 
     def test_a_progress_display_is_drawn_as_a_bar(self, collector, ds_client):
@@ -707,7 +708,7 @@ class TestRender:
         assert "12.4 cores" in out
 
     def test_a_stale_subject_is_labelled_not_dropped(self, collector, ds_client):
-        """A monitor that died is worth seeing, not hiding."""
+        """The table shows a monitor that died, and does not hide it."""
         old = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
         ds_client.time_series_append("host_free_memory:node-1", 5.0, old)
 
@@ -777,8 +778,8 @@ class TestRender:
 
 class TestCli:
     @pytest.fixture
-    def stop_after_one_poll(self, monkeypatch):
-        """Let swtop draw one frame, then interrupt it as a user does."""
+    def stop_after_one_poll(self, monkeypatch) -> None:
+        """Let `swtop` draw one frame, then interrupt it as a user does."""
 
         async def sleep(seconds):
             raise KeyboardInterrupt
@@ -841,7 +842,7 @@ class TestCli:
 
 
 def test_a_snapshot_needs_only_an_address_and_a_time():
-    """The error path builds one without ever reaching the server."""
+    """The error path builds one and never reaches the server."""
     snapshot = Snapshot(address="host:1", when=swtop_mod.datetime.now())
 
     assert snapshot.counts == {}

@@ -16,7 +16,7 @@ and how to spell the other one.
 
 ## Where the words come from
 
-Three sources, in this order of precedence:
+The words come from three sources, in this order of precedence:
 
 1. **Slurm**, for anything that exists on the cluster.
     Slurm named it.
@@ -29,8 +29,8 @@ Three sources, in this order of precedence:
 Do not invent a word where a source already decided.
 Do not spend a source's word on something that source does not mean by it.
 
-Two facts from `ds_service_client` settle the hard cases,
-so they are worth stating before the tables:
+Two facts from `ds_service_client` settle the hard cases.
+This section states them before the tables:
 
 * `ds_service_client` documents `task_get(worker_id, queue)`
   as "Claim a task for `worker_id` from the first queue holding one".
@@ -56,7 +56,7 @@ so they are worth stating before the tables:
     A pilot job is a Slurm job.
     A job group is a group of pilot jobs.**
 4. **One name per thing.**
-    Where a paragraph wants a second word for variety, it does without.
+    Where a paragraph wants a second word for variety, it repeats the first.
 
 ## Processes and places
 
@@ -88,27 +88,27 @@ It is what a login node hosts,
 what `nohup` detaches,
 what a batch job can hold instead,
 and what the workers never talk to.
-A fold that does not happen on a worker happens on the driver.
 
 The **executor** submits, waits, scales and cancels.
 It has a `name`, a `work_dir` and a log of its own.
 It is what a `with` block closes,
-and it is what the one-executor-per-server rule is about.
+and it is what the rule of one executor per server is about.
 
 For example:
 
 - "the driver runs on a login node"
 - "the executor cancels every pilot job when the block ends"
-- "botorch must be importable on the driver"
+- "`map` puts the values in input order on the driver"
 - "two executors on one server share a queue namespace"
 
 ### Job group, not worker group
 
 A job group is a recipe for **pilot jobs**.
-`scale_jobs` sets how many jobs a job group has,
-and the job group holds `SlurmJob` objects.
-The Slurm task count in the sbatch arguments of the job group
-and `is_batch_worker` decide how many workers those jobs start.
+`scale_jobs` sets how many pilot jobs a job group has.
+The job group holds `SlurmJob` objects.
+Two settings decide how many workers those jobs start:
+the Slurm task count in the sbatch arguments of the job group,
+and `is_batch_worker`.
 The job group does not control that number.
 One job group scaled to a single job can hold eighty workers.
 
@@ -121,7 +121,7 @@ The two pi examples name a job group `bii`,
 after the partition its jobs run on.
 That name is legal.
 But it reads as though the job group and the partition were the same thing.
-Name a job group after what its workers do (`eval`, `optimizer`, `cpu`),
+Name a job group after what its workers do (`cpu`, `gpu`, `loader`),
 and leave `bii` to `--partition`.
 
 ## Work
@@ -141,21 +141,24 @@ and leave `bii` to `--partition`.
 | **task output** | What `task_done` recorded, which `Task.output` holds. | `ds-service` (`output`) | result, return value, answer |
 | **setup script** | The shell text inlined into the generated worker script. | this library | env script, prologue, bootstrap |
 | **work dir** | The executor's directory of scripts and logs. | `work_dir` | run directory, output directory |
+| **simple interface** | `map` and `map_reduce`: one call runs one function over a whole iterable and blocks until it is done. | this library | high-level API, easy mode, convenience functions |
+| **advanced interface** | `submit`, with `wait` or `as_completed`: one call per task, and a `Task` handle for each. | this library | low-level API, raw interface, expert mode |
 
-### Mapreduce and map
+### `map_reduce` and `map`
 
-One `mapreduce` or `map` call has two kinds of task and one kind of item.
+One `map_reduce` or `map` call has two kinds of task and one kind of item.
 Name all three.
 
 | Term | What it names | Do not use |
 | --- | --- | --- |
 | **item** | One element of `iterable`. | task, unit, record |
-| **item task** | The task that carries one item, `<queue>.item.<i>`. It holds no function. | item alone, mapreduce task |
-| **item queue** | `<executor-name>.mapreduce.<n>.<token>`, or `<executor-name>.map.<n>.<token>` for `map`. No job group serves it. | mapreduce queue, the private queue |
-| **map task** | The task that claims item tasks and maps them, with the task name `<item-queue>.task.<i>`. Under `mapreduce` it also folds them. | mapreduce task, folding task, worker task |
-| **partial result** | What one map task of `mapreduce` returns. | partial, shard, chunk result |
+| **item task** | The task that carries one item, `<queue>.item.<i>`. It holds no function. | item alone, map_reduce task |
+| **item queue** | `<executor-name>.map_reduce.<n>.<token>`, or `<executor-name>.map.<n>.<token>` for `map`. No job group serves it. | map_reduce queue, the private queue |
+| **map task** | The task that claims item tasks and maps them, with the task name `<item-queue>.task.<i>`. Under `map_reduce` it also folds them. | map_reduce task, folding task, worker task |
+| **partial result** | What one map task of `map_reduce` returns. | partial, shard, chunk result |
+| **reduce task** | The one task of a `map_reduce` call that folds the partial results, with the task name `<item-queue>.reduce`. Its parents are the map tasks. | final task, combine task, driver-side fold |
 | **chunk** | Several items batched into one item, to amortize the round trip. | group, batch, block |
-| **fold** | Applying `reduce_fn`. One verb for the worker-side and the driver-side fold alike. | reduce, accumulate, combine |
+| **fold** | Applying `reduce_fn`. One verb for the fold in a map task and in the reduce task alike. "Reduce" names only the reduce task, never the act. | reduce as a verb, accumulate, combine |
 
 ## States
 
@@ -168,7 +171,7 @@ and that is not a typo to correct.
 | `Waiting`, `Ready`, `Running`, `Finished`, `Failed`, `Canceled`, `Undefined` | `ds-service` `TaskState` | One `l` in `Canceled`. |
 | `PENDING`, `RUNNING`, `COMPLETED`, `CANCELLED`, `TIMEOUT` | Slurm job states | Two `l`s in `CANCELLED`. |
 
-For the waiting side's own view of a task:
+These terms name a task as a wait sees it:
 
 | Term | What it names | Do not use |
 | --- | --- | --- |
@@ -184,14 +187,14 @@ and in the troubleshooting guide as well as in the code.
 
 ## The server
 
-One process, one name.
+The server is one process, and it has one name.
 
 | Term | What it names | Do not use |
 | --- | --- | --- |
 | **the `ds-service` server**, short form **the server** | The one process everything talks through. | queue server, task queue server, task-queue server, pilot server, DS server, the queue |
 | **the map** | The key-value data structure, reached by `map_set` and `map_get`. | key value store, the store, key space |
 | **time series** | The data structure `time_series_append` writes. | series alone, metric, stream |
-| **counter** | What `counter_get_next_value` hands out, which is how the workers elect a monitor and how `restart_jobs` requests a restart. | sequence, ticket, lock |
+| **counter** | What `counter_get_next_value` returns, which is how the workers elect a monitor and how `restart_jobs` requests a restart. | sequence, ticket, lock |
 | **key** | One entry in the map, quoted with its prefix. | field, entry, record |
 
 `ds-service` also has **journal** and **mutex** data structures
@@ -202,44 +205,6 @@ Two `RuntimeError` messages say "task queue server" in full.
 That string is what a user greps for,
 so it stays as it is until both messages change in one commit.
 Everywhere else, write "the server".
-
-## The search side
-
-Neither Slurm nor `ds-service` has a word here.
-These words come from this library's own API,
-from botorch where the code calls into it,
-and from scipy for the design.
-
-| Term | What it names | Source | Do not use |
-| --- | --- | --- | --- |
-| **study** | One space, its objective and its settings. | Optuna | task, job, problem, experiment |
-| **exploration** | What `ExploreSpaceSobolQMC` does. | `num_exploration_points` | sweep, sampling, scan |
-| **search** | What `OptimizeSpaceBotorch` does. | `search_parallelism` | optimization as the activity, calibration, tuning |
-| **round** | One fit-propose-evaluate cycle. | this library | iteration, phase, wave, generation |
-| **design** | The set of points a Sobol' draw produces. | scipy qmc | sample, batch, grid |
-| **point** | A parameter assignment, in objective coordinates. | this library | sample, config, trial |
-| **unit point** | The same point in the unit cube. | `unit_points` | standardized point, normalized point |
-| **candidate** | A point the acquisition proposed and nothing evaluated yet. | botorch | proposal as a noun, suggestion |
-| **observation** | An evaluated point, with its value. | botorch, GP literature | result, measurement, data point |
-| **objective** | The function under study. | this library | target, cost function, model |
-| **objective value** | The number under `objective_key`. Lower is better. | `objective_value()` | score, cost, fitness, result |
-| **incumbent** | The best value known so far. | BO literature | the best, current best |
-| **stalled** | A round that did not beat the incumbent by `min_improvement`. | this library | flat, failed, wasted |
-| **results file** | The gzipped pickle `save` writes. | this library | checkpoint, state file, database |
-
-**study**, not task.
-A study is not a unit of work.
-One study expands into thousands of real tasks,
-so to call it a task collides with the one word
-that has to stay unambiguous.
-
-**propose** stays as a verb,
-and so does `PROPOSE_SECONDS_KEY`.
-What it produces is a **candidate**.
-
-**sweep** is retired, in prose and in identifiers alike.
-The word is **exploration**, in a tutorial too,
-because rule 4 leaves no room for a second word for the same thing.
 
 ## Progress, monitoring and logs
 
@@ -257,36 +222,14 @@ because rule 4 leaves no room for a second word for the same thing.
 | **tab** | How the `swtop` terminal UI shows a block. | `swtop_widgets.block_pane` | pane, page |
 | **error id** | The id in a `RemoteExecutionError`, which appears beside the traceback. | `error_id` | trace id, failure id, error code |
 | **time limit** | Slurm's `--time`. | Slurm | walltime, wall time, wall clock |
-| **wall clock** | Elapsed real time, as in `acqf_timeout_s`. | ordinary usage | walltime, runtime |
+| **wall clock** | Elapsed real time, as the `timeout` of `restart_jobs` counts it. | ordinary usage | walltime, runtime |
 
 A **monitor** writes a time series and `swtop` reads it.
-They are opposite ends of one pipe.
+A monitor and `swtop` are opposite ends of one pipe.
 Where a document calls `swtop` a monitor,
 the section on monitor election becomes unreadable.
 
-## Names that changed
-
-One pass applied the vocabulary of this file to the whole repository.
-This table is what moved,
-for anyone who reads an older branch, an older log file
-or a results file written before the change.
-
-| Was | Is |
-| --- | --- |
-| `define_worker` | `define_job_group` |
-| `scale_workers` | `scale_jobs` |
-| `WorkerGroup`, `.workers` | `JobGroup`, `.jobs` |
-| `ExplorationTask`, `OptimizationTask` | `ExplorationStudy`, `OptimizationStudy` |
-| `tasks=` argument and `.tasks` attribute on the two space classes | `studies=` and `.studies` |
-| `mapreduce(description=...)` | `mapreduce(desc=...)` |
-| `min_search_iterations`, `max_search_iterations` | `min_search_rounds`, `max_search_rounds` |
-| `PilotWorkerProcess` | `PilotWorker` |
-| `PILOT_WORKER_GROUP`, `PILOT_WORKER_NAME` | `PILOT_JOB_GROUP`, `PILOT_JOB_NAME` |
-| `worker_job_info:<worker-name>` | `pilot_job_info:<job-name>` |
-| `worker_process_info:<worker-id>` | `worker_info:<worker-id>` |
-| `<executor-name>.worker.<group>.<n>` | `<executor-name>.job.<group>.<n>` |
-| `swtop` blocks "worker jobs", "worker processes" | "pilot jobs", "workers" |
-| `Num tasks:` in a generated sbatch script | `Num Slurm tasks:` |
+## Identifiers that keep a retired word
 
 `PILOT_WORKER_ID` did not change.
 It holds a worker id, which is what it always held.
@@ -295,13 +238,16 @@ Some identifiers kept a retired word.
 The worker's logger is still named `worker_process`,
 and that name appears in every worker log line.
 `swtop.Snapshot` still holds the pilot jobs in its `worker_jobs` field.
+`MAP_REDUCE_ITEM_TEMPLATE` and `MAP_REDUCE_TOKEN_LEN` keep `map_reduce` in their names,
+although they serve `map` too.
 The test suite keeps more of them in its test names,
 such as `TestDefineWorker` and `TestScaleWorkers`.
 
-## Applying this
+## How to apply these terms
 
 **In prose.**
-Pick the word from the tables and keep it for the whole document.
+Pick the word from the tables.
+Keep it for the whole document.
 Where two senses meet in one paragraph, qualify both,
 even where one of them is clear on its own.
 
@@ -322,7 +268,8 @@ whatever this file says the intended name is.
 **In a published key or an environment variable.**
 The spelling is a contract between a writer and a reader
 that ship in the same release but run in different processes.
-Change both ends in one commit, and say so in the commit message.
+Change both ends in one commit.
+Say so in the commit message.
 
 ## Related
 

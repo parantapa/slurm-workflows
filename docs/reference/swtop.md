@@ -2,18 +2,19 @@
 
 [<- back to the main README](../../README.md)
 
-`slurm_workflows.swtop`, `slurm_workflows.swtop_widgets`
-and `slurm_workflows.swtop_tui`:
+`slurm_workflows.swtop` and `slurm_workflows.swtop_tui`:
 the live view of a `slurm-workflows` run.
 It shows the tasks, the pilot jobs and the workers,
 and the compute nodes they run on.
+The widgets of the terminal UI
+have a page of their own, [`slurm_workflows.swtop_widgets`](swtop-widgets.md).
 
 To watch a run with it, see
 [How to watch a run with `swtop`](../how-to-guides/watch-a-run-with-swtop.md).
 
 ## Command line
 
-`swtop` takes the `ds-service` address (`host:port`) the executor was given.
+`swtop` takes the same `ds-service` address (`host:port`) as the executor.
 
 ```sh
 swtop 10.0.0.1:5051          # every 2 seconds
@@ -24,12 +25,12 @@ swtop 10.0.0.1:5051 --plain  # frames of text, no UI
 | Option | Effect |
 | --- | --- |
 | `-i`, `--interval` | Seconds between polls, `2.0` by default. Must be greater than 0. |
-| `--plain` | Print frames of text instead of running the terminal UI. |
+| `--plain` | Frames of text in place of the terminal UI. |
 
 | Key | Effect |
 | --- | --- |
 | `q` | Quit |
-| `r` | Poll now, rather than waiting for the next interval |
+| `r` | Poll now, rather than at the next interval |
 | `p` | Show the pilot jobs tab |
 | `w` | Show the workers tab |
 | `h` | Show the hosts tab |
@@ -58,16 +59,16 @@ The terminal UI shows these areas, from top to bottom:
 The text frames show the same blocks:
 see [Frames of text instead of a UI](#frames-of-text-instead-of-a-ui).
 
-`swtop` lists tasks running first, then ready and waiting,
-then failed, finished, canceled and undefined,
+`swtop` lists the tasks in `Running` first, then `Ready` and `Waiting`,
+then `Failed`, `Finished`, `Canceled` and `Undefined`,
 and named before unnamed within each state.
 
 ### Where each block comes from
 
 The blocks come from different places:
 
-- **Progress** is what the driver's current `wait` or `as_completed` call
-    works through.
+- **Progress** is what the driver's current `wait`
+    or `as_completed` call works through.
     It gives the call's `desc` and `unit`,
     how many of its tasks came back,
     and how far along that is.
@@ -103,26 +104,28 @@ The blocks come from different places:
     or its workers cannot reach the server.
     One job usually holds many workers, one per Slurm task,
     so the two counts differ by design.
-- **Hosts and Slurm jobs** are what the monitors sample every 5 seconds:
-    see [What the hosts and jobs blocks measure](#what-the-hosts-and-jobs-blocks-measure).
+- **Hosts and slurm jobs** are what the monitors sample every 5 seconds:
+    see [What the hosts and slurm jobs blocks measure](#what-the-hosts-and-slurm-jobs-blocks-measure).
     The Slurm job of a pilot job that exited leaves the block.
     A host stays, marked `(stale)` once its readings stop.
 - **Tasks** are all tasks on the server, named or not.
 
 Every block says why it is empty, and never shows a bare header.
-A pilot job or a worker whose description the collector
-cannot read yet shows `?` in those fields.
+A pilot job or a worker
+whose description the collector cannot read yet
+shows `?` in those fields.
 
 `swtop` learns that a pilot job or a worker exited
 from the exit it publishes:
 see [What a run publishes](what-a-run-publishes.md).
-One that dies without publishing it, of SIGKILL or with its node,
-stays in its block.
+One that dies of SIGKILL, or with its node,
+publishes no exit and stays in its block.
 
 ### The task state filter
 
-The tasks tab of the terminal UI shows only the tasks in the states that are checked.
-It has one checkbox for each state, in the order above.
+The tasks tab of the terminal UI shows only the tasks in the checked states.
+It has one checkbox for each state,
+in the order the tasks tab lists the states.
 At start, `Waiting`, `Ready` and `Running` are checked,
 so the tab shows only the tasks that did not end.
 A click on a checkbox checks or unchecks it.
@@ -136,6 +139,78 @@ The summary line counts every task.
 When the server holds tasks but none in a checked state,
 the tab says `no tasks in the chosen states`.
 
+### Task names
+
+`swtop` lists a task under `-`
+unless `executor.set_task_name(task, name)` named it.
+A name published after the executor submitted the task
+appears at the next poll.
+
+[`map`](map.md) and [`map_reduce`](map-reduce.md) name each map task `<item-queue>.task.<i>`,
+and leave their item tasks unnamed.
+`map_reduce` also names its reduce task `<item-queue>.reduce`.
+Within a state, the tasks tab lists named tasks before unnamed ones,
+and sorts names as text.
+A name such as `task-0007` therefore sorts in submission order,
+and `task-7` does not.
+
+### What the hosts and slurm jobs blocks measure
+
+The hosts and slurm jobs blocks need nothing extra.
+The workers sample the nodes and the Slurm jobs themselves
+and publish the readings:
+see [What a run publishes](what-a-run-publishes.md).
+
+The two blocks show these columns:
+
+| Column | What it is |
+| --- | --- |
+| `HOST` | The node the reading comes from |
+| `FREE MEM` | Memory available on the node, including the cache the kernel can reclaim |
+| `LOAD` | The node's 1-minute load average, over all its cores |
+| `/dev/shm`, `/tmp` | How full each node-local scratch filesystem is |
+| `JOB` | The Slurm job the reading comes from |
+| `MEMORY` | The job's cgroup total on that node: every process and thread of the job, not only the workers. Where the cgroup files cannot be read, it is the summed RSS of the processes in the job's cgroup. Where even that list cannot be read, or holds no process with memory, it covers only the sampling worker and its descendants. |
+| `CPU` | Cores the job used on that node, averaged since the previous sample |
+
+`LOAD` reads against the node's core count.
+On a 40-core node,
+39.80 is a full node and 80 is oversubscribed twice over.
+
+The slurm jobs block has one row for each node of each job.
+A job on 4 nodes shows 4 rows,
+and its total is the sum of their `MEMORY` or `CPU`.
+`CPU` reads against what the job asked for on each node,
+so a job with `--ntasks-per-node=40 --cpus-per-task=1` sits near 40 on every row.
+The first reading of a job is 0,
+since the monitor has no earlier sample to subtract from it.
+
+A `/tmp` that climbs toward 100% makes the whole node fail,
+not only the job that filled it.
+
+A subject, that is a node or a job on one node,
+is marked `(stale)` when it has no reading in the last minute.
+The worker that sampled it is gone:
+its job ended, or something killed it.
+The remaining workers do not take over that node,
+so a run that scales down loses the readings for what it gave up.
+A node comes back to life when another pilot job lands on it,
+since each pilot job samples every node it runs on.
+It also comes back when [`restart_jobs`](executor.md#restart_jobs)
+restarts the workers of a job on it,
+since the new workers hold a new election.
+
+A single `-` on an otherwise live row
+is one series with nothing recent in it.
+A node without the path of a `/dev/shm` or `/tmp` column
+also shows `-` in that column.
+A path that is not a mount point of its own
+shows the filesystem that holds it.
+
+How the workers elect the sampling worker,
+and why only a restart re-elects it,
+is in [The monitoring state a run publishes](../explanation/monitoring-state-a-run-publishes.md).
+
 ## Frames of text instead of a UI
 
 Output that is not a terminal (a pipe, a file, `--plain`)
@@ -148,7 +223,7 @@ swtop  10.0.0.1:5051  2026-01-30 11:04:57
 
 tasks  waiting 0  ready 78  running 80  finished 240  failed 2  canceled 0  total 400
 
-explore  [###############---------]  242/400 point  60%  working
+squaring  [###############---------]  242/400 task  60%  working
 
 pilot jobs (2)
 NAME              GROUP  JOB      SUBMITTED                  STARTED
@@ -182,7 +257,7 @@ eval-2   my-run.task.12  Ready
 The text frames list the tasks in every state.
 
 On a terminal the frames replace each other.
-Redirected output gets them appended instead.
+In redirected output, `swtop` appends each frame instead.
 The blocks and columns are the same either way.
 
 ## When the server cannot be read
@@ -193,147 +268,13 @@ In the terminal UI the error line appears below the tabs.
 In the terminal UI the last good reading stays on the screen,
 so a server restart does not blank the display.
 A text frame carries the message in place of the blocks.
-`swtop` also looks like this when it starts before the server:
-it waits, and fills in once there is something to read.
-
-## Task names
-
-`swtop` lists a task under `-`
-unless `executor.set_task_name(task, name)` named it.
-A name published after the task was submitted
-appears at the next poll.
-
-`ExploreSpaceSobolQMC` and `OptimizeSpaceBotorch` name what they submit.
-A point of an exploration gets `<study>-explore-<index>`.
-The two kinds of task in a search round get
-`<study>-fit-<round>` and `<study>-search-<round>-<index>`.
-They zero pad the index to the width of the batch,
-so the names sort in submission order.
-[`mapreduce`](mapreduce.md) and [`map`](map.md) name each map task `<item-queue>.task.<i>`,
-and leave their item tasks unnamed.
-
-## What the hosts and jobs blocks measure
-
-The hosts and jobs blocks need nothing extra.
-The workers sample the nodes and jobs themselves
-and publish the readings:
-see [What a run publishes](what-a-run-publishes.md).
-
-The two blocks show these columns:
-
-| Column | What it is |
-| --- | --- |
-| `HOST` | The node the reading comes from |
-| `FREE MEM` | Memory available on the node, including the cache the kernel can reclaim |
-| `LOAD` | The node's 1-minute load average, over all its cores |
-| `/dev/shm`, `/tmp` | How full each node-local scratch filesystem is |
-| `JOB` | The Slurm job the reading comes from |
-| `MEMORY` | The job's cgroup total on that node: every process and thread of the job, not only the workers. Where the cgroup files cannot be read, it is the summed RSS of the processes in the job's cgroup. Where even that list cannot be read, it covers only the sampling worker and its children. |
-| `CPU` | Cores the job used on that node, averaged since the previous sample |
-
-`LOAD` reads against the node's core count.
-A node of the `bii` partition has 40 cores,
-so 39.80 is a full node and 80 is oversubscribed twice over.
-
-The slurm jobs block has one row for each node of each job.
-A job on 4 nodes shows 4 rows,
-and its total is the sum of their `MEMORY` or `CPU`.
-`CPU` reads against what the job asked for on each node,
-so a job with `--ntasks-per-node=40 --cpus-per-task=1` sits near 40 on every row.
-The first reading of a job is 0,
-since the monitor has no earlier sample to subtract from it.
-
-A `/tmp` that climbs toward 100% takes the whole node down with it,
-not only the job that filled it.
-
-A subject marked `(stale)` has no reading in the last minute.
-The worker that sampled it is gone:
-its job ended, or something killed it.
-The remaining workers do not take over that node,
-so a run that scales down loses the readings for what it gave up.
-A node comes back to life when another pilot job lands on it,
-since each pilot job samples every node it runs on.
-It also comes back when [`restart_jobs`](executor.md#restart_jobs)
-restarts the workers of a job on it,
-since the new workers hold a new election.
-
-A single `-` on an otherwise live row
-is one series with nothing recent in it.
-A node without the path of a `/dev/shm` or `/tmp` column
-also shows `-` in that column.
-A path that is not a mount point of its own
-shows the filesystem that holds it.
-
-How the workers elect the sampling worker,
-and why only a restart re-elects it,
-is in [The trail a run leaves](../explanation/the-trail-a-run-leaves.md).
-
-## `slurm_workflows.swtop_widgets`
-
-`slurm_workflows.swtop_widgets` holds the widgets the terminal UI is built from.
-Another Textual app can lay them out in its own screen.
-To do that, see
-[How to embed `swtop` in a Textual app](../how-to-guides/embed-swtop-in-a-textual-app.md).
-
-| Name | What it is |
-| --- | --- |
-| `SnapshotPoller` | Polls one server, and calls `show` on each view attached to it. It draws nothing. |
-| `SummaryLine` | The summary line. |
-| `ProgressDisplay` | The progress bar. Hidden until a driver waits on something. |
-| `ErrorLine` | The error line. Hidden while polls succeed. |
-| `BlockTable` | The table of one block, or why the block is empty. It has no title. |
-| `TaskTable(spec, states=DEFAULT_TASK_STATES)` | A `BlockTable` for the tasks block, with a `TaskStateFilter` above the rows. It shows only the tasks in `states`. |
-| `TaskStateFilter(states=DEFAULT_TASK_STATES)` | A checkbox for each task state. It posts `TaskStateFilter.Changed`, and `event.states` is the set of states now checked. |
-| `block_table(spec)` | A `TaskTable` for the tasks block, and a `BlockTable` for any other block. |
-| `block_pane(spec, *, id=None)` | A `TabPane` that holds the `block_table` of `spec`, and keeps its count in the tab label. The id is `swtop-<key>` by default. |
-| `SwtopTabs` | A `TabbedContent` with one `block_pane` for each block. |
-| `BLOCKS` | In `slurm_workflows.swtop`: one `BlockSpec` for each block, in screen order. Its `key` is `pilot-jobs`, `workers`, `hosts`, `jobs` or `tasks`. |
-| `DEFAULT_TASK_STATES` | In `slurm_workflows.swtop`: the states a `TaskTable` shows at start, `Waiting`, `Ready` and `Running`. |
-
-`SnapshotPoller` takes exactly one of these two arguments:
-
-- `address`: the poller opens a client of its own when it mounts,
-  and closes it when it unmounts.
-- `collector`: a `Collector` that the caller owns.
-  Its client must belong to the app's event loop.
-  `open_collector(address)` in `slurm_workflows.swtop`
-  is an async context manager that yields one
-  on a client of its own, and closes that client on the way out.
-  The `async with` that enters it must run on the app's event loop.
-
-Its other arguments are `interval` and `views`.
-The `interval` is in seconds, and `2.0` by default.
-The `views` are the views to attach from the start.
-It raises `ValueError` when it gets both `address` and `collector` or neither,
-or when `interval` is not greater than 0.
-
-| Member | What it does |
-| --- | --- |
-| `attach(*views)` | Shows each later poll on `views`. A view attached after a poll shows that poll at once. A widget must be mounted before it is attached. |
-| `detach(*views)` | Stops showing polls on `views`. |
-| `poll_now()` | Polls now, rather than at the next interval. |
-| `snapshot` | The last `Snapshot`, or `None` before the first poll ends. |
-| `Polled` | The message posted after each poll. `event.snapshot` is the `Snapshot`, with `error` set if the poll failed. |
-
-`BlockTable` posts `BlockTable.CountChanged` when its row count changes.
-`event.spec` is its block, and `event.count` is the new count.
-A `TaskTable` counts only the tasks it shows.
-
-A failed poll changes only the error line.
-The other widgets keep the last good reading.
-
-The widgets add no key bindings of their own.
-The tabs and the tables inside them keep the usual Textual keys,
-such as the arrow keys, while they have focus.
-The only ids the widgets set are the `swtop-<key>` ids of the block panes.
-The app that lays them out picks the other keys and every other id.
-For example, it picks a key for each tab and a key for `poll_now`.
-Each widget carries its own styles,
-so it needs no CSS from the app.
+`swtop` shows the same error when it starts before the server:
+it waits, and fills the screen once there is something to read.
 
 ## Related
 
 - [How to watch a run with `swtop`](../how-to-guides/watch-a-run-with-swtop.md)
 - [How to embed `swtop` in a Textual app](../how-to-guides/embed-swtop-in-a-textual-app.md)
+- [`slurm_workflows.swtop_widgets`](swtop-widgets.md)
 - [What a run publishes](what-a-run-publishes.md)
-- [The trail a run leaves](../explanation/the-trail-a-run-leaves.md)
+- [The monitoring state a run publishes](../explanation/monitoring-state-a-run-publishes.md)

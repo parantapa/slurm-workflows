@@ -147,7 +147,7 @@ class ProgressDisplay(Vertical):
         )
         bar = self.query_one(ProgressBar)
         # `max` keeps a zero total, which an empty wait publishes, away from the bar.
-        # The bar then reads 0%, where `fraction` and the text display read done.
+        # The bar then reads 0%, where `fraction` and the text frames read done.
         bar.update(total=max(progress.total, 1), progress=progress.completed)
 
 
@@ -400,7 +400,7 @@ class SnapshotPoller(Widget):
     on the app's event loop, and closes it on unmount.
     With `collector`, the caller owns the collector,
     which must belong to the app's event loop.
-    Construction raises `ValueError` if the caller gives both or neither,
+    The constructor raises `ValueError` if the caller gives both or neither,
     or if `interval` is not greater than 0.
     The poller attaches `views` from the start, as `attach` does.
 
@@ -454,7 +454,8 @@ class SnapshotPoller(Widget):
 
         A view that `attach` adds after a poll shows that poll's snapshot at once,
         so it does not wait for the next interval.
-        Attach a widget only after it mounts.
+        A view must already be mounted,
+        since `attach` can draw the last snapshot on it at once.
         """
         new = [v for v in views if v not in self.views]
         self.views.extend(new)
@@ -486,25 +487,30 @@ class SnapshotPoller(Widget):
 
         A poll in flight always runs to its end.
         A call that arrives while a poll is in flight
-        starts one more poll when that poll ends,
-        so the caller still gets a fresh read of the server.
+        starts one more poll when that poll ends.
+        As a result, the caller still gets a fresh read of the server.
         """
         if self._polling:
             self._again = True
             return
 
         # One poll at a time, and each one runs to its end.
-        # See "`SnapshotPoller` runs one poll at a time" in the developer notes.
+        # The comment in `_tick` says why.
         self._polling = True
-        # The group is per poller, so two pollers leave each other alone.
+        # The Textual worker group is per poller,
+        # so two pollers leave each other alone.
         self.run_worker(self._poll, group=f"swtop-poll-{id(self)}")
 
     def _tick(self) -> None:
         """Poll on the interval, unless a poll is still in flight."""
-        # The poller drops a tick that comes during a slow poll,
+        # The poller runs one poll at a time, and lets each one finish.
+        # It drops a tick that comes during a slow poll,
         # and does not queue it.
         # As a result, the poller polls a slow server as often as it answers,
         # and no more.
+        # The rejected alternative cancels the poll in flight at every tick.
+        # With it, a poll slower than the interval never finishes,
+        # and the screen keeps its first reading with no error to say why.
         if not self._polling:
             self.poll_now()
 
@@ -519,7 +525,7 @@ class SnapshotPoller(Widget):
         self.post_message(self.Polled(self, snapshot))
 
     async def _poll(self) -> None:
-        """One poll, awaited in a worker so the interface does not block."""
+        """One poll, awaited in a Textual worker so the interface does not block."""
         assert self.collector is not None
         try:
             try:

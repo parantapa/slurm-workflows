@@ -3,13 +3,13 @@
 [<- back to the main README](../../README.md)
 
 You fixed a bug in a module that your tasks import,
-or in your actor class,
-and the pilot jobs are already live.
+or in your actor class.
+But the pilot jobs are already live.
 If you cancel them and submit new ones,
 you wait in Slurm's queue again.
 Restart the workers instead.
-Each pilot job keeps its allocation and its place against its time limit,
-and its workers start again on the code on disk.
+Each pilot job keeps its allocation and its place against its time limit.
+The workers of each pilot job start again on the code on disk.
 
 ## Check what needs a restart
 
@@ -21,7 +21,7 @@ A change to any of these items needs a restart:
 - the actor class, or a module it imports
 - the actor arguments you pass to `define_job_group`
 
-A function defined in the driver's own script, in `__main__`,
+A function that the driver's own script defines, in `__main__`,
 travels with each task by value.
 A change to it reaches the workers with the next task you submit,
 so it needs no restart.
@@ -104,12 +104,12 @@ for example because the actor class no longer imports.
 Such a worker does not come back.
 Its traceback is in its log in the work dir.
 Fix the code.
-Then scale the job group down and back up
-to replace its pilot jobs.
+Then scale the job group down.
+Next, scale it back up to replace its pilot jobs.
 
-In [`swtop`](../reference/swtop.md),
-each restarted worker leaves the workers block,
-and a new one appears with a new pid and a new worker id.
+In [`swtop`](watch-a-run-with-swtop.md),
+each restarted worker leaves the workers block.
+Then a new worker appears with a new pid and a new worker id.
 
 ## Related
 

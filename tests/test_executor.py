@@ -161,7 +161,9 @@ class TestExecutorName:
 
     def test_rejects_a_non_string_name(self, ds_service_address):
         with pytest.raises(TypeCheckError):
-            SlurmPilotExecutor(42, ds_service_address)  # type: ignore[arg-type]
+            SlurmPilotExecutor(
+                42, ds_service_address  # pyright: ignore[reportArgumentType]
+            )
 
     def test_the_default_work_dir_is_under_the_name(
         self, ds_service_address, tmp_path, monkeypatch
@@ -541,6 +543,7 @@ class TestScaleWorkers:
     def test_submission_failure_propagates(self, defined, fake_slurm):
         fake_slurm.fail_command("sbatch", stderr="invalid account")
 
+        # Broad on purpose, since `scale_jobs` raises what sbatch submission raises.
         with pytest.raises(Exception):
             defined.scale_jobs("cpu", 1)
 
@@ -579,7 +582,7 @@ class TestScaleWorkers:
         fanout_cmds = srun_lines(fanout_script.script_text)
         assert batch_cmds == []
         # Two, because the job picks one when it starts.
-        # See the developer notes, "Slurm interaction".
+        # See the comment above `num_slurm_tasks=` in `templates/slurm_pilot.jinja`.
         assert len(fanout_cmds) == 2
         assert all(cmd.endswith(".sh'") for cmd in fanout_cmds)
         assert "--output" not in fanout_cmds[0]
@@ -907,7 +910,8 @@ class TestSubmit:
     def test_accepts_a_list_of_queues(self, executor, ds_client):
         executor.submit(["cpu", "gpu"], square, 5)
 
-        # Enqueued on both, so a worker on either queue can serve it.
+        # `submit` enqueues the task on both queues,
+        # so a worker on either queue can serve it.
         fetched = ds_client.task_get("test-worker", "gpu")
         assert cloudpickle.loads(fetched.input) == ((5,), {})
 
@@ -1073,13 +1077,13 @@ class TestTaskName:
         task = executor.submit("cpu", square, 5)
 
         with pytest.raises(AttributeError):
-            task.task_name = "direct"  # type: ignore[misc]
+            task.task_name = "direct"
 
     def test_rejects_a_non_string_name(self, executor):
         task = executor.submit("cpu", square, 5)
 
         with pytest.raises(TypeCheckError):
-            executor.set_task_name(task, 42)  # type: ignore[arg-type]
+            executor.set_task_name(task, 42)
 
 
 class TestAsCompleted:
@@ -1126,7 +1130,7 @@ class TestAsCompleted:
         assert sorted(t.output for t in tasks) == [0, 1, 4]
 
     def test_yields_incrementally(self, executor, ds_client, time_limit):
-        """Finished tasks come back without waiting for the whole batch."""
+        """Finished tasks come back before the whole batch finishes."""
         tasks = [executor.submit("cpu", square, i) for i in range(5)]
         drain(ds_client, "cpu", 2)
 
@@ -1161,13 +1165,13 @@ class TestAsCompleted:
 
     def test_unknown_task_id_raises(self, executor, time_limit):
         # Without the `Undefined` handling,
-        # `as_completed` polls forever instead of raising.
+        # `as_completed` polls forever and does not raise.
         with time_limit(10, "as_completed never terminated for an unknown task"):
             with pytest.raises(RuntimeError, match="unknown to the task queue server"):
                 list(executor.as_completed([ghost_task()], desc="test"))
 
     def test_unknown_task_id_raises_from_wait(self, executor, time_limit):
-        # `wait` gets this from `_as_completed`, as `as_completed` does.
+        # `wait` gets this behavior from `_as_completed`, as `as_completed` does.
         # The test pins the guarantee to both entry points
         # rather than trust the shared loop to stay.
         with time_limit(10, "wait never terminated for an unknown task"):
@@ -1175,7 +1179,7 @@ class TestAsCompleted:
                 executor.wait([ghost_task()], desc="test")
 
     def test_canceled_task_raises(self, executor, ds_client, time_limit):
-        # Nothing here cancels, so this cancel arrives out of band.
+        # Nothing here cancels, so this cancellation arrives out of band.
         # See the comment on the `TaskState.Canceled` branch
         # of the poll loop in `_as_completed`.
         task = executor.submit("cpu", square, 3)
@@ -1403,7 +1407,7 @@ class TestLiveQueues:
 
 
 class TestNoWorkerStarted:
-    """The up-front check, before any polling and without asking Slurm."""
+    """The up-front check, before any polling and with no call to Slurm."""
 
     def test_a_group_that_was_never_scaled_is_rejected(self, executor, setup_script):
         """`define_job_group` submits nothing, so no worker exists for the group."""
@@ -1454,7 +1458,8 @@ class TestNoWorkerStarted:
     def test_only_the_starved_tasks_are_given_up_on(
         self, executor, ds_client, setup_script
     ):
-        # See the developer notes, "_as_completed drops a task that can never run, not the batch".
+        # See the developer notes,
+        # "_as_completed drops a task that can never run, not the batch".
         executor.define_job_group("cpu", [], setup_script)
         executor.scale_jobs("cpu", 1)
         good = [executor.submit("cpu", square, i) for i in range(3)]
@@ -1471,7 +1476,7 @@ class TestNoWorkerStarted:
     def test_the_rest_of_the_batch_is_waited_for_before_raising(
         self, executor, ds_client, setup_script
     ):
-        """What RAISE_AFTER_COMPLETED promises: everything that can finish."""
+        """What `RAISE_AFTER_COMPLETED` promises: everything that can finish."""
         executor.define_job_group("cpu", [], setup_script)
         executor.scale_jobs("cpu", 1)
         good = [executor.submit("cpu", square, i) for i in range(3)]
@@ -1490,7 +1495,8 @@ class TestNoWorkerStarted:
     def test_the_count_is_of_tasks_not_of_messages(
         self, executor, ds_client, setup_script
     ):
-        # See the developer notes, "_as_completed drops a task that can never run, not the batch".
+        # See the developer notes,
+        # "_as_completed drops a task that can never run, not the batch".
         executor.define_job_group("cpu", [], setup_script)
         executor.scale_jobs("cpu", 1)
         done = executor.submit("cpu", square, 1)
@@ -1664,7 +1670,7 @@ class TestStrandedTasks:
     def test_squeue_failure_does_not_abort_the_wait(
         self, executor, fake_slurm, setup_script, ds_client, check_immediately
     ):
-        """Unknown liveness is not dead liveness, so the wait goes on."""
+        """Unknown liveness is not dead liveness, so the wait continues."""
         executor.define_job_group("cpu", [], setup_script)
         executor.scale_jobs("cpu", 1)
         task = executor.submit("cpu", square, 5)
@@ -1678,7 +1684,7 @@ class TestStrandedTasks:
     def test_not_checked_before_the_interval_elapses(
         self, executor, fake_slurm, setup_script, ds_client
     ):
-        """A queue with no job yet is normal right after submitting."""
+        """A queue with no job yet is normal right after `submit` returns."""
         executor.define_job_group("cpu", [], setup_script)
         # The README says a caller can submit tasks before the workers exist.
         task = executor.submit("cpu", square, 6)
@@ -1777,14 +1783,14 @@ class TestLogging:
 
     # Each test here uses its own executor name,
     # rather than the logger a previous test left in the registry.
-    # The developer notes, under Logging, say why a shared name breaks this.
+    # The developer notes, under Logging, say why a shared name breaks these tests.
 
     @staticmethod
     def file_handlers(ex: SlurmPilotExecutor) -> list[logging.Handler]:
         """The executor's own file handlers."""
-        # The logging registry is global,
-        # and while a test runs, pytest's capture plugin
-        # puts handlers of its own on loggers.
+        # The logging registry is global.
+        # While a test runs,
+        # pytest's capture plugin puts handlers of its own on loggers.
         return [h for h in ex.logger.handlers if isinstance(h, logging.FileHandler)]
 
     def test_two_executors_do_not_share_a_log_file(
@@ -1797,7 +1803,7 @@ class TestLogging:
             "sharedB", ds_service_address, work_dir=tmp_path / "second"
         )
 
-        # scale_jobs is what logs.
+        # `scale_jobs` is what logs.
         # Anything that writes a record will do.
         second.define_job_group("cpu", [], setup_script)
         second.scale_jobs("cpu", 1)

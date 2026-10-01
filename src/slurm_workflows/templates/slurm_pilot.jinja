@@ -6,7 +6,7 @@
 report_pilot_job() {
     /bin/bash '{{ worker_script_path }}' --pilot-job-event "$1" || true
 }
-# Turns the SIGTERM Slurm sends into `exit 143` (128 + 15).
+# This trap turns the SIGTERM that Slurm sends into `exit 143` (128 + 15).
 # See the developer notes, Slurm interaction.
 trap 'exit 143' TERM
 trap 'report_pilot_job exit' EXIT
@@ -17,15 +17,23 @@ echo "Running batch worker."
 
 . '{{ worker_script_path }}'
 {% else %}
-# A job of one Slurm task writes to the batch job's own output file.
-# See the developer notes, Slurm interaction.
+# A job of one Slurm task writes to the batch job's own output file,
+# so a file per Slurm task only duplicates it.
+# The shell decides, since Python cannot know the count when it renders the script.
+# `SLURM_NTASKS` alone settles the count
+# whenever the submission gave `--ntasks` or any `--ntasks-per-*` option.
+# Slurm leaves it unset only when the submission gave no count,
+# and then `SLURM_JOB_NUM_NODES` stands in, at one Slurm task per node.
+# The count is per job, not per node:
+# `--nodes=4 --ntasks-per-node=1` is four Slurm tasks, with a file for each.
 # `:-` keeps an unset variable from becoming an error if `-u` is ever set.
 num_slurm_tasks="${SLURM_NTASKS:-${SLURM_JOB_NUM_NODES:-}}"
 # The batch output file must say why the shell took the branch below.
 echo "Num Slurm tasks: ${num_slurm_tasks}"
 if [[ "${num_slurm_tasks}" = "1" ]] ; then
-    # Before `srun` in both branches, since the batch output file is the only record
-    # of a job that dies before the worker script gets as far as its own log.
+    # The batch output file is the only record of a job
+    # that dies before the worker script gets as far as its own log.
+    # For this reason, `set -x` comes before `srun` in both branches.
     set -x
     srun /bin/bash '{{ worker_script_path }}'
 else
@@ -46,6 +54,9 @@ fi
 
 {{ setup_script }}
 
+# Strict mode starts only after the setup script.
+# A setup script often runs `module load` and `conda activate`,
+# which do not work well under `set -Eeuo pipefail`.
 set -Eeuo pipefail
 set -x
 

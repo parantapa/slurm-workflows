@@ -7,17 +7,18 @@
 One Slurm job per unit of work pays the latency of Slurm's queue
 once per unit of work.
 On a busy cluster that latency dominates everything else
-as soon as the individual tasks are small.
-An exploration of a few thousand short evaluations
+as soon as each unit of work is small.
+A map of one function over a few thousand short inputs
 can spend most of its wall clock in Slurm's queue rather than on the work.
 
 The pilot-job model inverts that.
 The executor submits a few long-lived pilot jobs once,
 and each job starts workers that stay alive.
-The executor then dispatches the actual work to those workers over a queue.
+The executor then submits the tasks to a queue,
+and those workers claim them from it.
 A run pays Slurm's latency once per pilot job instead of once per task.
 The cluster sees a handful of ordinary jobs.
-The program sees something
+The driver sees something
 close to [`concurrent.futures`](https://docs.python.org/3/library/concurrent.futures.html).
 
 ## Why a queue is a job group's name
@@ -26,13 +27,16 @@ close to [`concurrent.futures`](https://docs.python.org/3/library/concurrent.fut
 and [`define_job_group` options](../reference/executor.md#define_job_group-options) lists what a job group holds.
 The queue is the part of that naming which is a design decision
 rather than a definition.
-A job group's workers claim from the queue that carries the group's own name,
-so workers from the job group named `gpu` serve `submit("gpu", ...)`.
+A job group's workers claim tasks from the queue with the job group's name.
+So the workers of the `gpu` job group serve `submit("gpu", ...)`.
 
-The queue-equals-group rule keeps job groups isolated
+This naming rule keeps job groups isolated
 without any routing configuration.
 A `gpu` worker cannot claim a task from the `cpu` queue,
-because a worker only ever asks its own queue for work.
+because the worker loop only ever asks its own queue for work.
+The map tasks of `map` and `map_reduce` also claim item tasks
+from an item queue of the call's own.
+The map tasks run only on the job groups that the call names.
 
 ## The three processes
 
@@ -44,9 +48,10 @@ because a worker only ever asks its own queue for work.
 
 `scale_jobs` renders a shell script and an sbatch wrapper
 from Jinja templates and submits them.
-Each job runs the job group's setup script inline and launches `slurm-pilot-worker`.
-That worker loops: claim a task from its group's queue,
-load the function with cloudpickle, run it, post the cloudpickled task output back.
+Each pilot job runs the job group's setup script inline and launches `slurm-pilot-worker`.
+Each worker loops: claim a task from its job group's queue,
+load the function with cloudpickle, run it,
+and record the cloudpickled task output on the server.
 It stops only when its pilot job ends,
 or when [`restart_jobs`](../reference/executor.md#restart_jobs) asks it to restart.
 A restart starts a new worker in the same pilot job,
@@ -79,12 +84,12 @@ a pilot job inherits settings from the driver's own allocation.
 The driver's node count and Slurm task count are two of them.
 
 The executor handles that case.
-It drops all four prefixes from its environment
+It drops every variable with one of the four prefixes from its environment,
 and gives `sbatch` what is left.
 A pilot job therefore takes its shape
 from the job group's `sbatch_args` alone,
 whatever the driver runs inside.
-The same call runs on a login node, where there is nothing to strip.
+The same call runs on a login node, where there is nothing to drop.
 
 ## Exceptions are values
 
@@ -93,12 +98,12 @@ never reaches the driver.
 The worker catches it, logs the traceback under a generated `error_id`,
 and returns a `RemoteExecutionError` as the task's `output`.
 `as_completed` and `wait` are what turn that value back into an exception,
-under the [`RaiseOnError`](../reference/executor.md#raiseonerror) policy
+under the [`RaiseOnError`](../reference/submit-and-wait.md#raiseonerror) policy
 the driver gives them.
 
 This trade is deliberate.
-A worker that dies on a bad task takes the rest of its queue with it,
-so a worker swallows everything.
+A worker that dies on a bad task leaves the rest of its queue unserved,
+so a worker catches every exception.
 The cost is that nobody sees a failure
 until somebody waits on the task.
 
@@ -115,45 +120,59 @@ and restart each other's workers.
 
 Nothing enforces the rule,
 because an executor cannot see another one.
-That is also why the liveness checks behind
-[a wait that cannot finish](../reference/executor.md#errors-that-end-a-wait)
-refuse a queue served by pilot jobs the executor did not start.
-The executor has no way to tell a healthy foreign worker
-from a queue nobody serves.
+For the same reason, the liveness checks behind
+[a wait that cannot finish](../reference/submit-and-wait.md#errors-that-end-a-wait)
+refuse a queue whose pilot jobs the executor did not start.
+The executor has no way to tell a queue that a healthy foreign worker serves
+from a queue that nobody serves.
 
 The executor still prefixes task ids and pilot job names with its own name.
-The reason is that a *cluster* holds many runs,
-even when a server holds one.
+The reason is that a cluster holds many runs,
+even when a server holds one run.
 
-## Which class to reach for
+## Two interfaces, and who owns the loop
 
-Three classes sit on top of this model,
-in increasing order of how much of the loop they own:
+The executor offers two interfaces on top of this model.
+They differ in how much of the loop the driver owns.
 
-| Class | Fits work shaped like |
+| Call | Fits work shaped like |
 | --- | --- |
-| `SlurmPilotExecutor` | a set of tasks that is known up front |
-| `ExploreSpaceSobolQMC` | evaluating one function over one space |
-| `OptimizeSpaceBotorch` | finding where one function is smallest |
+| `map` | one function over a collection, with every value back in order |
+| `map_reduce` | one function over a collection, folded into one value |
+| `submit` with `wait` or `as_completed` | tasks that differ, wait on each other, or need a handle each |
 
-The two space classes build on the first.
-Both take an executor and submit through it,
-so every program begins with an executor.
-The difference between the space classes and the executor
-is who owns the submit-and-wait loop.
-Work that is not a function over a space must own that loop itself,
-which is what `submit` and `wait` are for.
+`map` and `map_reduce` are the simple interface.
+The call owns the loop.
+It enqueues the items, waits for every task, and returns the result.
+Neither call divides the items in advance,
+so a slow item slows one worker rather than a fixed share of the work.
+
+The cost is control.
+The call blocks.
+A failure ends the call with nothing back.
+The driver sees no handle for the tasks that the call submits.
+
+`submit` with `wait` or `as_completed` is the advanced interface.
+The driver owns the loop.
+It gets a `Task` per call, and with it task names, priorities,
+parent tasks, and the task outputs that finished before a failure.
+`map` and `map_reduce` submit their tasks and wait on them
+through the same machinery that `submit` and `as_completed` use.
+
+A search over a parameter space owns a loop of its own,
+since each round decides what the next one evaluates.
+The [`slurm-workflows-optimize`](https://github.com/parantapa/slurm-workflows-optimize)
+package builds that loop on `submit` and `wait`.
 
 ## Related
 
 - [`SlurmPilotExecutor`](../reference/executor.md)
-- [`ExploreSpaceSobolQMC`](../reference/explore-space.md)
-- [`OptimizeSpaceBotorch`](../reference/optimize-space.md)
-- [Batch Bayesian optimization](batch-bayesian-optimization.md),
-    for why a search runs in rounds
+- [`map`](../reference/map.md)
+- [`map_reduce`](../reference/map-reduce.md)
+- [`submit`, `wait` and `as_completed`](../reference/submit-and-wait.md)
 - [Terminology](../terminology.md),
     for the word this project uses for each thing
-- [The trail a run leaves](the-trail-a-run-leaves.md),
-    for the trail the three processes leave behind them
+- [The monitoring state a run publishes](monitoring-state-a-run-publishes.md),
+    for the state the three processes publish as they run
 - [Computing pi on a Slurm cluster](../tutorials/computing-pi.md),
     which is this model as a program

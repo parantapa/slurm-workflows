@@ -47,8 +47,6 @@ PILOT_JOB_START_PREFIX = "pilot_job_start:"
 PILOT_JOB_EXIT_PREFIX = "pilot_job_exit:"
 
 # One counter per job group, which `SlurmPilotExecutor.restart_jobs` advances.
-# A worker that sees it move exits with `RESTART_EXIT_CODE`,
-# and the worker script starts it again on that status.
 # 75 is `EX_TEMPFAIL` from `sysexits.h`.
 # It collides with none of the statuses a worker already exits with.
 # Those are 1 for an uncaught exception, 2 for a click usage error,
@@ -146,7 +144,7 @@ class PilotWorker:
         self.worker_id = "%s.%s.%s.%s" % (name, slurm_job_id, hostname, pid)
         # `worker_process` is a retired word,
         # kept because every worker log line carries it.
-        # See docs/terminology.md, Names that changed.
+        # See docs/terminology.md, Identifiers that keep a retired word.
         self.logger = logging.getLogger("worker_process")
         self._exit_published = False
 
@@ -190,7 +188,7 @@ class PilotWorker:
             raise
 
         # For a task that dispatches a method name of its own,
-        # such as the ones `mapreduce` and `map` submit.
+        # such as the ones `map_reduce` and `map` submit.
         _set_current_actor(self.actor_instance)
 
     def _build_actor(self, actor_class_name: str) -> Any | None:
@@ -282,13 +280,13 @@ class PilotWorker:
         try:
             value = self.client.map_get(key)
         except KeyError:
-            # A missing key means the caller passed none.
+            # A missing key means the driver passed none.
             # See the developer notes, Task flow.
             return default
         return cloudpickle.loads(value)
 
     def _resolve_method(self, name: str) -> Any:
-        """Look one method name up on this worker's actor."""
+        """Find one method, by name, on this worker's actor."""
         if self.actor_instance is None:
             raise RuntimeError(
                 f"Task names the method {name!r}, "
@@ -357,8 +355,8 @@ class PilotWorker:
 
         The worker catches every `Exception` a task raises,
         and logs it under a generated `error_id`.
-        Then the worker returns the exception to the caller
-        as a `RemoteExecutionError` on a task it marks Failed.
+        Then the worker returns the exception to the driver
+        as a `RemoteExecutionError` on a task it marks `Failed`.
         As a result, one bad task cannot end the worker.
         """
         self.logger.info("Starting worker: %s" % self.worker_id)
@@ -366,7 +364,8 @@ class PilotWorker:
         # Set after a task, so the rate limit does not skip the check that follows it.
         task_finished = False
         while True:
-            # Outside the `try`, so nothing here is mistaken for a task failure.
+            # Outside the `try`,
+            # so the `except` below cannot mistake anything here for a task failure.
             # See the developer notes, Restarting workers,
             # for why the first check must come before the first claim.
             if self._restart_requested(now=task_finished):
@@ -404,7 +403,7 @@ class PilotWorker:
                     self.logger.info("task_id=%s: Executing ...", task.task_id)
                     retval = function(*args, **kwargs)
 
-                    self.logger.info("task_id=%s: Serializng output ...", task.task_id)
+                    self.logger.info("task_id=%s: Serializing output ...", task.task_id)
                     output = cloudpickle.dumps(retval, protocol=pickle.HIGHEST_PROTOCOL)
 
                     self.client.task_done(task.task_id, self.worker_id, output)
@@ -416,7 +415,7 @@ class PilotWorker:
 
                     retval = RemoteExecutionError(error=str(e), error_id=eid)
                     output = cloudpickle.dumps(retval, protocol=pickle.HIGHEST_PROTOCOL)
-                    # Failed, not Finished,
+                    # `Failed`, not `Finished`,
                     # so every task that waits on this one fails too.
                     self.client.task_done(
                         task.task_id, self.worker_id, output, failed=True
@@ -480,7 +479,8 @@ def slurm_pilot_worker(
     hostname = socket.gethostname()
     pid = os.getpid()
 
-    # Logs to the inherited stderr, which Slurm writes to the `--output` file.
+    # The worker logs to the inherited stderr,
+    # which Slurm writes to the `--output` file.
     # If code here redirects `sys.stdout` or `sys.stderr`,
     # that file stays empty.
     logging.basicConfig(format=LOG_FORMAT, level=LOG_LEVEL)

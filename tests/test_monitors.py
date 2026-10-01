@@ -3,8 +3,8 @@
 # The samplers read this machine,
 # so the assertions are about shape and plausibility
 # rather than exact numbers.
-# The tests point the cgroup reader at files they write themselves,
-# which is the only way to assert on values a kernel decides.
+# The tests point the cgroup reader at files they write themselves.
+# That is the only way to assert on values that a kernel decides.
 # The GPU tests read the fake NVML in `conftest.py` instead.
 
 from __future__ import annotations
@@ -76,9 +76,9 @@ class TestSampleHost:
     def test_an_unmounted_filesystem_is_left_out(self, monkeypatch):
         """Absent is not the same as empty, so it gets no value at all."""
 
-        # Kept before patching:
-        # `monitors_mod.psutil` is the psutil module itself,
-        # so the patch otherwise replaces what `disk_usage` calls.
+        # Take the real function before the patch,
+        # because `monitors_mod.psutil` is the psutil module itself.
+        # Otherwise the patch replaces what `disk_usage` calls.
         real_disk_usage = psutil.disk_usage
 
         def disk_usage(path):
@@ -126,7 +126,7 @@ class TestCgroupSampler:
         assert values["cpu"] > 0.5, "a busy cgroup reports cores in use"
 
     def test_a_counter_that_restarts_reports_no_time(self, tmp_path):
-        """A recreated cgroup starts from zero. That is not negative CPU."""
+        """A recreated cgroup starts from zero. The drop is not negative CPU."""
         sampler = CgroupSampler(tmp_path)
         self.write_cgroup(tmp_path, memory=4096, cpu_usec=10_000_000)
         sampler.sample()
@@ -252,6 +252,8 @@ class TestMonitor:
         assert not monitor.is_alive()
 
 
+# A monitor reads once at start, then waits `interval` before the next reading.
+# `interval=60.0` keeps each test here to that first reading.
 class TestStartHelpers:
     def test_the_host_monitor_writes_the_host_series(
         self, ds_client, ds_service_address
@@ -477,6 +479,8 @@ class TestGpuMonitor:
         assert "cannot use NVML" in caplog.text
 
 
+# A monitor reads once at start, then waits `interval` before the next reading.
+# `interval=60.0` keeps each test here to that first reading.
 class TestStartGpuMonitor:
     def test_it_samples_the_gpus_nvml_lists(self, ds_client, fake_nvml):
         two_gpus(fake_nvml)

@@ -4,7 +4,9 @@
 
 In this tutorial we compute $\pi$ by numerical integration
 over a quarter of the unit circle, in parallel.
-On the way we meet the server, the executor and the workers.
+On the way we meet the `ds-service` server, the executor and the workers.
+We use `map_reduce`,
+the simplest way to spread one function over a pool.
 We run on the `bii` partition of the Rivanna cluster at UVA,
 under the `bii_nssac` account.
 
@@ -14,19 +16,22 @@ The complete program is in
 ## Before we start
 
 Run this program from a Rivanna login node.
+We need access to the `bii_nssac` account
+and to the `bii` partition on Rivanna.
+The program names both in `SBATCH_ARGS`.
 
 Follow
 [How to install slurm-workflows on Rivanna](../how-to-guides/install-on-rivanna.md)
 first.
 That guide gives us the two things this program needs:
 
-1. A conda environment named `slurm-workflows`,
-    with the package installed in it.
+1. A conda environment with the name `slurm-workflows`,
+    which holds the package.
 2. The `ds-service` binary on our `PATH`.
     `DsServiceServer` runs it from there.
 
 The example itself lives in this repository.
-We clone it:
+We clone the repository:
 
 ```sh
 git clone https://github.com/parantapa/slurm-hpc-workflows.git
@@ -39,21 +44,28 @@ $\pi$ is the integral of $4 / (1 + x^2)$ over $[0, 1]$.
 We approximate it with a midpoint Riemann sum
 over `num_steps` slices of the interval.
 
-The program splits the slices between the tasks by stride.
-Task `i` of `num_pi_tasks` sums slices `i`, `i + num_pi_tasks`,
-`i + 2 * num_pi_tasks`, and so on.
-No task needs anything another task computed.
-The partial sums they return add up to the whole.
+The program splits the slices into chunks by stride.
+Chunk `i` of `num_chunks` sums slices `i`, `i + num_chunks`,
+`i + 2 * num_chunks`, and so on.
+No chunk needs anything another chunk computed.
+The partial sums add up to the whole.
+
+That shape is a map and a fold.
+We map each chunk number to its partial sum,
+and we fold the partial sums together with `+`.
 
 ## The whole program
 
 ```python
+from operator import add
+
 from ds_service_client import DsServiceServer
 from slurm_workflows import SlurmPilotExecutor
 
 SETUP_SCRIPT = ""
 
 NUM_NODES = 2
+# A node of the `bii` partition has 40 cores.
 NTASKS_PER_NODE = 40
 
 SBATCH_ARGS = [
@@ -74,6 +86,7 @@ def do_step_pi(start: int, stop: int, step: int, stepsize: float) -> float:
 
 
 def main() -> None:
+    # `ib0` is the InfiniBand interface, which the compute nodes can reach.
     with DsServiceServer(interface="ib0") as ds_service:
         ds_service.wait_until_ready()
         address = ds_service.address
@@ -89,49 +102,33 @@ def main() -> None:
             num_steps = 1_000_000_000
             stepsize = 1.0 / num_steps
 
+            # The over-decomposition factor splits the work
+            # into more chunks than there are workers.
+            # That balances the load when some chunks take longer than others.
+            # Ten is a good rule of thumb.
             over_decomp_factor = 10
-            num_pi_tasks = NUM_NODES * NTASKS_PER_NODE * over_decomp_factor
+            num_chunks = NUM_NODES * NTASKS_PER_NODE * over_decomp_factor
 
-            tasks = []
-            for i in range(num_pi_tasks):
-                task = executor.submit(
-                    "bii",
-                    do_step_pi,
-                    start=i,
-                    stop=num_steps,
-                    step=num_pi_tasks,
-                    stepsize=stepsize,
-                )
-                executor.set_task_name(task, f"task-{i:04d}")
-                tasks.append(task)
+            # For item `i`,
+            # `do_step_pi` sums every `num_chunks`-th midpoint from `i` on.
+            # `add` folds the sums into one.
+            total = executor.map_reduce(
+                "bii",
+                do_step_pi,
+                add,
+                range(num_chunks),
+                0.0,
+                desc="compute-pi",
+                map_extra_args=(num_steps, num_chunks, stepsize),
+            )
 
-            executor.wait(tasks, desc="compute-pi", unit="task")
-
-    pi = sum(task.output for task in tasks) * stepsize
+    pi = total * stepsize
     print(f"pi = {pi}")
 
 
 if __name__ == "__main__":
     main()
 ```
-
-Notice `executor.define_job_group(name="bii", ...)`.
-It names the job group `bii`,
-and gives it the `sbatch` arguments and the setup script.
-
-Notice `executor.scale_jobs("bii", 1)`.
-It asks for one pilot job of the `bii` job group.
-
-Notice that `executor.submit("bii", do_step_pi, ...)` returns a task at once.
-The task runs `do_step_pi` with the keyword arguments we pass.
-
-Notice `executor.set_task_name(task, f"task-{i:04d}")`.
-It gives each task a name, from `task-0000` up.
-
-Notice that `executor.wait(tasks, ...)` blocks until every task is back.
-
-Notice that `task.output` holds the task output of each task after `wait`.
-Here that is the partial sum that `do_step_pi` returned.
 
 ## Run it
 
@@ -150,24 +147,24 @@ There we ask Slurm what we hold:
 squeue -u $USER
 ```
 
-One pilot job is there, named `compute-pi.job.bii.0`,
+The output looks something like this:
+
+```text
+  JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
+1846231       bii compute-     user  R       0:42      2 udc-an[28-29]
+```
+
+One pilot job is there, named `compute-pi.job.bii.0`
 after the executor and the job group.
-It moves from `PENDING` to `RUNNING`, and it holds two nodes.
+`squeue` shows only the first 8 characters of that name.
+The pilot job moves from `PENDING` to `RUNNING`, and it holds two nodes.
 That job is the whole allocation this run gets.
 
-Behind that one job, these steps happen, in order:
-
-* The `ds-service` server starts on the login node.
-* The executor submits one pilot job across `NUM_NODES` nodes.
-* `srun` starts a worker on every Slurm task in that job.
-* Each worker connects back to the server over InfiniBand.
-    It claims tasks, runs them, and posts their task outputs.
-* The driver blocks in `wait()` until every task is back.
-
-Notice that the program submits the 800 tasks before a single worker exists.
-The tasks wait on the queue until a pilot job starts and its workers claim them.
-We time nothing by hand.
-When the last task is back,
+The program enqueued the 800 items, one per chunk,
+before a single worker existed.
+They waited on the queue until the pilot job started
+and its workers claimed them.
+When the last task finishes,
 the program prints one line.
 It looks something like this:
 
@@ -178,14 +175,51 @@ pi = 3.14159265358979...
 We ran a billion-slice integration
 across 80 workers on two compute nodes.
 We wrote no `sbatch` script to do it.
-Every later program in this documentation has the shape of this one.
+
+[The pilot-job model](../explanation/pilot-job-model.md)
+follows every step that happens behind that one job.
+
+## What the program did
+
+Notice `executor.define_job_group(name="bii", ...)`.
+It names the job group `bii`,
+and gives it the `sbatch` arguments and the setup script.
+
+Notice `executor.scale_jobs("bii", 1)`.
+It asks for one pilot job of the `bii` job group.
+
+Notice the call to `executor.map_reduce`.
+Its first five arguments are the queue, the function to map,
+the function to fold with, the items, and where the fold starts.
+The queue is `"bii"`, the name of the job group,
+so the workers of that job group do the work.
+The items are the chunk numbers, `range(num_chunks)`.
+
+Notice `map_extra_args=(num_steps, num_chunks, stepsize)`.
+Each map task calls `do_step_pi(i, num_steps, num_chunks, stepsize)`
+for every chunk number `i` it claims.
+The extra arguments follow the item.
+
+Notice `add` and `0.0`.
+Each map task folds the partial sums of the chunks it claimed.
+The fold starts at `0.0`.
+One last task, the reduce task, then folds the partial results of the map tasks.
+
+Notice `desc="compute-pi"`.
+It labels the progress bar that `swtop` draws for this call.
+
+Notice that `map_reduce` returns the folded value itself.
+We multiply it by `stepsize` once, at the end.
 
 ## Next steps
 
-[Computing pi with a Sobol' QMC exploration](computing-pi-qmc.md)
-does the same calculation with `ExploreSpaceSobolQMC`.
-That class owns the submit-and-wait loop
-and keeps what every evaluation returned.
+[Computing pi with `submit` and `wait`](computing-pi-with-submit.md)
+does the same calculation one task at a time,
+with the advanced interface.
+That interface gives a handle per task, task names, priorities and parent tasks.
+
+[`map`](../reference/map.md)
+returns every value instead of one.
 
 [The pilot-job model](../explanation/pilot-job-model.md)
 says why the work has this shape.

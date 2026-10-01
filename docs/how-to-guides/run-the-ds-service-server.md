@@ -8,7 +8,7 @@ Each executor needs one of its own.
 Start it from the driver, in the `with` block that owns the run.
 The server then lives exactly as long as the run.
 
-## Start it from the driver
+## Start the server from the driver
 
 ```python
 from ds_service_client import DsServiceServer
@@ -32,18 +32,18 @@ the constructor raises `OSError`.
 
 ## Choose an interface the compute nodes can reach
 
-Name an `interface` that the compute nodes can reach.
-`DsServiceServer` binds to the IPv4 address of that interface,
-and `ds.address` is then the `host:port` the workers connect to.
+`DsServiceServer` binds to the IPv4 address of the `interface` you name.
+`ds.address` is then the `host:port` that the workers connect to.
 
-The example uses `ib0`,
-the InfiniBand interface of the node the driver runs on.
-That node is a login node,
-or the compute node of the driver's own Slurm job.
+The driver can run on a login node,
+or on the compute node of its own Slurm job.
+In both cases, name `ib0`, the InfiniBand interface of that node,
+as the example does.
 
-If you name an interface that the node does not have,
-or one with no IPv4 address,
+If the node does not have the interface you name,
 the constructor raises `ValueError`.
+If the interface has no IPv4 address,
+the constructor also raises `ValueError`.
 Run `ip -br addr` on that node.
 Then name an interface the compute nodes can route to.
 

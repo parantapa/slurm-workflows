@@ -1,18 +1,16 @@
-# Ship only the slurm_workflows package:
-# its Python modules and the Jinja templates they render,
-# plus the project's README and license.
+# Without these rules, setuptools_scm adds every git-tracked file to the sdist.
+# So start from nothing,
+# and add back exactly what belongs there.
 #
-# setuptools_scm otherwise adds every git-tracked file to the sdist
-# (docs, tests, extra/, ...),
-# so start from nothing and add back exactly what belongs in the distribution.
-#
-# The templates are package data loaded at runtime via importlib.resources,
-# so *.jinja must stay listed here,
-# or an installed copy cannot render them.
+# The templates are package data that importlib.resources loads at runtime.
+# So *.jinja must stay listed here,
+# or an installed copy cannot render the templates.
 #
 # List pyproject.toml explicitly,
 # or a rebuild from the sdist fails.
 # setuptools itself adds setup.cfg and PKG-INFO.
+#
+# See "Where things live" in docs/developer-notes.md.
 global-exclude *
 recursive-include src/slurm_workflows *.py *.jinja
 include README.md

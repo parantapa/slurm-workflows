@@ -1,9 +1,9 @@
-"""Compute pi on the `bii` partition of Rivanna.
+"""Compute pi on the `bii` partition of Rivanna, one task at a time.
 
-`docs/tutorials/computing-pi.md` explains this program step by step.
+This program does the same computation as `example_compute_pi.py`,
+with `submit` and `wait` instead of `map_reduce`.
+`docs/tutorials/computing-pi-with-submit.md` explains this program step by step.
 """
-
-from operator import add
 
 from ds_service_client import DsServiceServer
 from slurm_workflows import SlurmPilotExecutor
@@ -37,7 +37,7 @@ def main() -> None:
         ds_service.wait_until_ready()
         address = ds_service.address
 
-        with SlurmPilotExecutor("compute-pi", address) as executor:
+        with SlurmPilotExecutor("compute-pi-submit", address) as executor:
             executor.define_job_group(
                 name="bii",
                 sbatch_args=SBATCH_ARGS,
@@ -49,26 +49,28 @@ def main() -> None:
             stepsize = 1.0 / num_steps
 
             # The over-decomposition factor splits the work
-            # into more chunks than there are workers.
-            # That balances the load when some chunks take longer than others.
+            # into more tasks than there are workers.
+            # That balances the load when some tasks take longer than others.
             # Ten is a good rule of thumb.
             over_decomp_factor = 10
-            num_chunks = NUM_NODES * NTASKS_PER_NODE * over_decomp_factor
+            num_pi_tasks = NUM_NODES * NTASKS_PER_NODE * over_decomp_factor
 
-            # For item `i`,
-            # `do_step_pi` sums every `num_chunks`-th midpoint from `i` on.
-            # `add` folds the sums into one.
-            total = executor.map_reduce(
-                "bii",
-                do_step_pi,
-                add,
-                range(num_chunks),
-                0.0,
-                desc="compute-pi",
-                map_extra_args=(num_steps, num_chunks, stepsize),
-            )
+            tasks = []
+            for i in range(num_pi_tasks):
+                task = executor.submit(
+                    "bii",
+                    do_step_pi,
+                    start=i,
+                    stop=num_steps,
+                    step=num_pi_tasks,
+                    stepsize=stepsize,
+                )
+                executor.set_task_name(task, f"task-{i:04d}")
+                tasks.append(task)
 
-    pi = total * stepsize
+            executor.wait(tasks, desc="compute-pi", unit="task")
+
+    pi = sum(task.output for task in tasks) * stepsize
     print(f"pi = {pi}")
 
 

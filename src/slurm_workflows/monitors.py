@@ -130,7 +130,7 @@ class GpuReading:
 def nvml_session() -> Iterator[None]:
     """Initialize NVML for the length of the block, and shut it down after.
 
-    Raises `pynvml.NVMLError` where NVML cannot start,
+    The call raises `pynvml.NVMLError` where NVML cannot start,
     as on a node with no NVIDIA driver.
     NVML counts its sessions, so they can nest and overlap across threads.
     """
@@ -161,7 +161,7 @@ def query_gpus() -> list[GpuReading]:
     NVML ignores `CUDA_VISIBLE_DEVICES`.
     Where Slurm constrains devices, it lists the GPUs of the job step on this node.
     Elsewhere it lists every GPU on the node.
-    Raises `pynvml.NVMLError` if NVML cannot read a GPU.
+    The call raises `pynvml.NVMLError` if NVML cannot read a GPU.
     """
     readings: list[GpuReading] = []
     for index in range(pynvml.nvmlDeviceGetCount()):
@@ -319,7 +319,7 @@ class CgroupSampler:
 class BaseMonitor(threading.Thread):
     """Calls `append_sample` on a timer, until stopped.
 
-    Runs as a daemon thread.
+    The monitor runs as a daemon thread.
     `interval` is the time between readings, in seconds.
     The thread logs a failed reading, and continues.
     A subclass defines `append_sample`.
@@ -339,7 +339,7 @@ class BaseMonitor(threading.Thread):
         self.interval = interval
         # The worker's logger, under its retired name,
         # so monitor errors land in the worker's log.
-        # See docs/terminology.md, Names that changed.
+        # See docs/terminology.md, Identifiers that keep a retired word.
         self.logger = logger or logging.getLogger("worker_process")
         self._stopping = threading.Event()
 
@@ -362,9 +362,9 @@ class BaseMonitor(threading.Thread):
     def stop(self, timeout: float = 10.0) -> None:
         """Ask the thread to finish its wait and end, then wait for it to end.
 
-        Waits at most `timeout` seconds,
+        The call waits at most `timeout` seconds,
         and returns then even if the thread still runs.
-        Idempotent, and safe on a thread that never started.
+        It is idempotent, and safe on a thread that never started.
         """
         self._stopping.set()
         if self.is_alive():
@@ -394,7 +394,7 @@ class Monitor(BaseMonitor):
         """Take one reading and append it to this subject's time series."""
         values = self.sampler()
         # One timestamp for the whole reading,
-        # so the series of one subject line up point for point.
+        # so the time series of one subject line up point for point.
         stamp = datetime.now(timezone.utc).isoformat()
 
         for name, value in values.items():
@@ -517,7 +517,7 @@ def start_gpu_monitor(
 ) -> GpuMonitor | None:
     """Start a thread to sample the GPUs this job can see on this node, and return it.
 
-    Returns None, and starts nothing, where NVML finds no GPU,
+    The call returns None, and starts nothing, where NVML finds no GPU,
     or cannot start, as on a node with no NVIDIA driver.
     `hostname` must name this node.
     `interval` is the time between readings, in seconds.

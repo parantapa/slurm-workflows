@@ -2,7 +2,7 @@
 
 [<- back to the main README](../../README.md)
 
-A run leaves a trail on the `ds-service` server and in its work dir.
+A run publishes state on the `ds-service` server, and writes files in its work dir.
 The executor writes some of it, each worker writes some of it,
 and the monitors write the rest.
 [`swtop`](swtop.md) is what reads it back.
@@ -20,8 +20,8 @@ under `pilot_job_info:<job-name>`, as a JSON object:
 | --- | --- |
 | `name` | The pilot job's name, which is also its Slurm job name |
 | `group` | The job group whose queue it will serve |
-| `slurm_job_id` | The job `sbatch` returned |
-| `submit_time` | When it was submitted, an ISO 8601 timestamp with an offset |
+| `slurm_job_id` | The job id that `sbatch` returned |
+| `submit_time` | When the executor submitted it, an ISO 8601 timestamp with an offset |
 
 **Each worker publishes where it runs when it starts**,
 under `worker_info:<worker-id>`,
@@ -33,7 +33,7 @@ so anything can read it:
 | --- | --- |
 | `group` | The job group whose queue it serves |
 | `name` | The name of the pilot job it runs in, which is that job's Slurm job name |
-| `slurm_job_id` | The job it is running in |
+| `slurm_job_id` | The id of the Slurm job it runs in |
 | `hostname` | The compute node it landed on |
 | `pid` | Its process id on that node |
 | `restart_generation` | The value of the `restart_generation:<group>` counter when it started |
@@ -44,22 +44,23 @@ The worker id is what the worker claims tasks under.
 The worker id is the path from a task to the worker and the node that ran it.
 Nothing removes the key when a worker exits.
 
-**Each pilot job and each worker publishes when it starts and when it exits**,
+**Each pilot job publishes when it starts and when it exits,
+and each worker publishes when it exits**,
 in keys of their own.
 Each value is a JSON object with one field,
 an ISO 8601 timestamp with an offset:
 
 | Key | Field | Written |
 | --- | --- | --- |
-| `pilot_job_start:<job-name>` | `start_time` | When Slurm starts the pilot job's batch script |
-| `pilot_job_exit:<job-name>` | `exit_time` | When that batch script exits |
+| `pilot_job_start:<job-name>` | `start_time` | After the batch script starts, once the setup script ran |
+| `pilot_job_exit:<job-name>` | `exit_time` | When that batch script exits, once the setup script ran again |
 | `worker_exit:<worker-id>` | `exit_time` | When the worker exits |
 
 A worker's start time is the `start_time` field of `worker_info:<worker-id>`.
 
-The batch script publishes the pilot job's two keys
-by running its worker script with `--pilot-job-event start`
-and `--pilot-job-event exit`.
+The batch script runs its worker script with `--pilot-job-event start`
+and `--pilot-job-event exit`
+to publish the pilot job's two keys.
 That run sources the job group's setup script as a worker does,
 and then publishes, and starts no worker.
 
@@ -72,13 +73,13 @@ and so does a worker that restarts.
 A process that dies of SIGKILL, or with its node, publishes nothing.
 Nothing removes these keys either.
 
-### `mapreduce` and `map` tasks
+### `map_reduce` and `map` tasks
 
-**A `mapreduce` or `map` call publishes one task per item**,
-on a queue of its own, under `<executor-name>.mapreduce.`
+**A `map_reduce` or `map` call publishes one item task per item**,
+on a queue of its own, under `<executor-name>.map_reduce.`
 or `<executor-name>.map.`.
-Those tasks outlive the call.
-[`mapreduce`](mapreduce.md) and [`map`](map.md) cover the ids and what they hold.
+Those item tasks outlive the call.
+[`map_reduce`](map-reduce.md) and [`map`](map.md) cover the ids and what they hold.
 
 ### Task names and actor arguments
 
@@ -86,7 +87,7 @@ Those tasks outlive the call.
 `task_name:<task-id>` holds the UTF-8 name that `set_task_name` gives a task.
 `actor_class_args:<group>` and `actor_class_kwargs:<group>` hold the cloudpickled constructor arguments
 of a job group's actor.
-[`Task`](executor.md#task)
+[`Task`](submit-and-wait.md#task)
 and [`define_job_group` options](executor.md#define_job_group-options)
 describe them.
 
@@ -124,13 +125,14 @@ Every 5 seconds they append to these `ds-service` time series:
 On a node where the job can see a GPU,
 the same worker also samples each GPU it can see.
 It appends to these time series,
-where `<gpu>` is the index NVML gives the GPU, as `nvidia-smi` shows it:
+where `<gpu>` is the index that NVML, the NVIDIA driver's library, gives the GPU,
+as `nvidia-smi` shows it:
 
 | Series | Value |
 | --- | --- |
 | `slurm_job_gpu_memory_used:<job-id>:<hostname>:<gpu>` | GPU memory in use, in bytes |
 | `slurm_job_gpu_memory_free:<job-id>:<hostname>:<gpu>` | GPU memory available, in bytes |
-| `slurm_job_gpu_utilization:<job-id>:<hostname>:<gpu>` | Percent of the driver's last sample period, 1/6 s to 1 s, in which a kernel ran on the GPU |
+| `slurm_job_gpu_utilization:<job-id>:<hostname>:<gpu>` | Percent of the NVIDIA driver's last sample period, 1/6 s to 1 s, in which a kernel ran on the GPU |
 
 The type of each GPU is text, which a time series cannot hold.
 So it goes in the map, under `slurm_job_gpu_info:<job-id>:<hostname>:<gpu>`,
@@ -145,10 +147,10 @@ as a JSON object:
 The worker writes this key when it first sees the GPU,
 and again only if a field changes.
 A measurement the GPU does not support,
-such as the utilization of a MIG instance,
+such as the utilization of a MIG (Multi-Instance GPU) instance,
 has no points in its series.
 
-The worker reads the GPUs through NVML, the NVIDIA driver's library,
+The worker reads the GPUs through NVML,
 with the `nvidia-ml-py` package.
 A node with no NVIDIA driver, or where NVML lists no GPU,
 publishes none of these keys.
@@ -158,7 +160,7 @@ it lists the GPUs of the job's step on that node.
 On a cluster that does not, it lists every GPU on the node,
 including those of other jobs.
 
-One worker per job does this on each node the job runs on.
+One worker per job does the sampling on each node the job runs on.
 It samples the node, the part of the job on that node,
 and the GPUs that part can see.
 The workers elect it with the `host_monitor:<hostname>:<job-id>:<generation>` counter,
@@ -172,15 +174,16 @@ it samples the node as well, into the same series.
 [`swtop`](swtop.md) displays the host and job series.
 It does not display the GPU series yet.
 
-Why a run publishes in these two halves rather than one
-is in [The trail a run leaves](../explanation/the-trail-a-run-leaves.md).
+Why a run publishes a pilot job and its workers
+under two keys, `pilot_job_info:` and `worker_info:`, rather than one
+is in [The monitoring state a run publishes](../explanation/monitoring-state-a-run-publishes.md).
 That page also says why nothing updates
 `pilot_job_info:` and `worker_info:` keys after the first write.
 
-## Watching a wait
+### Wait progress
 
-`as_completed` and `wait` both require `desc`,
-and `unit` names what the call counts.
+`as_completed` and `wait` both require `desc`.
+Their `unit` names what the call counts.
 Neither call prints a progress bar of its own.
 They publish what they work through to the server,
 where [`swtop`](swtop.md) draws it.
@@ -192,7 +195,7 @@ Each call writes the key `progress_display`, a JSON object with these fields:
 | `progress_id` | A fresh UUID4, one per call |
 | `desc` | The `desc` given to the call |
 | `unit` | The `unit` given to the call |
-| `total` | How many tasks were handed in |
+| `total` | How many tasks the call received |
 
 Each call also appends the number of tasks that came back so far
 to the time series `progress:<progress_id>`.
@@ -200,7 +203,7 @@ The series opens at 0 and closes at the number that returned.
 The call appends the count at most once a second while tasks arrive.
 
 The next call overwrites the key.
-The server therefore holds the display for the most recent wait,
+The server therefore holds the progress display for the most recent wait,
 and the series holds the history of each.
 
 ## Logs
@@ -211,7 +214,7 @@ and the attribute `executor.work_dir` holds it:
 
 | File | Contents |
 | --- | --- |
-| `executor.log` | Pilot job submission, and cancellation by `scale_jobs`, from the executor's side. A line for each `mapreduce` or `map` call that enqueues items. A line for each `restart_jobs` call, and one for the end of its wait. Each liveness check that could not run `squeue`. |
+| `executor.log` | Pilot job submission, and cancellation by `scale_jobs`, from the executor's side. A line for each `map_reduce` or `map` call that enqueues items. A line for each `restart_jobs` call, and one for the end of its wait. Each liveness check that could not run `squeue`. A failure to list or cancel pilot jobs when `stop()` or `close()` runs. A failed `squeue` or `scancel` command there prints to stdout instead. |
 | `<job-name>.sh`, `<job-name>.sbatch` | The generated scripts |
 | `<job-name>-<job-id>-<rank>.out` | One per Slurm task, shared by each worker a restart starts in it: setup-script output, task-by-task progress, full tracebacks |
 | `<job-name>-<job-id>.out` | The pilot job's own output, and the worker's log too when the job holds a single Slurm task or runs a batch worker |
@@ -226,7 +229,7 @@ The worker does not redirect its own output.
 Which of the two holds a worker's log depends on the job group's definition:
 
 - **`is_batch_worker=False`** (the default) runs the worker under `srun`,
-    which fans out over every Slurm task in the allocation.
+    which starts it once for every Slurm task in the allocation.
     Each Slurm task gets `--output <work-dir>/<job-name>-%j-%t.out`,
     so `<rank>` is the task rank.
     That file is the worker's log.
@@ -238,13 +241,13 @@ Which of the two holds a worker's log depends on the job group's definition:
     `--ntasks=1`, or a single node and no other Slurm task count.
     It keeps `srun` but drops the `--output`
     and writes to `<job-name>-<job-id>.out` like a batch worker.
-    The count is per *job*, not per node:
+    The count is per job, not per node:
     `--nodes=4 --ntasks-per-node=1` is four Slurm tasks
     and still gets four per-Slurm-task files.
 
-    `<job-name>-<job-id>.out` records which way a job went.
+    `<job-name>-<job-id>.out` records which of the two cases a job took.
     It records the Slurm task count the job decided on (`Num Slurm tasks: 4`),
-    says so when it redirects,
+    says when it redirects the output,
     and traces the `srun` command it ran.
 - **`is_batch_worker=True`** runs one worker directly on the batch host,
     with no `srun` and so no per-Slurm-task file.
@@ -257,4 +260,4 @@ appears verbatim next to the traceback in the worker's log.
 
 - [`SlurmPilotExecutor`](executor.md)
 - [`swtop`](swtop.md)
-- [The trail a run leaves](../explanation/the-trail-a-run-leaves.md)
+- [The monitoring state a run publishes](../explanation/monitoring-state-a-run-publishes.md)

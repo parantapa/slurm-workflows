@@ -18,23 +18,17 @@ pytest tests/test_templates.py::TestParseFile::test_a_body_is_stripped
 ```
 
 The suite needs no Slurm cluster.
-The suite takes about a minute end to end,
-and the botorch tests take about half of it.
-Most tests start a `ds-service` process of their own,
+It runs about 540 tests, and takes about 35 seconds end to end.
+Most tests start a `ds-service` server of their own,
 and a test against the real server pays for that start.
 
-The `[test]` extra installs botorch, and so torch.
-That download is large.
-Without the extra, `test_optimize_space_botorch.py` skips,
-and the rest of the suite still runs.
-`[dev]` adds `black` and `pyright`.
-The gate that runs them is under Conventions
-in the [developer notes](developer-notes.md#conventions).
+The checks that format, type-check and test a change
+are under [Conventions](developer-notes.md#conventions) in the developer notes.
 
 ## What is real and what is mocked
 
 **Slurm is mocked.**
-`FakeSlurm` (in `tests/conftest.py`) replaces the `subprocess` module
+`FakeSlurm` (in `slurm_workflows.testing`) replaces the `subprocess` module
 inside `slurm_utils`, and intercepts `sbatch`, `squeue` and `scancel`.
 Everything above that boundary is the real code path:
 script rendering, job-id parsing and environment scrubbing.
@@ -49,7 +43,8 @@ the GPU monitor calls, in every test.
 It lists no GPU until a test adds a `FakeGpu` to `fake_nvml.gpus`.
 So a machine with GPUs runs the suite as one without.
 The patch reaches only the test's own process.
-A worker process that a test starts reads the real NVML.
+A worker that a test starts in another process
+reads the real NVML.
 
 **`ds-service` is real.**
 Each test gets its own server process on a random port.
@@ -65,7 +60,22 @@ so a fresh process per test also means no state leaks between tests.
 
 If neither one finds the binary, the tests that need a server skip.
 The tests that need no server still run,
-such as the template, `slurm_utils`, search space and `utils` tests.
+such as the template and `slurm_utils` tests.
+
+## The plugin other packages load
+
+The fixtures and helpers live in the package,
+in the pytest plugin `src/slurm_workflows/testing.py`.
+This suite loads it from `tests/conftest.py`,
+and a package that builds on `slurm-workflows` loads it the same way:
+
+```python
+pytest_plugins = ["slurm_workflows.testing"]
+```
+
+The names it provides are the ones in `testing.__all__`.
+The [developer notes](developer-notes.md#the-test-plugin-testingpy)
+say what belongs in the plugin.
 
 ## Layout
 
@@ -76,98 +86,50 @@ Paths are relative to [`tests/`](../tests).
 | `test_templates.py` | The multi-template-per-file loader and every template |
 | `test_slurm_utils.py` | `sbatch`/`squeue`/`scancel` wrappers, `get_clean_environ` |
 | `test_executor.py` | `SlurmPilotExecutor`: job groups, scaling, submit/poll, lifecycle |
-| `test_mapreduce.py` | `SlurmPilotExecutor.mapreduce`: item and map tasks, the fold, and the item queue |
+| `test_map_reduce.py` | `SlurmPilotExecutor.map_reduce`: item and map tasks, the fold, the reduce task, and the item queue |
 | `test_map.py` | `SlurmPilotExecutor.map`: item and map tasks, the order of the values, and the item queue |
 | `test_worker.py` | `PilotWorker` and the `slurm-pilot-worker` CLI |
 | `test_monitors.py` | The host, cgroup and GPU samplers and the monitor threads |
 | `test_swtop.py` | The `swtop` collector: what it collects, how it renders as text, and the CLI |
 | `test_swtop_tui.py` | The Textual app and its widgets: table updates, what each block shows, the layout and the keys, embedding in another app, and polling |
-| `test_search_space.py` | The range types and the unit cube mapping (no botorch needed) |
-| `test_explore_space.py` | `ExploreSpaceSobolQMC`: the design it draws and what it records (no botorch needed) |
-| `test_utils.py` | The shared helpers |
-| `test_optimize_space_botorch.py` | `OptimizeSpaceBotorch`: the observations it starts from, rounds, acquisition, search behavior, resuming (skips without botorch) |
-| `conftest.py` | Fixtures: real `ds-service`, fake Slurm, fake NVML, executor, hang guards, in-process workers |
-| `worker_harness.py` | Runs a real worker's main loop for a bounded number of tasks, or of queue polls, or until it returns for a restart |
+| `test_package.py` | What the package root exports, and the `ImportError` for each name that moved to `slurm-workflows-optimize` |
+| `conftest.py` | Loads the plugin, and holds the fixtures private to this suite: fake NVML, hang guards, `map_task_env`, and in-process workers in a thread |
+| `../src/slurm_workflows/testing.py` | The plugin: real `ds-service`, fake Slurm, executor, and the helpers that run a real worker's main loop for a bounded number of tasks, or of queue polls, or until it returns for a restart |
 | `support_actor.py` | Actor classes. They must stay importable by name for the actor tests |
-| `support_map.py` | Helpers the `mapreduce` and `map` tests share |
+| `support_map.py` | Helpers the `map_reduce` and `map` tests share |
 
 ## Notes for future changes
 
 - **Worker tests run a real worker.**
-  `PilotWorker.main()` loops until it sees a restart request,
-  and swallows every `Exception`, so a bad task cannot kill a worker.
+  `PilotWorker.main()` loops until it sees a restart request.
+  It swallows every `Exception`,
+  so a bad task cannot kill a worker.
   `run_worker()` stops it with a `BaseException` from `task_done`,
   after the expected number of tasks.
   For this reason, `StopWorker` is not an `Exception`.
-  `poll_worker()` counts `task_get` calls instead of completions,
-  which is the only way to bound a worker with nothing to run.
+  `poll_worker()` counts `task_get` calls instead of completions.
+  No other count can bound a worker with nothing to run.
   An empty queue completes no tasks,
-  so `run_worker` never reaches its limit.
+  so `run_worker()` never reaches its limit.
 - **The tests drive the Textual app headlessly.**
   `test_swtop_tui.py` runs each scenario through `App.run_test()`
   inside `asyncio.run`, so the suite needs no async plugin.
   A Textual worker runs each poll,
   so a test that waits for a poll
   waits on `app.workers.wait_for_complete()`, not on a sleep.
-  The collector's client belongs to the loop that made it.
+  The collector's client belongs to the event loop that made it.
   So a test against the real server builds the client
   inside the scenario (`open_collector`).
-  `test_swtop.py` keeps one loop per test,
+  `test_swtop.py` keeps one event loop per test,
   so it can poll a collector twice.
 - **A wall-clock alarm bounds every test.**
   The executor's polling loop and the worker's main loop
   both run until a condition holds.
   So a regression turns a failing test into a hanging one.
-  An autouse 60s alarm limits every test,
-  and the polling tests use a tighter explicit `time_limit` fixture.
-- **The botorch tests mostly use a stand-in executor.**
-  `LocalExecutor` runs the objective inline.
-  The comment on `as_executor` names the three calls
-  the optimizer makes on it.
-  A GP fit already dominates each test,
-  so a queue round trip adds nothing.
-  `TestRealExecutor` keeps the stand-in honest,
-  and runs a whole search
-  through the real executor, the real queue and a real worker.
+  An autouse alarm limits every test to 60 seconds.
+  The polling tests use a tighter explicit `time_limit` fixture.
 - **A test whose driver blocks runs its real worker in a thread.**
-  `mapreduce`, `map`, the exploration and the optimizer
-  all block in a wait the moment they submit.
+  `map_reduce` and `map` block in a wait the moment they submit their tasks.
   So nothing on the test's own thread can run the worker.
-- **Four botorch tests assert search behavior, not bookkeeping.**
-  They catch a flipped sign on the objective:
-  botorch maximizes, and the optimizer minimizes.
-  These tests are stochastic,
-  because torch's global RNG stays unseeded.
-  Their margins come from measured spreads:
-
-    - The monotone case has a median search point of 0.00
-      against a 0.5 threshold,
-      and a flipped sign puts that point at 0.97 or above.
-    - `test_search_beats_random_search` won 12 runs out of 12,
-      with a 4.6x margin.
-
-  Assert on that median rather than the max,
-  because `qLogNoisyExpectedImprovement` probes away from the incumbent
-  by design.
-  Single points reach 1.0 on a correct run.
-  An assertion on `best_point()` does not work either.
-  The exploration alone lands near the minimum,
-  so `best_point()` passes even with the sign flipped.
-  All four use unimodal objectives on purpose:
-  an earlier Himmelblau version of the random-search comparison
-  lost 1 run in 10.
 - **The tests keep job groups apart by queue name.**
   See "Task flow" in the developer notes.
-- **Do not wait on an RPC to detect server readiness.**
-  A failed first RPC puts the gRPC channel into a ~1s reconnect backoff.
-  `DsServiceServer.wait_until_ready()` polls the TCP socket instead.
-  For this reason, `conftest` calls it rather than a probe of its own.
-  An RPC probe makes the suite ~100x slower.
-- **The server lifecycle belongs to `ds-service-client`, not to `conftest`.**
-  `DsServiceServer` finds the binary, picks a free port,
-  waits for the socket and terminates the process.
-  `conftest` only chooses the interface to bind,
-  and translates a missing binary into a skip.
-- **The test server binds `lo`.**
-  `DsServiceServer` takes an interface name rather than an address.
-  Loopback keeps a test's server unreachable from outside the machine.

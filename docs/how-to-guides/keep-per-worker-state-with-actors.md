@@ -6,8 +6,8 @@ Some tasks load something expensive before they do any work:
 a model, a database connection or a large table.
 A load that runs once per task wastes most of the run.
 Register an **actor class** instead.
-Each worker creates it once at startup.
-You submit **method names** (as strings) instead of functions.
+Each worker creates one actor from the class, once, at startup.
+You pass method names (as strings) instead of functions.
 
 ## Write the actor class
 
@@ -27,14 +27,13 @@ class Model:
         self.model.release()
 ```
 
-If the actor has a `close()` method,
-the worker calls it when Slurm ends the pilot job
+The worker calls an optional `close()` when Slurm ends the pilot job,
 and when `restart_jobs` restarts the worker.
-But a SIGKILL or a node failure can cut `close()` short or skip it.
-Keep `close()` short.
-Do not rely on it for anything the next run needs.
+But a SIGKILL or a node failure can cut `close()` short, or skip it.
+So keep `close()` short.
+Do not rely on `close()` for anything the next run needs.
 For when `close()` runs, see
-[`define_job_group` options](../reference/executor.md#define_job_group-options).
+[The `slurm-pilot-worker` entry point](../reference/executor.md#the-slurm-pilot-worker-entry-point).
 
 The class must be importable on the compute node.
 By default, each worker adds the driver's current working directory
@@ -54,7 +53,24 @@ executor.define_job_group(
 executor.scale_jobs("gpu", 2)
 ```
 
-## Submit method names instead of functions
+## Map with a method name instead of a function
+
+Give `map` the method name as its `map_fn`:
+
+```python
+predictions = executor.map("gpu", "predict", dataset, desc="predict")
+```
+
+The `map` call then runs against the actor, not against a shipped function.
+`map_reduce` takes a method name for its `map_fn` too,
+and its `reduce_fn` stays a callable.
+For the rest, see
+[`map`](../reference/map.md#mapping-with-an-actors-method)
+and [`map_reduce`](../reference/map-reduce.md#mapping-with-an-actors-method).
+
+## If you submit tasks one at a time
+
+Pass the method name to `submit` in place of a function:
 
 ```python
 tasks = [executor.submit("gpu", "predict", item) for item in dataset]
@@ -65,14 +81,6 @@ If you also have work that needs no actor,
 submit it to this same job group.
 The worker reads a string as a method name, and a callable as itself.
 So a job group with an actor serves ordinary tasks as well.
-
-## If you want `mapreduce` or `map` to map with the actor
-
-Give `mapreduce` or `map` a method name for its `map_fn`.
-The map then runs against the actor, not against a shipped function.
-For `mapreduce`, `reduce_fn` stays a callable, because that fold also runs on the driver.
-For the rest, see
-[How to fold results across workers](fold-results-across-workers.md).
 
 ## If the class takes constructor arguments
 
@@ -92,23 +100,21 @@ executor.define_job_group(
 )
 ```
 
-They travel through the server, so they must be picklable.
+The constructor arguments travel through the server, so they must be picklable.
 Anything they refer to must be importable on the compute node,
 exactly as for the actor class itself.
 
 ## If you change the arguments mid-run
 
 Each worker creates its actor once, at startup.
-You can redefine a job group with different actor arguments,
-but only the workers that start after that call read the new values.
+So only the workers that start after you redefine the job group
+read the new arguments.
 To rebuild the actors in the running pilot jobs,
-call [`restart_jobs`](../reference/executor.md#restart_jobs).
-See [How to update worker code without resubmitting](update-worker-code-without-resubmitting.md).
-A redefinition with different `sbatch_args` raises an `AssertionError` instead.
+call [`restart_jobs`](../reference/executor.md#restart_jobs),
+as [How to update worker code without resubmitting](update-worker-code-without-resubmitting.md) shows.
 
 ## Related
 
 - [`define_job_group` options](../reference/executor.md#define_job_group-options)
-- [How to fold results across workers](fold-results-across-workers.md)
 - [How to troubleshoot a failing run](troubleshoot-a-failing-run.md),
     for a `ModuleNotFoundError` from an actor's constructor

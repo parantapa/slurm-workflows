@@ -18,6 +18,7 @@ from typing import Any, Callable, Generator, NoReturn, cast
 import pytest
 import click
 from ds_service_client import DsServiceClient, TaskState
+from ds_service_client.client import TaskGetResponse
 
 import support_actor
 from slurm_workflows import slurm_pilot_worker as worker_mod
@@ -25,7 +26,12 @@ from slurm_workflows.slurm_pilot_executor import RaiseOnError
 from slurm_workflows.slurm_pilot_worker import current_actor, slurm_pilot_worker
 from slurm_workflows.utils import RemoteExecutionError
 from conftest import FakeGpu
-from worker_harness import make_worker, poll_worker, run_until_restart, run_worker
+from slurm_workflows.testing import (
+    make_worker,
+    poll_worker,
+    run_until_restart,
+    run_worker,
+)
 from test_monitors import wait_for
 
 
@@ -45,7 +51,7 @@ def boom() -> NoReturn:
 
 
 def restart_own_group(value: int) -> int:
-    """Ask the group of the worker running this task to restart, then return."""
+    """Ask the group of the worker that runs this task to restart, then return."""
     # The worker put the server address and its group in the environment.
     with DsServiceClient() as client:
         client.counter_get_next_value(
@@ -209,9 +215,9 @@ class TestRemoteErrors:
     def test_unserializable_result_is_reported_as_an_error(
         self, executor, ds_service_address, tmp_path
     ):
-        # A generator cannot be pickled, so the result fails to serialize.
-        # Serialization happens inside the try block,
-        # so the handler catches it too.
+        # Nothing can pickle a generator, so the result fails to serialize.
+        # The worker serializes the result inside the try block,
+        # so the handler catches the error too.
         task = executor.submit("cpu", lambda: (_ for _ in range(3)))
 
         worker = make_worker(ds_service_address, tmp_path)
@@ -536,7 +542,9 @@ class TestWorkerIdentity:
     def test_identity_is_published_before_the_actor_is_built(
         self, ds_service_address, ds_client, tmp_path
     ):
-        """A worker that dies while it builds its actor already published where it was."""
+        """A worker that dies while it builds its actor
+        already published where it was.
+        """
         with pytest.raises(AttributeError):
             make_worker(
                 ds_service_address,
@@ -675,7 +683,7 @@ class TestMonitors:
     def test_a_first_reading_is_published_at_startup(
         self, ds_service_address, ds_client, tmp_path
     ):
-        """The tables in swtop must not be empty until the first interval."""
+        """The tables in `swtop` must have data before the first interval ends."""
         worker = make_worker(ds_service_address, tmp_path)
 
         assert wait_for(
@@ -717,7 +725,7 @@ class TestMonitors:
     def test_a_failed_actor_leaves_none_of_them_running(
         self, ds_service_address, tmp_path
     ):
-        """The worker never calls close() on a constructor that raised."""
+        """The worker never calls `close()` on a constructor that raised."""
         before = {t for t in threading.enumerate()}
 
         with pytest.raises(AttributeError):
@@ -750,7 +758,7 @@ class _RestartingClient:
         self._at_poll = at_poll
         self.polls = 0
 
-    def task_get(self, worker_id: str, queue: str | list[str]):
+    def task_get(self, worker_id: str, queue: str | list[str]) -> TaskGetResponse:
         self.polls += 1
         if self.polls == self._at_poll:
             # The request comes before this call reaches the server.
@@ -781,7 +789,7 @@ class _FailingCounterClient:
         self.events.append("read")
         return self._inner.counter_get_current_value(key)
 
-    def task_get(self, worker_id: str, queue: str | list[str]):
+    def task_get(self, worker_id: str, queue: str | list[str]) -> TaskGetResponse:
         self.events.append("fetch")
         return self._inner.task_get(worker_id, queue)
 
@@ -974,8 +982,6 @@ class TestCli:
         # The command prepends to `sys.path` and installs a SIGTERM handler,
         # and undoes neither, because in production the process is the worker.
         # Nothing else restores those two.
-        # The autouse fixture in `conftest.py` already restores the environment,
-        # so the restore here is only a second safeguard.
         env = dict(os.environ)
         path = list(sys.path)
         sigterm = signal.getsignal(signal.SIGTERM)
@@ -986,9 +992,9 @@ class TestCli:
         signal.signal(signal.SIGTERM, sigterm)
 
     @pytest.fixture
-    def captured(self, monkeypatch):
+    def captured(self, monkeypatch) -> dict[str, Any]:
         """Replace the worker so `main()` returns at once, as it does for a restart."""
-        seen = {}
+        seen: dict[str, Any] = {}
 
         class FakeWorker:
             def __init__(self, **kwargs: object) -> None:

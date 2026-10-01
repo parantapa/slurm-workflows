@@ -27,7 +27,8 @@ def get_clean_environ() -> Mapping[str, str]:
     A job submitted from inside an allocation
     takes none of that allocation's settings.
 
-    The result is built once per process and shared between callers,
+    `@cache` keeps the first result for the life of the process,
+    and every caller shares it,
     so a later change to `os.environ` does not show in it.
     """
     # `sbatch` reads `SLURM_*` variables as defaults.
@@ -149,7 +150,7 @@ def submit_sbatch_job(
         env=get_clean_environ(),
     )
 
-    # A site can print a banner, so this searches the output,
+    # A site can print a banner, so the search covers the whole output,
     # not only the start.
     match = SBATCH_OUTPUT_REGEX.search(proc.stdout)
     if match is None:

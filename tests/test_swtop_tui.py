@@ -54,7 +54,7 @@ from slurm_workflows.swtop_widgets import (
     block_pane,
     sync_table,
 )
-from worker_harness import make_worker
+from slurm_workflows.testing import make_worker
 
 
 def square(x: int) -> int:
@@ -374,7 +374,7 @@ class TestDisplay:
         drive(scenario)
 
     def test_rows_keep_their_identity_across_updates(self):
-        """The reason for keying: a scroll position survives a poll."""
+        """The reason the table keys its rows: a scroll position survives a poll."""
 
         async def scenario():
             app = SwtopApp(as_collector(StubCollector()), 3600.0)
@@ -700,7 +700,7 @@ class TestLayout:
         drive(scenario)
 
     def test_no_embeddable_widget_binds_a_key(self):
-        """Keys belong to the app that lays the widgets out."""
+        """Keys belong to the app that arranges the widgets."""
         for widget in [
             SummaryLine,
             ErrorLine,
@@ -765,8 +765,8 @@ class PollingApp(App):
 
 
 class TestSlowPoll:
-    # A poll of 0.3 s against an interval of 0.05 s,
-    # which is a large pool read through a tunnel, scaled down.
+    # A poll of 0.3 s against an interval of 0.05 s.
+    # This is a read of a large pool through a tunnel, scaled down.
 
     def test_a_poll_slower_than_the_interval_still_lands(self):
         """The next tick does not cut it short, so the screen moves on."""
@@ -1031,7 +1031,7 @@ class TestRealServer:
     """The polling half: a Textual worker, a real client, and the widgets it fills."""
 
     @pytest.fixture(autouse=True)
-    def _pilot_jobs(self, pilot_jobs):
+    def _pilot_jobs(self, pilot_jobs: Callable[..., None]) -> None:
         pilot_jobs("cpu")
 
     def test_it_polls_on_startup(self, executor, ds_service_address, tmp_path):
@@ -1121,6 +1121,8 @@ class TestRealServer:
     def test_quitting_ends_it(self, ds_service_address):
         async def scenario():
             async with open_collector(ds_service_address) as collector:
+                # The 60 s interval matches the 60 s alarm on every test,
+                # so no second poll fires before the test ends.
                 app = SwtopApp(collector, 60.0)
                 async with app.run_test() as pilot:
                     await app.workers.wait_for_complete()

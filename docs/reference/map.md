@@ -5,33 +5,39 @@
 `SlurmPilotExecutor.map` maps an iterable across the pool
 and returns one value per item, in the order of the iterable.
 The call blocks until every map task is back.
-It hands out the items the way [`mapreduce`](mapreduce.md) does,
+It hands out the items the way [`map_reduce`](map-reduce.md) does,
 and leaves out the fold.
-
-For when to use `map` and when to use `mapreduce`, see
-[How to fold results across workers](../how-to-guides/fold-results-across-workers.md#keep-every-value-with-map).
+`map` and `map_reduce` make up the simple interface of the executor.
 
 ```python
-summaries = executor.map(
-    desc="summarizing",
-    queue="cpu",
-    map_fn=summarize,
-    iterable=paths,
-    num_tasks=40,
-)
+summaries = executor.map("cpu", summarize, paths)
+```
+
+```python
+SlurmPilotExecutor.map(
+    queue, map_fn, iterable, *,
+    num_tasks=None, desc=None,
+    map_extra_args=None, map_extra_kwargs=None,
+) -> list
 ```
 
 | Argument | Default | Meaning |
 | --- | --- | --- |
-| `desc` | required | Labels the progress `swtop` draws for this call. |
-| `queue` | required | A job group name, or a list of them, as in `submit`. |
+| `queue` | required | A job group name, or a list of them, as in [`submit`](submit-and-wait.md#submit-options). |
 | `map_fn` | required | Runs once per item, on a worker. A callable, or the name of a method on the job group's actor. |
 | `iterable` | required | The items. Read out in full before any map task starts. |
-| `num_tasks` | required | How many map tasks drain the item queue, as an upper bound. |
+| `num_tasks` | `None` | How many map tasks drain the item queue, as an upper bound. `None` means `DEFAULT_MAP_TASKS`, which is 1024. |
+| `desc` | `None` | Labels the progress `swtop` draws for this call. `None` means `map-<n>`. |
 | `map_extra_args`, `map_extra_kwargs` | `None` | Passed to `map_fn` after the item. |
 
-The arguments are those of `mapreduce`
+The arguments after `iterable` are keyword-only.
+The arguments are those of `map_reduce`
 without `reduce_fn`, `init` and the two `reduce_extra_*` arguments.
+
+In the default `desc`, `<n>` counts the `map` calls on this executor
+that enqueued items, from 0.
+It is the same `<n>` the item queue carries,
+as [The queue it creates](#the-queue-it-creates) says.
 
 Everything here travels by cloudpickle,
 so `map_fn`, every item, every value
@@ -39,6 +45,11 @@ and every extra argument must be picklable.
 
 Because `num_tasks` is an upper bound, two things follow.
 A call with fewer items than map tasks submits one map task per item.
+With the default, that means one map task per item, up to 1024.
+A count above the number of workers costs little,
+because a map task that starts after the item queue is empty
+returns at once.
+
 An empty `iterable` returns `[]`,
 creates no queue, submits nothing, and needs no worker.
 
@@ -74,33 +85,27 @@ on the actor of the job group it runs on,
 in place of a callable:
 
 ```python
-scores = executor.map(
-    desc="scoring",
-    queue="gpu",
-    map_fn="predict",
-    iterable=batches,
-    num_tasks=16,
-)
+scores = executor.map("gpu", "predict", batches, desc="scoring")
 ```
 
-The rules are those of `mapreduce`.
+The rules are those of `map_reduce`.
 Each map task looks the name up once,
 on the actor its worker built at startup.
 `map_extra_args` and `map_extra_kwargs` reach the method after the item.
 A `queue` whose job group has no actor raises `ValueError`.
-See [Mapping with an actor's method](mapreduce.md#mapping-with-an-actors-method).
+See [Mapping with an actor's method](map-reduce.md#mapping-with-an-actors-method).
 
 ## The queue it creates
 
 A call creates an item queue named `<executor-name>.map.<n>.<token>`.
 `<n>` counts the `map` calls on this executor that enqueued items.
-It counts apart from `mapreduce`,
+It counts apart from `map_reduce`,
 and the `.map.` segment keeps the two kinds of item queue apart.
 `<token>` is 8 hex characters of a UUID4.
 No job group serves the item queue.
 Only that call's own map tasks claim from it.
 
-Each item becomes an item task on it, `<item-queue>.item.<i>`.
+Each item becomes an item task on the item queue, `<item-queue>.item.<i>`.
 That item task holds the pickled item and no function.
 A map task marks the item task finished once it maps the item,
 and the output it records is empty.
@@ -112,21 +117,19 @@ The map tasks are ordinary tasks on `queue`,
 named `<item-queue>.task.<i>`.
 
 How a map task claims items, and the client it opens to claim them,
-are the same as for `mapreduce`.
-See [The queue it creates](mapreduce.md#the-queue-it-creates).
+are the same as for `map_reduce`.
+See [The queue it creates](map-reduce.md#the-queue-it-creates).
 
 ## What it costs
 
 The driver enqueues each item with an RPC of its own, before any work starts.
-The whole iterable is held in memory twice,
+The whole iterable sits in memory twice,
 once on the driver and once on the server.
-Every value is held twice as well.
+Every value sits in memory twice as well.
 The server holds it in the output of its map task,
 and the driver holds it in the list the call returns.
-`mapreduce` folds the values on the workers,
+`map_reduce` folds the values on the workers,
 and keeps one value on the driver.
-How to size an item against the cost of an RPC
-is in [How to fold results across workers](../how-to-guides/fold-results-across-workers.md#chunk-the-items-when-each-one-is-small).
 
 ## What it refuses
 
@@ -141,7 +144,7 @@ is in [How to fold results across workers](../how-to-guides/fold-results-across-
     The call returns no values in that case,
     not even those of the map tasks that finished.
 - An item that comes back with no value raises `RuntimeError`.
-    This happens only when the invariant the call rests on is broken.
+    This happens only when the invariant the call rests on does not hold.
 
 ## Progress
 
@@ -154,5 +157,5 @@ where the item tasks complete one by one.
 ## Related
 
 - [`SlurmPilotExecutor`](executor.md)
-- [`mapreduce`](mapreduce.md)
-- [How to fold results across workers](../how-to-guides/fold-results-across-workers.md)
+- [`map_reduce`](map-reduce.md)
+- [`submit`, `wait` and `as_completed`](submit-and-wait.md)

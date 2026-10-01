@@ -9,7 +9,7 @@ You can also put the summary line, the progress display and the error line
 anywhere in your layout.
 
 For every widget and its arguments,
-see the [`swtop` reference](../reference/swtop.md#slurm_workflowsswtop_widgets).
+see the [`slurm_workflows.swtop_widgets` reference](../reference/swtop-widgets.md).
 
 ## Lay out the widgets
 
@@ -56,25 +56,23 @@ class MyApp(App):
 MyApp().run()
 ```
 
-You do not need to open or close a client yourself,
-because the poller does both on the app's event loop.
+The poller opens and closes the client on the app's event loop.
+You do not need to do either yourself.
 
 To take all five tabs as they are,
 compose `SwtopTabs()` in place of your own `TabbedContent`.
 
-If you want the tasks tab to start on other states,
-yield `TaskTable(spec, states={"Failed"})` inside a `TabPane` of your own.
-The `TaskTable` takes the place of the tasks `block_pane`.
-`block_pane` takes no `states`.
-A `TaskTable` is a `BlockTable` with a row of state checkboxes above it,
-so `self.query(BlockTable)` still finds it.
-See [`TaskTable`](../reference/swtop.md#slurm_workflowsswtop_widgets).
+To start the tasks tab on other states,
+use a `TaskTable` in place of the tasks `block_pane`.
+Yield `TaskTable(spec, states={"Failed"})` inside a `TabPane` of your own.
+`self.query(BlockTable)` still finds it, because a `TaskTable` is a `BlockTable`.
+See [`TaskTable`](../reference/swtop-widgets.md).
 
 ## Bind your own keys
 
 The `swtop` widgets add no key bindings of their own,
 so the letter keys stay free for your app.
-The tabs and the tables inside them keep the usual Textual keys,
+The tabs and their tables keep the usual Textual keys,
 such as the arrow keys, while they have focus.
 Bind the keys you want in your app:
 
@@ -114,7 +112,8 @@ and leaves the rest of the snapshot empty.
 
 ## Watch two servers
 
-Give each server its own poller, and attach each view to one poller:
+Give each server its own poller.
+Then attach each view to one poller:
 
 ```python
     def compose(self) -> ComposeResult:

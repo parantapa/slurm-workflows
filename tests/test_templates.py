@@ -1,4 +1,7 @@
-"""Tests for the multi-template-per-file Jinja loader and the templates."""
+"""Tests for the Jinja templates, and for their loader.
+
+The loader reads several templates from one file.
+"""
 
 from __future__ import annotations
 
@@ -36,10 +39,10 @@ def run_sbatch_script(
     script_path.write_text(script)
 
     # Only the shell knows which `srun` runs.
-    # See the developer notes, "Slurm interaction".
+    # See the comment above `num_slurm_tasks=` in `templates/slurm_pilot.jinja`.
     # The script inherits only `PATH`,
-    # so the SLURM variables are exactly what a case sets,
-    # even when the suite itself runs from inside a Slurm job.
+    # so the SLURM variables are exactly what a case sets.
+    # This holds even when the suite itself runs from inside a Slurm job.
     proc = subprocess.run(
         ["bash", str(script_path)],
         capture_output=True,
@@ -51,7 +54,7 @@ def run_sbatch_script(
 
 
 class TestParseFile:
-    """The multi-template-per-file format itself.
+    """The format of a file that holds several templates.
 
     A file is a run of `{#- <json5 header> -#}` markers,
     each followed by the body of the template it names.
@@ -77,10 +80,10 @@ class TestParseFile:
         assert templates["sample:second"].source == "body two"
 
     def test_the_prefix_is_the_callers_not_the_filename(self, tmp_path: Path):
-        """`load_template` derives it from the name the caller looks up.
+        """`load_template` derives the prefix from the name the caller looks up.
 
         The file it then reads is `<prefix>.jinja`, so the two agree in practice.
-        But `parse_file` takes the caller's word for it.
+        But `parse_file` uses the prefix the caller passes, whatever the file name.
         """
         path = self.write(tmp_path, '{#- name: "only" -#}\nbody\n')
 
@@ -106,7 +109,7 @@ class TestParseFile:
     def test_a_repeated_name_keeps_the_last(self, tmp_path: Path):
         """Not an error today.
 
-        Pinned so a change to that is a deliberate one.
+        The test pins this behavior, so that any change to it is deliberate.
         """
         path = self.write(
             tmp_path,
@@ -176,23 +179,25 @@ class TestLineColFromPos:
 
 class TestLoader:
     # Each call here is one that no `render_template` overload accepts.
-    # The `type: ignore[call-overload]` pragmas mark those calls as deliberate.
+    # The `pyright: ignore[reportCallIssue]` pragmas mark those calls as deliberate.
 
     def test_unknown_template_name_raises(self):
         with pytest.raises(jinja2.TemplateNotFound):
-            render_template("slurm_pilot:no_such_template")  # type: ignore[call-overload]
+            render_template(
+                "slurm_pilot:no_such_template"  # pyright: ignore[reportCallIssue]
+            )
 
     def test_unknown_file_prefix_raises(self):
         with pytest.raises(jinja2.TemplateNotFound):
-            render_template("no_such_file:whatever")  # type: ignore[call-overload]
+            render_template("no_such_file:whatever")  # pyright: ignore[reportCallIssue]
 
     def test_missing_variable_is_a_hard_error(self):
-        """The environment uses StrictUndefined."""
+        """The environment uses `StrictUndefined`."""
         with pytest.raises(jinja2.UndefinedError):
             render_template(
-                "slurm_pilot:worker_sbatch_script",  # type: ignore[call-overload]
+                "slurm_pilot:worker_sbatch_script",  # pyright: ignore[reportCallIssue]
                 is_batch_worker=True,
-                # The call omits worker_script_path on purpose.
+                # The call omits `worker_script_path` on purpose.
             )
 
 
@@ -204,9 +209,10 @@ class TestWorkerSbatchScript:
         is_batch_worker: bool = False,
         worker_script_path: str = "/path/to/worker.sh",
     ) -> str:
-        # Spelled out rather than gathered into `**overrides`:
-        # `render_template` is a set of `@overload`s keyed on the template name,
-        # and a `**kwargs` dict erases the per-argument types they match on.
+        # This method spells out its arguments
+        # rather than gather them into `**overrides`.
+        # `render_template` is a set of `@overload`s keyed on the template name.
+        # A `**kwargs` dict erases the per-argument types that the overloads match on.
         return render_template(
             "slurm_pilot:worker_sbatch_script",
             name=name,
@@ -347,7 +353,8 @@ class TestPilotJobEvents:
 class TestOutputRedirectByTaskCount:
     """Which `srun` a job runs. These cases run the shell to find out.
 
-    The rule they pin is in the developer notes, "Slurm interaction".
+    The rule they pin is in the comment above `num_slurm_tasks=`
+    in `templates/slurm_pilot.jinja`.
     Anything that is not a Slurm job at all keeps the per-task files.
 
     Each case names the `sbatch` options it stands for,
@@ -383,7 +390,7 @@ class TestOutputRedirectByTaskCount:
     def test_a_single_task_job_writes_to_the_batch_file(
         self, tmp_path: Path, env: dict[str, str], srun_lines
     ):
-        # The last case names no task count, so SLURM_NTASKS is unset.
+        # The last case names no task count, so `SLURM_NTASKS` is unset.
         out = run_sbatch_script(self.render(), tmp_path, **env).stdout
 
         # One line, because only one of the two branches can run.
@@ -425,7 +432,7 @@ class TestOutputRedirectByTaskCount:
     def test_the_task_count_is_never_overridden_by_the_node_count(
         self, tmp_path: Path, srun_lines
     ):
-        """SLURM_NTASKS is the job's task count, so nothing else gets a vote."""
+        """`SLURM_NTASKS` is the job's task count, so no other variable decides it."""
         out = run_sbatch_script(
             self.render(),
             tmp_path,
@@ -552,7 +559,7 @@ class TestWorkerRestart:
     """The worker script starts the worker again when the worker exits for a restart."""
 
     # The template takes the code as a variable, so these tests pass their own.
-    # 75 is the value the executor passes.
+    # The executor passes `slurm_pilot_worker.RESTART_EXIT_CODE`.
     RESTART_EXIT_CODE = 75
 
     # These tests run the rendered script with bash against this stub worker.
