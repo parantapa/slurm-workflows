@@ -48,7 +48,7 @@ executor.set_task_name(task, "train-7")
 ```
 
 Name tasks on a run of any size,
-since `my-run.task.412` says nothing about which point it is.
+because `my-run.task.412` says nothing about what the task does.
 You can name a task after you submit it,
 and the name appears at the next poll.
 

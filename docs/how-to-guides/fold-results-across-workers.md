@@ -52,8 +52,8 @@ print(hits)
 which is how `threshold` gets there.
 `reduce_extra_args` and `reduce_extra_kwargs` do the same for `reduce_fn`.
 
-The call blocks until every map task is back,
-so scale the job group up before you call it.
+Scale the job group up before you call `mapreduce`.
+The call blocks until every map task is back.
 If no job group named in `queue` has a pilot job, the call raises `RuntimeError`.
 See [What it refuses](../reference/mapreduce.md#what-it-refuses).
 
@@ -83,7 +83,7 @@ See [Keep every value with `map`](#keep-every-value-with-map).
 An append in place of a concatenation looks equivalent, and is not.
 `acc + [partial]` puts a whole partial result inside the answer.
 
-For the wrong pairings worked through, see
+For worked examples of the wrong pairings, see
 [What `reduce_fn` and `init` must satisfy](../reference/mapreduce.md#what-reduce_fn-and-init-must-satisfy).
 
 ## Map with an actor's method
@@ -107,8 +107,8 @@ For the rules, and for what a job group without an actor raises, see
 When you need one value per item, and not one folded value,
 call `map` in place of `mapreduce`.
 It takes the same arguments,
-less `reduce_fn`, `init` and the two `reduce_extra_*` arguments,
-and it returns a list in the order of the items:
+less `reduce_fn`, `init` and the two `reduce_extra_*` arguments.
+It returns a list in the order of the items:
 
 ```python
 summaries = executor.map(
@@ -159,7 +159,8 @@ The fold is unchanged, because the chunk's count folds like a file's count.
 
 With `map`, each value is then the result of one chunk.
 To get one value per item,
-have the chunk function return a list, and flatten the result.
+have the chunk function return a list.
+Then flatten the result.
 
 ## Related
 

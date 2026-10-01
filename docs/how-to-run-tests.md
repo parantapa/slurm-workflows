@@ -53,9 +53,9 @@ A worker process that a test starts reads the real NVML.
 
 **`ds-service` is real.**
 Each test gets its own server process on a random port.
-So the tests run against the real server,
+The tests run against the real server,
 not against a stand-in that can drift from it.
-The server is in-memory,
+The server keeps its state in memory,
 so a fresh process per test also means no state leaks between tests.
 
 `DsServiceServer` from `ds-service-client` starts the server.
@@ -150,7 +150,7 @@ Paths are relative to [`tests/`](../tests).
   because `qLogNoisyExpectedImprovement` probes away from the incumbent
   by design.
   Single points reach 1.0 on a correct run.
-  `best_point()` does not work either.
+  An assertion on `best_point()` does not work either.
   The exploration alone lands near the minimum,
   so `best_point()` passes even with the sign flipped.
   All four use unimodal objectives on purpose:

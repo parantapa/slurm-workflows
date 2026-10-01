@@ -1041,6 +1041,11 @@ class TestCli:
 
         assert "/extra/path" in captured["sys_path_head"]
 
+    def test_prepends_python_paths_in_order(self, captured, tmp_path):
+        self.invoke(tmp_path, **{"--python-paths-json": '["/first", "/second"]'})
+
+        assert captured["sys_path_head"] == ["/first", "/second"]
+
     def test_leaves_the_process_streams_alone(self, captured, tmp_path):
         """A redirect empties the file Slurm writes.
 
@@ -1058,7 +1063,8 @@ class TestCli:
         def terminated(self) -> None:
             os.kill(os.getpid(), signal.SIGTERM)
 
-        # captured already swapped in FakeWorker, so this patches its main.
+        # The `captured` fixture already swapped in `FakeWorker`,
+        # so this call patches the `main` of `FakeWorker`.
         monkeypatch.setattr(worker_mod.PilotWorker, "main", terminated)
 
         exit_code = self.invoke(tmp_path)

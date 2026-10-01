@@ -224,6 +224,7 @@ class OptimizeSpaceBotorch:
     The search models a study on every observation
     the files hold under its name.
     `search_parallelism` is the batch size for studies that do not carry their own.
+
     The constructor raises `ValueError` for an empty list,
     for a repeated name,
     and for a file that does not hold the results shape.
@@ -781,7 +782,7 @@ class OptimizeSpaceBotorch:
         So the caller can pass the files it started from and this one
         to the next `OptimizeSpaceBotorch` together,
         and no point counts twice.
-        The file has the same shape as `ExploreSpaceSobolQMC.save` writes.
+        The file has the same shape as the file `ExploreSpaceSobolQMC.save` writes.
 
         Overwrites `path`.
         If the search evaluated nothing, it writes empty lists.

@@ -122,8 +122,8 @@ def submit_sbatch_job(
     The call writes `<name>.sbatch` into `work_dir` and makes it executable.
     `sbatch` runs in the environment `get_clean_environ()` returns.
     The call raises `RuntimeError` if `sbatch` succeeds
-    but its output holds no job id,
-    and `ValueError` if the job id it prints is not a number.
+    but its output holds no job id.
+    It raises `ValueError` if the job id it prints is not a number.
     The call also raises `subprocess.CalledProcessError` if `sbatch` fails,
     and `subprocess.TimeoutExpired` if it does not answer in time.
     """

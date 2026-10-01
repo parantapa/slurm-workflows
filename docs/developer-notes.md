@@ -35,12 +35,12 @@ decide which of the four types it is before you decide where it goes.
 Then give it a row in the README's table,
 among the documents of its own type.
 Keep each document inside its type.
-A tutorial that stops to explain links out to `explanation/` instead,
-and a reference page describes rather than recommends.
+A tutorial that stops to explain links to `explanation/` instead.
+A reference page describes rather than recommends.
 
 A reference page covers one thing a user reaches for.
-The page is named after that class, that command or that subject,
-rather than after the module it happens to live in.
+The page takes its name from that class, that command or that subject,
+rather than from the module that holds it.
 `swtop.md` covers `swtop.py`, `swtop_widgets.py` and `swtop_tui.py` together.
 What the worker and the monitors publish is documented
 where a user meets it, rather than under its own module.
@@ -145,8 +145,9 @@ The driver and the workers never talk to each other directly.
 They talk only through the `ds-service` server,
 via `DsServiceClient` from the external `ds-service-client` package.
 `swtop` uses `DsServiceClientAsync` instead,
-the asyncio client of the same package and the same API,
 for the reason given under Monitoring.
+`DsServiceClientAsync` is the asyncio client of the same package,
+with the same API.
 `DsServiceServer` (same package) can launch a local server process.
 `SlurmPilotExecutor` always takes the address as its `server_address` argument.
 
@@ -206,13 +207,14 @@ Only the workers of job group `cpu` serve a task on queue `cpu`.
 
 **`_as_completed` drops a task that can never run, not the batch.**
 `_starved_tasks` and `_stranded_tasks` return the subset they object to,
-rather than raising, because the answer is always a subset.
+rather than raise, because the answer is always a subset.
 A queue nobody scaled says nothing about the queues that were.
-Jobs in one job group that reach their time limit
+Pilot jobs in one job group that reach their time limit
 say nothing about a task on another job group's queue.
 
 A wait that abandons the rest of `pending`
-loses task outputs the server already has, silently under `RAISE_NEVER`.
+loses task outputs the server already has.
+Under `RAISE_NEVER`, it loses them silently.
 Such a wait also breaks what `RAISE_AFTER_COMPLETED` promises.
 The failure count in the deferred exception counts *tasks* for the same reason:
 one message covers every task on a dead queue.
@@ -220,9 +222,9 @@ one message covers every task on a dead queue.
 **Both space classes record what came back, even when the batch failed.**
 `ExploreSpaceSobolQMC` and `OptimizeSpaceBotorch`
 wait with `RAISE_AFTER_COMPLETED` and then record.
-On the failure path they record what returned before re-raising.
-An exploration of a few thousand points must not lose all of them to one,
-and `save()` is what the next run reads.
+On the failure path they record what returned before they re-raise.
+An exploration of a few thousand points must not lose all of them to one.
+`save()` is what the next run reads.
 
 **The executor warns about every failure, whatever `RaiseOnError` says.**
 The warning is the part a caller cannot switch off,
@@ -233,8 +235,8 @@ The warning goes to stderr, so it does not land in a caller's stdout.
 
 **A wait publishes its progress, but it does not draw it.**
 `wait` and `as_completed` write the `progress_display` key
-and append to `progress:<uuid4>` as tasks return,
-and `swtop` is what turns that into a bar.
+and append to `progress:<uuid4>` as tasks return.
+`swtop` is what turns that into a bar.
 The driver prints nothing,
 so a run under `nohup` leaves no progress bar in its output file.
 A run that someone watches from another shell shows one.
@@ -248,8 +250,8 @@ It calls `task_done` with `failed=True`,
 so the server fails every task that waits on it.
 A task that the server failed for this reason never ran.
 Its output is the plain text `Dependency failed (task_id=...)`,
-not a cloudpickle,
-and the poll loop checks for that prefix before it unpickles.
+not a cloudpickle.
+The poll loop checks for that prefix before it unpickles.
 
 **`task_done` is per worker.**
 The worker passes its own `worker_id`,
@@ -286,7 +288,7 @@ never whether the job group has an actor.
 A job group with an actor therefore still runs a plain callable,
 which is what lets `mapreduce` and `map` submit their own task functions there.
 A `str` with no actor to find it on raises,
-rather than failing later as a call on a string.
+rather than fail later as a call on a string.
 
 **The worker publishes its actor to the process, as `current_actor()`.**
 A task the worker runs has no argument that carries the actor,
@@ -333,7 +335,7 @@ therefore still records which job and node it died on.
 
 Each is one key and not one per field, because `swtop` caches what it reads.
 A reader that lands between two writes otherwise remembers
-a worker whose host it never learned.
+a worker whose hostname it never learned.
 Nothing ever updates either key, which is what makes both cacheable.
 
 `WORKER_INFO_PREFIX` lives in `slurm_pilot_worker.py`
@@ -350,8 +352,8 @@ through `slurm-pilot-worker --pilot-job-event`.
 `PilotWorker.close()` writes `worker_exit:<worker-id>`,
 and so does `PilotWorker.__init__` when the actor fails to build.
 A worker's start time is the `start_time` field of its `worker_info:` key.
-An exit written into the description key breaks the cache in `swtop`,
-so do not merge them.
+An exit written into the `pilot_job_info:` or `worker_info:` key
+breaks the cache in `swtop`, so do not merge them.
 
 `swtop` hides a pilot job or a worker once its exit key exists.
 It also hides the Slurm job of a pilot job that exited.
@@ -474,20 +476,22 @@ and it is what lets a map task read `NoTaskAvailable` as "the work is done".
 `task_get` raises it when no queue it polled has a *ready* task.
 On its own that means everything is claimed,
 not that nothing more arrives.
-The ordering supplies the other half:
-no map task can run before every item task exists,
-and the call enqueues nothing on the item queue afterward.
+The ordering supplies the other half.
+No map task can run before every item task exists.
+Also, the call enqueues nothing on the item queue afterward.
 `_enqueue_items` returns only after the last `task_add`,
 and `_submit_map_tasks` runs after it.
 
-Break that ordering, by streaming the iterable or by topping the item queue up.
+A change that streams the iterable,
+or that enqueues more item tasks later,
+breaks that ordering.
 A fast map task then drains what is there and sees an empty item queue.
 Under `mapreduce`, the call returns a partial result
 that covers part of the input, and nothing raises.
 Under `map`, the call finds items with no value,
 and raises `RuntimeError` for them rather than return a short list.
-For this reason, both calls read the iterable out into a list first,
-and a test of each call asserts on the order of the `task_add` calls.
+For this reason, both calls read the iterable out into a list first.
+A test of each call asserts on the order of the `task_add` calls.
 
 **Each call gets an item queue of its own,
 and no job group serves it.**
@@ -510,7 +514,7 @@ and one that calls the task function directly sets them itself.
 
 A `with` block closes the client.
 A worker runs many tasks over its life.
-A leaked gRPC channel per task therefore accumulates for all of it.
+A leaked gRPC channel per task therefore accumulates over the whole life of the worker.
 
 **A map task marks an item task done only once it has the item's value,
 and records an empty output.**
@@ -526,8 +530,8 @@ The driver built every item task id when it enqueued the items,
 so it maps each id back to the index of its item.
 The values therefore land in input order
 whichever task claimed them and whenever it finished.
-The order of the pairs in a task's output carries no meaning,
-and a test reverses it to check that the driver does not rely on it.
+The order of the pairs in a task's output carries no meaning.
+A test reverses it to check that the driver does not rely on it.
 An id carries the index with no change to the item task's input,
 so both calls enqueue items through the same helper.
 
@@ -546,7 +550,7 @@ inherits whatever handlers the previous one left on it.
 ### Templates (`templates/`)
 
 `render_template` renders the sbatch and worker shell scripts
-from Jinja2 templates in a custom multi-template-per-file format.
+from Jinja2 templates in a custom file format.
 Each `.jinja` file holds one or more named templates,
 each one under a `{#- name: "..." -#}` JSON5 header.
 `templates/__init__.py` parses those headers.
@@ -608,7 +612,7 @@ The most error-prone part sits in one place.
 `utils.objective_value` is the one place that checks an objective's result,
 so the four rejection messages cannot drift apart.
 The rest still can.
-A fix to one class belongs in the other.
+A fix to one class belongs in the other class as well.
 
 **`explore_space` owns the results file format.**
 `load_results` reads what both `save` methods write,
@@ -638,11 +642,11 @@ each against its own `patience`, floor and ceiling.
 - **The fit runs on a worker, not on the driver.**
   `_fit_and_propose` submits `fit_and_propose` to `optimizer_queue`
   as one task per study per round, the fit and the acquisition together.
-  A fitted GP shipped back to the driver costs more than the fit did.
+  A fitted Gaussian process shipped back to the driver costs more than the fit did.
   Keep `fit_and_propose` a module-level function
   that takes and returns plain Python.
   Then cloudpickle sends it by reference,
-  and no torch object has to survive a hop between hosts.
+  and no torch object has to survive a hop between nodes.
   The workers of `optimizer_queue` need botorch.
   The workers of `objective_queue` do not.
 - **The four acquisition knobs belong to the study, not to the process.**
@@ -651,8 +655,9 @@ each against its own `patience`, floor and ceiling.
   passed to every `fit_and_propose` task.
   A value read inside `fit_and_propose` is the *worker's*,
   and it ignores how the caller configured the search.
-  Tests assert them by constructing with them
-  (`make_opt(..., acqf_timeout_s=...)`) or against `opt.studies[i].<knob>`,
+  A test either passes the knobs to the constructor
+  (`make_opt(..., acqf_timeout_s=...)`) and asserts the values it passed,
+  or asserts against `opt.studies[i].<knob>`,
   never against a literal.
 - **Never import this module eagerly from the package `__init__.py`.**
   `OptimizeSpaceBotorch` and `OptimizationStudy` are importable
@@ -690,7 +695,6 @@ The election needs no lock and no designated rank,
 and the workers do not need to know each other.
 Nothing hands a subject back when that worker dies:
 the time series stops, and `swtop` marks it stale.
-`swtop` hides the Slurm job of a pilot job that published its exit.
 A re-election needs a heartbeat and a lease, and this design has neither.
 
 **GPUs come from NVML, through `nvidia-ml-py`, in a thread of their own.**
@@ -754,8 +758,9 @@ A poll cut short, by an unmount or by a caller's timeout,
 then still leaves the next one less to read.
 
 **`SnapshotPoller` runs one poll at a time, and lets each one finish.**
-A tick that comes during a slow poll is dropped, not queued,
-so a slow server is polled as often as it answers.
+`SnapshotPoller` drops a tick that comes during a slow poll,
+and does not queue it.
+As a result, it polls a slow server as often as the server answers.
 The rejected alternative cancels the poll in flight at every tick.
 With it, a poll slower than the interval never finishes,
 and the screen keeps its first reading with no error to say why.
@@ -793,8 +798,8 @@ The text frames and the UI differ only in how they draw them.
 out of a snapshot that holds every task.
 A change of states then redraws the last snapshot at once,
 with no poll to wait for.
-The filter in the widget also leaves the snapshot the same for every view,
-so the text frames, the summary line and an embedding app
+The filter in the widget also leaves the snapshot the same for every view.
+As a result, the text frames, the summary line and an embedding app
 still see every task.
 The cost is that each poll still reads the state of every task.
 
@@ -818,7 +823,7 @@ Those styles select on a widget type or on an `swtop-` class, never on an id.
 and passes `--output <work_dir>/<name>-%j-%t.out`.
 For this reason, the `worker_sbatch_script` template takes `name` and `work_dir`.
 [`reference/what-a-run-publishes.md`](reference/what-a-run-publishes.md#logs) documents for users
-which file a worker's log ends up in.
+which file holds a worker's log.
 This section says why the shell decides it rather than Python.
 
 **The generated script drops `--output` for a job of exactly one Slurm task**,
@@ -859,8 +864,8 @@ The worker's constructor catches `BaseException` around the actor
 for the same reason.
 
 **`sbatch` gets an environment with no Slurm variables in it.**
-Every submission passes the `get_clean_environ` result to `sbatch`,
-so a driver inside a Slurm job submits the same jobs as one on a login node.
+Every submission passes the `get_clean_environ` result to `sbatch`.
+As a result, a driver inside a Slurm job submits the same jobs as one on a login node.
 `get_clean_environ` says why.
 
 ## Conventions
@@ -884,8 +889,8 @@ so a driver inside a Slurm job submits the same jobs as one on a login node.
   If `pyright` objects to something in `src/`, fix the annotation instead.
 - **Deprecation warnings are errors in the test suite**
   (`filterwarnings` in `pyproject.toml`).
-  They are how a dependency announces a break one release ahead,
-  and a warning nobody reads is a break discovered at the worst moment.
+  They are how a dependency announces a break one release ahead.
+  A warning nobody reads is a break discovered at the worst moment.
   Other warnings stay warnings.
   This library deliberately hands botorch a constant objective in places,
   and botorch says so at runtime.

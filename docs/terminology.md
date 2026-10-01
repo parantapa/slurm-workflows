@@ -2,7 +2,7 @@
 
 [<- back to the main README](../README.md)
 
-The words this project uses, one per concept.
+This file names the words this project uses, one per concept.
 
 This file binds prose and identifiers alike.
 It covers the docstrings, the comments, the error messages and the CLI help.
@@ -95,10 +95,12 @@ It has a `name`, a `work_dir` and a log of its own.
 It is what a `with` block closes,
 and it is what the one-executor-per-server rule is about.
 
-So: "the driver runs on a login node",
-"the executor cancels every pilot job when the block ends",
-"botorch must be importable on the driver",
-"two executors on one server share a queue namespace".
+For example:
+
+- "the driver runs on a login node"
+- "the executor cancels every pilot job when the block ends"
+- "botorch must be importable on the driver"
+- "two executors on one server share a queue namespace"
 
 ### Job group, not worker group
 
@@ -118,7 +120,7 @@ Slurm's own "group" is the Unix group in `--gid`.
 The two pi examples name a job group `bii`,
 after the partition its jobs run on.
 That name is legal.
-But it reads as though the two were the same thing.
+But it reads as though the job group and the partition were the same thing.
 Name a job group after what its workers do (`eval`, `optimizer`, `cpu`),
 and leave `bii` to `--partition`.
 
@@ -308,7 +310,7 @@ A name carries the same word the prose does.
 An argument that holds a job group name is `group` or `job_group`,
 or `name` on `define_job_group` and `scale_jobs`.
 Those two methods act on a job group.
-It is never `worker`.
+Such an argument is never `worker`.
 
 **In error messages and CLI help.**
 Error messages and CLI help reach a user who read nothing else,

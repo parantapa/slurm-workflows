@@ -345,7 +345,7 @@ class PilotWorker:
             self.actor_instance = None
 
     def main(self) -> None:
-        """Run tasks from the job group's queue until a restart is requested.
+        """Run tasks from the job group's queue until a restart request arrives.
 
         The call returns only when `SlurmPilotExecutor.restart_jobs`
         asked this worker's job group to restart.
@@ -485,9 +485,9 @@ def slurm_pilot_worker(
     # that file stays empty.
     logging.basicConfig(format=LOG_FORMAT, level=LOG_LEVEL)
 
+    # As one block, so the paths keep the order `define_job_group` gave them.
     python_paths: list[str] = json.loads(python_paths_json)
-    for path in python_paths:
-        sys.path.insert(0, path)
+    sys.path[0:0] = python_paths
 
     # Slurm ends the job with SIGTERM, and Python's default for it skips `finally`.
     # See the developer notes, Slurm interaction.

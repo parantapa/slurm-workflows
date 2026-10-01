@@ -6,8 +6,8 @@ A search that ran out of its time limit does not have to start again.
 You construct `OptimizeSpaceBotorch` from results files.
 So the state that must survive is a file, not an object.
 Only a run that reached its `save` call leaves a file.
-The points of a run stopped before `save` are lost,
-and the next run starts from the files saved before it.
+A run that stops before `save` loses its points.
+The next run starts from the files that earlier runs saved.
 
 ## Give every run its own results file
 
@@ -52,8 +52,8 @@ A mismatch raises `RuntimeError`.
 - Keep the parameters of the space the same as those of the saved points.
 - You can widen a range.
     Do not narrow one past a point you already measured.
-- Do not make a range a log range
-    if a saved point in it is at or below zero.
+- If a saved point in a range is at or below zero,
+    do not make that range a log range.
 
 ## Start the next run from every file so far
 

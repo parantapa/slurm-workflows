@@ -41,7 +41,7 @@ so anything can read it:
 
 The worker id is what the worker claims tasks under.
 `task_get_worker_id` says which worker holds a running task.
-It is the path from a task to the worker and the node that ran it.
+The worker id is the path from a task to the worker and the node that ran it.
 Nothing removes the key when a worker exits.
 
 **Each pilot job and each worker publishes when it starts and when it exits**,
@@ -242,7 +242,7 @@ Which of the two holds a worker's log depends on the job group's definition:
     `--nodes=4 --ntasks-per-node=1` is four Slurm tasks
     and still gets four per-Slurm-task files.
 
-    The batch file records which way a job went.
+    `<job-name>-<job-id>.out` records which way a job went.
     It records the Slurm task count the job decided on (`Num Slurm tasks: 4`),
     says so when it redirects,
     and traces the `srun` command it ran.

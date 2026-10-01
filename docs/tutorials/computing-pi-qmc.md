@@ -6,8 +6,8 @@ In this tutorial we compute $\pi$ again,
 this time with `ExploreSpaceSobolQMC`.
 That class owns the submit-and-wait loop
 we wrote by hand before.
-The exploration draws a low-discrepancy design over a space,
-evaluates every point of that design across a pool of workers,
+The exploration draws a low-discrepancy design over a space.
+It evaluates every point of that design across a pool of workers,
 and keeps what came back.
 
 We run on the `bii` partition of the Rivanna cluster at UVA,
@@ -138,7 +138,7 @@ python examples/example_compute_pi_qmc.py
 ```
 
 The program does not print the server address.
-The executor prints its work directory when it starts.
+The executor prints its work dir when it starts.
 The line looks something like this:
 
 ```text
@@ -164,8 +164,9 @@ at that address:
 swtop 10.0.0.1:5051
 ```
 
-We watch the `ready` count fall from 4096 toward zero,
-as the workers claim the points and post what the objective returned.
+We watch the `ready` count fall from 4096 toward zero.
+The count falls as the workers claim the tasks
+and post what the objective returned.
 
 Behind that count, these steps happen, in order:
 
@@ -177,7 +178,7 @@ Behind that count, these steps happen, in order:
     so each point is recognizable in the tasks block.
 * `run` blocks until every task is back.
 * `run` then prints the study's best point.
-    The best point has the lowest score,
+    The best point has the lowest objective value,
     so here it is a point outside the circle.
 * `save` writes the points, the objective values and the whole mappings to a file.
 * The executor cancels the pilot job at the end of its block.
@@ -203,8 +204,9 @@ with the whole mapping the objective returned for it.
 
 An estimate of the same number came back,
 and we wrote no `submit` or `wait` call to get it.
-We described a space and an objective,
-and the exploration did the submitting, the waiting and the bookkeeping.
+We described a space and an objective.
+The exploration submitted the tasks, waited for them
+and kept what came back.
 
 ## Next steps
 

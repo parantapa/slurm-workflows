@@ -127,7 +127,7 @@ def drive(scenario: Callable[[], Coroutine[Any, Any, None]]) -> None:
 
 
 class StubCollector:
-    """Hands back one snapshot, or fails, without a server behind it."""
+    """Returns one snapshot, or fails, without a server behind it."""
 
     def __init__(
         self, snapshot: Snapshot | None = None, address: str = "host:1"

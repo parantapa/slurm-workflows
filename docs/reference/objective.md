@@ -28,7 +28,7 @@ Both classes raise on a bare float, or on a mapping without the key.
 They also raise on a value that `float()` cannot convert,
 or on a value that is not finite.
 This last case covers `NaN` and `inf`,
-because either one silently poisons a GP fit.
+because either one silently poisons a Gaussian process fit.
 
 `extra_objective_kwargs` carries what the objective needs
 but the search must not vary.

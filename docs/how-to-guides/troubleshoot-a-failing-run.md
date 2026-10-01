@@ -66,12 +66,12 @@ failed = [t for t in tasks if isinstance(t.output, RemoteExecutionError) and t.o
 print([t.output.error_id for t in failed])
 ```
 
-A task that never ran because a task it waits on failed
-has an empty `error_id`.
+If a task never ran because its parent task failed,
+its `error_id` is empty.
 
 If `grep` finds nothing, search the work dir of another run.
-Unless you pass `work_dir`, each run gets its own timestamped work dir,
-and the id belongs to the run that printed it.
+Unless you pass `work_dir`, each run gets its own timestamped work dir.
+The id belongs to the run that printed it.
 
 ## Find the log for the failure
 
@@ -120,7 +120,8 @@ You scaled the job group, but its pilot jobs then left the cluster.
 The cause is the time limit, a cancellation,
 or an exit before the queue drained.
 The worker's `.out` file says which.
-Scale the job group down to 0, then back up.
+Scale the job group down to 0.
+Then scale it back up.
 Then wait on the same tasks again.
 The server still holds the tasks that were waiting or ready,
 and the new pilot jobs run them.
@@ -128,7 +129,7 @@ A task that was running when its pilot job left stays `Running` on the server,
 because no worker can claim it again.
 Submit such a task again,
 and wait on the new `Task` in place of the old one.
-A call with the old count submits nothing,
+A `scale_jobs` call with the old count submits nothing,
 because `scale_jobs` counts every pilot job it submitted,
 the ones that left the cluster included.
 
@@ -139,8 +140,8 @@ through the `ds-service` client directly.
 Nothing in this library cancels a task.
 
 If you still want the output, submit the task again.
-The server never dispatches a canceled task a second time,
-so the output of the canceled one is lost for good.
+The server never dispatches a canceled task a second time.
+So the output of the canceled task is lost permanently.
 
 ## `RuntimeError: Task ... is unknown to the task queue server`
 
@@ -148,7 +149,7 @@ Two cases produce this error.
 The first is a `Task` you built by hand.
 The second is a `Task` from a server that restarted since then.
 
-Either way the server holds no such task,
+Either way, the server holds no such task,
 so there is no task output to read.
 Submit the work again through the executor that owns the current run.
 A `Task` from an earlier run does not work.
@@ -192,7 +193,7 @@ Three causes leave the workers block empty
 while the pilot jobs block holds entries.
 The pilot jobs are still pending, their setup scripts did not finish,
 or their workers cannot reach the server.
-What `STARTED` shows in each of the first two cases is in
+For what `STARTED` shows in each of the first two cases, see
 [Where each block comes from](../reference/swtop.md#where-each-block-comes-from).
 For workers that cannot reach the server, see
 [Tasks never complete, but the pilot jobs run](#tasks-never-complete-but-the-pilot-jobs-run).

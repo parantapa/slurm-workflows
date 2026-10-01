@@ -4,7 +4,7 @@
 
 ## The problem it solves
 
-One Slurm job per unit of work pays Slurm's queue
+One Slurm job per unit of work pays the latency of Slurm's queue
 once per unit of work.
 On a busy cluster that latency dominates everything else
 as soon as the individual tasks are small.
@@ -15,7 +15,7 @@ The pilot-job model inverts that.
 The executor submits a few long-lived pilot jobs once,
 and each job starts workers that stay alive.
 The executor then dispatches the actual work to those workers over a queue.
-A run pays Slurm's latency once per worker instead of once per task.
+A run pays Slurm's latency once per pilot job instead of once per task.
 The cluster sees a handful of ordinary jobs.
 The program sees something
 close to [`concurrent.futures`](https://docs.python.org/3/library/concurrent.futures.html).
@@ -107,8 +107,8 @@ until somebody waits on the task.
 A `ds-service` server holds one run's queues, actor arguments
 and restart counters under names that carry the job group's name
 and never the executor's.
-Point two executors at one server,
-and they share those names.
+Two executors that point at one server
+share those names.
 Same-named job groups serve each other's tasks,
 overwrite each other's actor arguments,
 and restart each other's workers.
@@ -139,8 +139,8 @@ in increasing order of how much of the loop they own:
 The two space classes build on the first.
 Both take an executor and submit through it,
 so every program begins with an executor.
-The difference between them is not capability
-but who owns the submit-and-wait loop.
+The difference between the space classes and the executor
+is who owns the submit-and-wait loop.
 Work that is not a function over a space must own that loop itself,
 which is what `submit` and `wait` are for.
 

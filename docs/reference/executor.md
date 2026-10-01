@@ -27,11 +27,11 @@ executor = SlurmPilotExecutor(name, server_address, work_dir=None)
 
 `name` identifies the executor.
 It prefixes every task id (`<name>.task.<n>`)
-and every pilot job's Slurm job name (`<name>.job.<group>.<index>`),
-and it names the executor's logger
+and every pilot job's Slurm job name (`<name>.job.<group>.<index>`).
+It also names the executor's logger
 and the directory its default work dir sits in.
 Two executors on one cluster must have two names.
-A shared one collides on all three,
+A shared name collides on all of them,
 whether or not they talk to the same server.
 
 It must start with a letter
@@ -103,14 +103,14 @@ they wait on the queue until a worker claims them.
 
 | Argument | Default | Meaning |
 | --- | --- | --- |
-| `setup_script` | `""` | Shell snippet run on the compute node before the worker starts. The text, not a path. Must be a `str`. An omitted value (or `""`) leaves each worker with the environment `sbatch` passes on, plus what `/etc/profile`, which is always sourced, gives it. |
+| `setup_script` | `""` | Shell snippet run on the compute node before the worker starts. The text, not a path. Must be a `str`. An omitted value (or `""`) leaves each worker with the environment `sbatch` passes on, plus what `/etc/profile` gives it. `/etc/profile` is always sourced. |
 | `worker_exe` | `"slurm-pilot-worker"` | Worker entry point, for a wrapped or renamed one. |
 | `is_batch_worker` | `False` | See [One worker per pilot job, or one per Slurm task](#one-worker-per-pilot-job-or-one-per-slurm-task). |
 | `actor_class_name` | `None` | Fully qualified class name to instantiate once per worker. |
 | `actor_class_args` | `None` | Positional arguments for that class's constructor. Only valid with `actor_class_name`. |
 | `actor_class_kwargs` | `None` | Keyword arguments for that class's constructor. Only valid with `actor_class_name`. |
-| `python_paths` | `None` | Extra paths prepended to the workers' `sys.path`. |
-| `add_cwd_to_python_path` | `True` | Also adds the driver's cwd to the workers' `sys.path`. The cwd goes ahead of every `python_paths` entry. The workers take `python_paths` in reverse order. |
+| `python_paths` | `None` | Extra paths prepended to the workers' `sys.path`, in the order given. |
+| `add_cwd_to_python_path` | `True` | Also adds the driver's cwd to the workers' `sys.path`, ahead of every `python_paths` entry. |
 
 The executor writes each element of `sbatch_args` as one `#SBATCH` line
 in the generated `<job-name>.sbatch`,
@@ -123,7 +123,7 @@ The keys are `actor_class_args:<name>` and `actor_class_kwargs:<name>`,
 where `<name>` is the job group's name.
 Each worker reads them back at startup.
 
-They must be picklable.
+The actor arguments must be picklable.
 Anything they refer to must be importable on the compute node,
 exactly as for the actor class itself.
 
@@ -222,8 +222,9 @@ Each call adds one to it.
 A worker that sees the counter move past the value it read at startup restarts.
 See [What a run publishes](what-a-run-publishes.md#keys-and-time-series).
 
-In [`swtop`](swtop.md), each restarted worker leaves the workers block,
-and a new worker takes its place with a new `PID` and a new `STARTED` time.
+In [`swtop`](swtop.md), each restarted worker leaves the workers block.
+A new worker takes its place,
+with a new `PID` and a new `STARTED` time.
 
 For the steps of a restart, see
 [How to update worker code without resubmitting](../how-to-guides/update-worker-code-without-resubmitting.md).
@@ -245,6 +246,7 @@ so tasks submitted without a priority run in submission order.
 The server dispatches the task only after every parent finishes.
 If a parent fails, the task fails too.
 If a parent is canceled, the task is canceled.
+
 Each parent must already be on the server.
 A parent therefore goes through `submit` before the task that waits on it.
 If the server does not know a parent, `submit` raises `KeyError`.
@@ -266,7 +268,7 @@ Its `error` is `Dependency failed (task_id=<id>)`,
 and `<id>` is the task that failed.
 
 `RemoteExecutionError` lives in `slurm_workflows.utils`,
-and imports from the package root like everything else.
+and also imports from the package root.
 
 `priority` and `parent_task_ids` record what `submit` was given
 as `task_priority` and `task_parents`:
@@ -314,7 +316,8 @@ The first of these checks is a minute in, not immediate.
 A `squeue` they cannot reach leaves liveness unknown rather than dead.
 They log it, retry it, and do not end the wait.
 
-A task that waits on a parent is also checked on the queues
+For a task that waits on a parent,
+both calls also check the queues
 of every parent, grandparent and further ancestor
 that is not finished yet.
 A task whose ancestor can never run therefore raises the same error,

@@ -56,7 +56,7 @@ class MyApp(App):
 MyApp().run()
 ```
 
-You need not open or close a client yourself,
+You do not need to open or close a client yourself,
 because the poller does both on the app's event loop.
 
 To take all five tabs as they are,

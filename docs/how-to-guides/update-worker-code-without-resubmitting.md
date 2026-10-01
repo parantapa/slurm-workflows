@@ -93,7 +93,7 @@ executor.wait(tasks, desc="predict")
 
 A task that was already on the queue when you called `restart_jobs`
 can still go to an old worker.
-This happens in the moment before that worker sees the restart.
+This happens in the short time before that worker sees the restart.
 
 ## Check that the new workers started
 

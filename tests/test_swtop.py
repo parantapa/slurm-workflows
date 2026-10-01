@@ -475,7 +475,7 @@ class TestCollectWorkers:
     def test_an_identity_is_read_once_however_long_it_runs(
         self, ds_service_address, tmp_path
     ):
-        """The published description never changes, so re-reading it is waste."""
+        """The published description never changes, so a second read is waste."""
         worker = make_worker(ds_service_address, tmp_path, group="cpu", name="w-1")
         bound = LoopBound(ds_service_address, wrap=CountingClient)
         counting = cast(CountingClient, bound.collector.client)

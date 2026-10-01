@@ -43,7 +43,7 @@ class TestIntRange:
         assert r.unstandardize(0.46) == 5
 
     def test_clamps_outside_the_unit_interval(self):
-        # optimize_acqf can return a point a hair outside the bounds.
+        # optimize_acqf can return a point slightly outside the bounds.
         r = IntRange(3, 11)
         assert r.unstandardize(-0.4) == 3
         assert r.unstandardize(1.7) == 11

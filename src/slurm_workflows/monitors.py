@@ -1,7 +1,7 @@
 """Background sampling of a node, of the Slurm job on it, and of that job's GPUs.
 
 Each thread appends to a `ds-service` time series,
-one series per measurement per subject.
+one time series per measurement per subject.
 `docs/reference/swtop.md` says what the host and job readings mean.
 `docs/reference/what-a-run-publishes.md` lists every key they write,
 and says what the GPU readings mean.
@@ -36,7 +36,7 @@ CGROUP_ROOT = Path("/sys/fs/cgroup")
 HOST_FILESYSTEMS = {"dev_shm": "/dev/shm", "tmp": "/tmp"}
 
 # Time series keys, as `<prefix><subject>`.
-# The subject is the hostname for a host,
+# The subject is the hostname for a node,
 # and `<job-id>:<hostname>` for the part of a job on one node.
 HOST_SERIES = {
     # Bytes.
@@ -78,7 +78,7 @@ JOB_SUBJECT_SEPARATOR = ":"
 
 
 def job_subject(slurm_job_id: str | int, hostname: str) -> str:
-    """The subject of the series that sample one job on one node."""
+    """The subject of the time series that sample one job on one node."""
     return f"{slurm_job_id}{JOB_SUBJECT_SEPARATOR}{hostname}"
 
 
@@ -92,7 +92,7 @@ def split_job_subject(subject: str) -> tuple[str, str]:
 
 
 def gpu_subject(slurm_job_id: str | int, hostname: str, index: str | int) -> str:
-    """The subject of the series that sample one GPU of one job on one node."""
+    """The subject of the time series that sample one GPU of one job on one node."""
     return f"{job_subject(slurm_job_id, hostname)}{JOB_SUBJECT_SEPARATOR}{index}"
 
 
@@ -391,7 +391,7 @@ class Monitor(BaseMonitor):
         self.sampler = sampler
 
     def append_sample(self) -> None:
-        """Take one reading and append it to this subject's series."""
+        """Take one reading and append it to this subject's time series."""
         values = self.sampler()
         # One timestamp for the whole reading,
         # so the series of one subject line up point for point.
@@ -407,7 +407,7 @@ class GpuMonitor(BaseMonitor):
     """Appends a reading of each GPU a job can see on this node, on a timer.
 
     `subject` is the job's subject, `<job-id>:<hostname>`.
-    Each GPU gets series of its own, under `<job-id>:<hostname>:<gpu-index>`.
+    Each GPU gets time series of its own, under `<job-id>:<hostname>:<gpu-index>`.
     The GPU's type, UUID and total memory go in the map under `GPU_INFO_PREFIX`.
     The monitor writes them when it first sees the GPU,
     and again only if one of them changes.
@@ -441,7 +441,7 @@ class GpuMonitor(BaseMonitor):
             self.logger.exception("Monitor %s cannot use NVML", self.name)
 
     def append_sample(self) -> None:
-        """Read every GPU, and append each reading to that GPU's series."""
+        """Read every GPU, and append each reading to that GPU's time series."""
         readings = query_gpus()
         # One timestamp for every GPU, as for the measurements of one subject.
         stamp = datetime.now(timezone.utc).isoformat()

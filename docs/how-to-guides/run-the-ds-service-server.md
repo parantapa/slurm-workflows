@@ -44,8 +44,8 @@ or the compute node of the driver's own Slurm job.
 If you name an interface that the node does not have,
 or one with no IPv4 address,
 the constructor raises `ValueError`.
-Run `ip -br addr` on that node,
-and name an interface the compute nodes can route to.
+Run `ip -br addr` on that node.
+Then name an interface the compute nodes can route to.
 
 ## If the binary is not on your `PATH`
 
@@ -53,7 +53,7 @@ and name an interface the compute nodes can route to.
 To override that, pass `ds_service_bin`,
 or set the `DS_SERVICE_BIN` environment variable.
 
-To install it, see
+To install the binary, see
 [How to install slurm-workflows on Rivanna](install-on-rivanna.md).
 
 ## Related

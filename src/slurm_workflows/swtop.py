@@ -149,7 +149,7 @@ class TaskInfo:
 class SubjectInfo:
     """The latest reading of one monitored host, or of one job on one node.
 
-    `values` is empty when the subject's series exist but hold nothing recent.
+    `values` is empty when the subject's time series exist but hold nothing recent.
     A dead monitor looks like this.
     """
 
@@ -562,12 +562,12 @@ def _bytes(value: float) -> str:
 
 
 def _subject(info: SubjectInfo) -> str:
-    """The subject's name, marked `(stale)` where its series stopped."""
+    """The subject's name, marked `(stale)` where its time series stopped."""
     return info.subject if not info.stale else f"{info.subject} (stale)"
 
 
 def _cell(values: dict[str, float], name: str, fmt: Callable[[float], str]) -> str:
-    """One measurement, or a dash where the series had nothing recent."""
+    """One measurement, or a dash where the time series had nothing recent."""
     if name not in values:
         return "-"
     return fmt(values[name])
@@ -757,7 +757,7 @@ def render(snapshot: Snapshot) -> str:
 def draw(text: str) -> None:
     """Put `text` on the screen, in place of what was there.
 
-    Append it instead, without escape codes, when stdout is not a terminal.
+    When stdout is not a terminal, append it instead, without escape codes.
     """
     if sys.stdout.isatty():
         # Home, then clear.

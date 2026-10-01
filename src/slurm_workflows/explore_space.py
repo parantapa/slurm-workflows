@@ -137,12 +137,13 @@ class ExploreSpaceSobolQMC:
     The constructor validates every study now, not when the exploration runs,
     and fills in what each study left to the exploration.
     `num_exploration_points` is the count for studies that do not carry their own.
+    `self.studies` holds copies with the point count and seed filled in.
+    The caller's own objects stay as they are.
+
     The constructor raises `ValueError` for an empty list,
     and for a repeated study name.
     It also raises `ValueError` for a study that fails validation,
     such as one with no point count from either source.
-    `self.studies` holds copies with the point count and seed filled in.
-    The caller's own objects stay as they are.
     A method that takes a study name raises `KeyError` for a name no study has.
     """
 
@@ -253,8 +254,10 @@ class ExploreSpaceSobolQMC:
         and appends to the results the first call recorded.
         The exploration names each point `<study>-explore-<index>` on the server.
         It prints each study's best point when it finishes.
+
         If any evaluation fails,
-        it records every result that came back, then raises `RuntimeError`.
+        the exploration records every result that came back,
+        then raises `RuntimeError`.
         Otherwise, if an objective returns a result the exploration cannot rank,
         the exploration raises `RuntimeError` at that result.
         It records only the results before that result in submission order.

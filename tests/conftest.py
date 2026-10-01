@@ -66,7 +66,7 @@ def time_limit() -> Callable[[float, str], AbstractContextManager[None]]:
 
 @pytest.fixture(autouse=True)
 def _hang_guard() -> Generator[None]:
-    """Backstop so no single test can wedge the suite."""
+    """Backstop so no single test can hang the suite."""
 
     with _time_limit(60.0, "test exceeded its 60s time limit"):
         yield
@@ -379,7 +379,8 @@ def fake_slurm(monkeypatch: pytest.MonkeyPatch) -> Generator[FakeSlurm]:
     """Intercept Slurm commands, so a test needs no cluster."""
     fake = FakeSlurm()
     monkeypatch.setattr(slurm_utils, "subprocess", fake)
-    # get_clean_environ is @cache'd. Clear it so each test sees its own env.
+    # `@cache` wraps `get_clean_environ`.
+    # Clear the cache so each test sees its own environment.
     slurm_utils.get_clean_environ.cache_clear()
     yield fake
     slurm_utils.get_clean_environ.cache_clear()

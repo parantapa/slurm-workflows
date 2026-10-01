@@ -37,7 +37,8 @@ def run_sbatch_script(
 
     # Only the shell knows which `srun` runs.
     # See the developer notes, "Slurm interaction".
-    # Only `PATH` is inherited, so the SLURM variables are exactly what a case sets,
+    # The script inherits only `PATH`,
+    # so the SLURM variables are exactly what a case sets,
     # even when the suite itself runs from inside a Slurm job.
     proc = subprocess.run(
         ["bash", str(script_path)],
@@ -191,7 +192,7 @@ class TestLoader:
             render_template(
                 "slurm_pilot:worker_sbatch_script",  # type: ignore[call-overload]
                 is_batch_worker=True,
-                # worker_script_path deliberately omitted
+                # The call omits worker_script_path on purpose.
             )
 
 

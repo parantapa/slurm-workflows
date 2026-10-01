@@ -61,8 +61,8 @@ where a multi-core torch job is not welcome.
 That is why there are two queue arguments and not one,
 `objective_queue` and `optimizer_queue`.
 An evaluation is a cheap single call, `search_parallelism` at a time.
-The fit is a single task that threads across cores
-and grows superlinearly with the number of observations.
+The fit is a single task that runs threads on many cores,
+and its cost grows superlinearly with the number of observations.
 The two want different nodes:
 an evaluation wants many workers,
 and a fit wants a whole node to itself.

@@ -120,9 +120,9 @@ See [The queue it creates](mapreduce.md#the-queue-it-creates).
 The driver enqueues each item with an RPC of its own, before any work starts.
 The whole iterable is held in memory twice,
 once on the driver and once on the server.
-Every value is held twice as well,
-once on the server in the output of its map task,
-and once on the driver in the list the call returns.
+Every value is held twice as well.
+The server holds it in the output of its map task,
+and the driver holds it in the list the call returns.
 `mapreduce` folds the values on the workers,
 and keeps one value on the driver.
 How to size an item against the cost of an RPC

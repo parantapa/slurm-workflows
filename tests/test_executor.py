@@ -369,7 +369,7 @@ class TestDefineWorker:
             python_paths=[Path("/a"), "/b"],
         )
 
-        assert executor.groups["cpu"].python_paths == ["/a", "/b", str(Path.cwd())]
+        assert executor.groups["cpu"].python_paths == [str(Path.cwd()), "/a", "/b"]
 
     def test_cwd_can_be_omitted(self, executor, setup_script):
         executor.define_job_group(
@@ -1160,7 +1160,8 @@ class TestAsCompleted:
         assert counting.output_calls == 6, "output fetched only for finished tasks"
 
     def test_unknown_task_id_raises(self, executor, time_limit):
-        # Without Undefined handling this polls forever instead of raising.
+        # Without the `Undefined` handling,
+        # `as_completed` polls forever instead of raising.
         with time_limit(10, "as_completed never terminated for an unknown task"):
             with pytest.raises(RuntimeError, match="unknown to the task queue server"):
                 list(executor.as_completed([ghost_task()], desc="test"))
@@ -1853,7 +1854,7 @@ class TestLogging:
     def test_records_do_not_reach_the_root_logger(
         self, ds_service_address, fake_slurm, tmp_path, setup_script, caplog
     ):
-        """The work dir is where these belong, not the importer's handlers."""
+        """The records belong in the work dir, not in the importer's handlers."""
         ex = SlurmPilotExecutor(
             "rootlog", ds_service_address, work_dir=tmp_path / "work"
         )

@@ -178,7 +178,7 @@ class Task:
     _parents: list["Task"] = field(default_factory=list, repr=False, compare=False)
 
     # Read-only: the map holds the other copy,
-    # and an assignment would rename the task in this process alone.
+    # so a setter here can rename the task in this process alone.
     @property
     def task_name(self) -> str | None:
         """The name `SlurmPilotExecutor.set_task_name` set, or None."""
@@ -432,19 +432,17 @@ class SlurmPilotExecutor:
         Nothing checks it.
         `is_batch_worker` runs one worker in the batch script itself,
         rather than one per Slurm task under `srun`.
-        `python_paths` go on the front of each worker's `sys.path`.
-        `add_cwd_to_python_path` adds the driver's current directory
-        as it is at this call.
-        Each path goes in at index 0 in turn,
-        so the driver's directory comes first,
-        then `python_paths` in reverse order.
+        `python_paths` go on the front of each worker's `sys.path`, in order.
+        `add_cwd_to_python_path` puts the driver's current directory
+        as it is at this call ahead of them.
         """
+        # In the order the worker puts them on `sys.path`.
         python_str_paths: list[str] = []
+        if add_cwd_to_python_path:
+            python_str_paths.append(str(Path.cwd()))
         if python_paths is not None:
             for path in python_paths:
                 python_str_paths.append(str(path))
-        if add_cwd_to_python_path:
-            python_str_paths.append(str(Path.cwd()))
 
         if actor_class_name is None:
             if actor_class_args is not None or actor_class_kwargs is not None:
@@ -823,12 +821,12 @@ class SlurmPilotExecutor:
 
         `task_parents` are the tasks this one waits on.
         The server dispatches it only after every parent finishes.
-        A parent that fails fails this task too,
-        and a parent that is canceled cancels it.
+        If a parent fails, this task fails too.
+        If a parent is canceled, this task is canceled too.
         The call raises `KeyError` for a parent the server does not know.
 
         The server dispatches the highest `task_priority` first,
-        and tasks of equal priority on one queue oldest first.
+        and it dispatches tasks of equal priority on one queue oldest first.
         A priority taken from a rising clock therefore serves the newest task first.
         `fn` cannot take keyword arguments
         named `task_parents` or `task_priority`,
@@ -1465,7 +1463,7 @@ class SlurmPilotExecutor:
 
     def _cleanup_all_workers(self) -> None:
         """Cancel every live pilot job, and report a failure rather than raise it."""
-        # `close()` still has to close the client and the log after a failure here,
+        # `close()` must still close the client and the log after a failure here,
         # so this method reports each failure and drops it.
         try:
             job_ids = get_running_jobids()

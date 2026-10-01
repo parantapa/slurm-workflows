@@ -960,7 +960,7 @@ class TestOptimizerQueue:
     def test_a_result_missing_only_the_timings_is_reported_too(
         self, tmp_path, monkeypatch
     ):
-        """Every key the driver goes on to read, not just the candidates."""
+        """Every key the driver goes on to read, not only the candidates."""
         monkeypatch.setattr(
             osb,
             "fit_and_propose",
@@ -1752,8 +1752,8 @@ class TestRealExecutor:
         explore, rounds, parallel = 4, 2, 2
         # The exploration's points,
         # then per round one fit-and-propose task on top of the evaluations.
-        # Both kinds go to the one queue this worker serves,
-        # which is also what pins that a real worker can run the fit at all.
+        # Both kinds go to the one queue this worker serves.
+        # This single queue also pins that a real worker can run the fit at all.
         total = explore + rounds * (parallel + 1)
 
         worker = make_worker(ds_service_address, tmp_path / "worker", group="cpu")

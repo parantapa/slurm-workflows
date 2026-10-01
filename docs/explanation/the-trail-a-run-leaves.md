@@ -90,8 +90,8 @@ That is what makes them cacheable.
 `swtop` reads each worker's fields once and never again.
 On a large pool that is the difference between one read per poll
 and four hundred reads per poll.
-The map is in memory and dies with the server,
-which is the only cleanup there is.
+The server holds these keys in memory, and they die with the server.
+That is the only cleanup there is.
 
 ## Why a wait publishes its progress instead of drawing it
 
@@ -153,7 +153,7 @@ Keyed on the job id alone,
 the counter is already past 1 when the new workers ask.
 As a result, the job has no sampler after its first restart.
 
-Nothing hands a subject back when that worker dies,
+Nothing hands a subject back when the worker that samples it dies,
 until a restart of its job group holds a new election.
 The series stops,
 and a reader that sees no point in the last minute
@@ -187,7 +187,7 @@ and one that is briefly away.
 `swtop` can only show what an RPC can answer.
 The server can count tasks by state and enumerate task ids,
 but nothing enumerates workers, hosts or jobs.
-`swtop` therefore builds those blocks by searching the map
+`swtop` therefore builds those blocks from a search
 for the keys the workers and monitors publish.
 `swtop` cannot list a worker that never published its identity.
 That is a property of the server, not a gap to work around.

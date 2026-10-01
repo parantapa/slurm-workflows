@@ -36,7 +36,7 @@ conda activate slurm-workflows
 pip install -U slurm-workflows
 ```
 
-If you will run a Bayesian search,
+If you run a Bayesian search,
 install the `botorch` extra instead:
 
 ```sh

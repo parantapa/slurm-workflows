@@ -32,7 +32,7 @@ In [step 3](../how-to-guides/install-on-rivanna.md#3-install-slurm-workflows) of
 install the `botorch` extra.
 Unlike the two pi tutorials, this one needs botorch in two places:
 
-- On the login node, which imports the optimizer.
+- On the login node, where the driver imports the optimizer.
 - In the environment of the workers that run the model fit.
 
 The `botorch` extra covers both.
@@ -55,7 +55,7 @@ python examples/example_optimize_himmelblau.py
 ```
 
 The program does not print the server address `swtop` needs.
-The executor prints its work directory when it starts.
+The executor prints its work dir when it starts.
 The line looks something like this:
 
 ```text
@@ -85,7 +85,7 @@ So [`swtop`](../how-to-guides/watch-a-run-with-swtop.md)
 shows `himmelblau-explore-00` through `himmelblau-search-<round>-<index>`
 as the run works through them.
 Each search round also runs one `himmelblau-fit-<round>` task,
-which fits the model and proposes that round's points.
+which fits the model and proposes that round's candidates.
 
 The run takes a while.
 The rest of this tutorial reads the program while it works.
@@ -110,9 +110,9 @@ because the model needs something to fit before it can choose anything:
 The second phase then runs in rounds.
 Each round has three steps:
 
-1. Fit a model to everything measured so far.
-2. Propose a whole batch of points.
-3. Evaluate that batch across the `eval` pool.
+1. The optimizer fits a model to everything measured so far.
+2. The optimizer proposes a whole batch of points.
+3. The `eval` pool evaluates that batch.
 
 The next round fits the model again.
 [Batch Bayesian optimization](../explanation/batch-bayesian-optimization.md)
@@ -336,7 +336,7 @@ The optimizer never explores.
 We hand it the results files, and it models what is in them.
 So the study's `name` must be the name the exploration ran under.
 
-The two queue arguments after it are the `eval` and `opt` job groups
+The two queue arguments, `"eval"` and `"opt"`, name the job groups
 we defined above.
 `SEARCH_PARALLELISM` is the batch size, matched to the `eval` pool.
 Here it is exactly `NUM_NODES * NTASKS_PER_NODE`, so 80.

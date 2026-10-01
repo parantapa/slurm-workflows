@@ -38,8 +38,8 @@ swtop 10.0.0.1:5051 --plain  # frames of text, no UI
 
 The terminal UI runs until `q` quits it.
 The text frames run until Ctrl-C interrupts them.
-It needs nothing extra on the cluster side.
-The executor and the workers publish what it reads as they go.
+`swtop` needs nothing extra on the cluster side.
+The executor and the workers publish what `swtop` reads as they go.
 
 ## What the screen shows
 
@@ -81,7 +81,7 @@ The blocks come from different places:
     A `swtop` started more than a minute after the wait ended
     shows it at 0 and `working`.
     A driver that never waits leaves nothing here.
-- **Task counts** are a single RPC, so they always cover every task.
+- **Task counts** come from a single RPC, so they always cover every task.
     A server belongs to one executor,
     so every task on it is a task of the run `swtop` watches.
 - **Pilot jobs** are the ones the executor submitted
@@ -97,10 +97,10 @@ The blocks come from different places:
 - **Workers** are the ones that registered themselves
     and did not exit yet.
     Each worker registers when it starts.
-    A started job in the pilot jobs block with no worker against it
-    is still inside its setup script,
-    has workers that start again after a restart,
-    or has workers that cannot reach the server.
+    A started job in the pilot jobs block can show no worker against it.
+    Such a job is still inside its setup script,
+    its workers start again after a restart,
+    or its workers cannot reach the server.
     One job usually holds many workers, one per Slurm task,
     so the two counts differ by design.
 - **Hosts and Slurm jobs** are what the monitors sample every 5 seconds:
@@ -214,7 +214,7 @@ and leave their item tasks unnamed.
 
 ## What the hosts and jobs blocks measure
 
-These need nothing extra.
+The hosts and jobs blocks need nothing extra.
 The workers sample the nodes and jobs themselves
 and publish the readings:
 see [What a run publishes](what-a-run-publishes.md).
@@ -225,23 +225,23 @@ The two blocks show these columns:
 | --- | --- |
 | `HOST` | The node the reading comes from |
 | `FREE MEM` | Memory available on the node, including the cache the kernel can reclaim |
-| `LOAD` | The node's 1 minute load average, over all its cores |
+| `LOAD` | The node's 1-minute load average, over all its cores |
 | `/dev/shm`, `/tmp` | How full each node-local scratch filesystem is |
 | `JOB` | The Slurm job the reading comes from |
 | `MEMORY` | The job's cgroup total on that node: every process and thread of the job, not only the workers. Where the cgroup files cannot be read, it is the summed RSS of the processes in the job's cgroup. Where even that list cannot be read, it covers only the sampling worker and its children. |
 | `CPU` | Cores the job used on that node, averaged since the previous sample |
 
 `LOAD` reads against the node's core count.
-`bii` has 40 cores,
+A node of the `bii` partition has 40 cores,
 so 39.80 is a full node and 80 is oversubscribed twice over.
 
 The slurm jobs block has one row for each node of each job.
 A job on 4 nodes shows 4 rows,
 and its total is the sum of their `MEMORY` or `CPU`.
 `CPU` reads against what the job asked for on each node,
-so `--ntasks-per-node=40 --cpus-per-task=1` sits near 40 on every row.
+so a job with `--ntasks-per-node=40 --cpus-per-task=1` sits near 40 on every row.
 The first reading of a job is 0,
-since the monitor has no earlier sample to difference against.
+since the monitor has no earlier sample to subtract from it.
 
 A `/tmp` that climbs toward 100% takes the whole node down with it,
 not only the job that filled it.
@@ -259,7 +259,8 @@ since the new workers hold a new election.
 
 A single `-` on an otherwise live row
 is one series with nothing recent in it.
-This `-` is what a node without that path looks like.
+A node without the path of a `/dev/shm` or `/tmp` column
+also shows `-` in that column.
 A path that is not a mount point of its own
 shows the filesystem that holds it.
 
@@ -289,7 +290,7 @@ To do that, see
 | `BLOCKS` | In `slurm_workflows.swtop`: one `BlockSpec` for each block, in screen order. Its `key` is `pilot-jobs`, `workers`, `hosts`, `jobs` or `tasks`. |
 | `DEFAULT_TASK_STATES` | In `slurm_workflows.swtop`: the states a `TaskTable` shows at start, `Waiting`, `Ready` and `Running`. |
 
-`SnapshotPoller` takes exactly one of these:
+`SnapshotPoller` takes exactly one of these two arguments:
 
 - `address`: the poller opens a client of its own when it mounts,
   and closes it when it unmounts.

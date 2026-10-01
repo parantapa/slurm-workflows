@@ -1,4 +1,4 @@
-"""The `swtop` widgets, for `swtop` and for any Textual app that embeds it."""
+"""The `swtop` widgets, for `swtop` and for any Textual app that embeds them."""
 
 from __future__ import annotations
 
@@ -358,7 +358,7 @@ class BlockPane(TabPane):
 
     def on_block_table_count_changed(self, event: BlockTable.CountChanged) -> None:
         # A `TabPane` has no way to change its own label in Textual 8.2,
-        # so ask the `TabbedContent` it sits in for its tab.
+        # so this pane asks the `TabbedContent` it sits in for its tab.
         try:
             tabs = self.query_ancestor(TabbedContent)
         except NoMatches:

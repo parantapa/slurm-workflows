@@ -33,7 +33,7 @@ else
 
     set -x
     # One file for each Slurm task,
-    # so the tasks do not interleave into the one batch output file.
+    # so the Slurm tasks do not interleave into the one batch output file.
     srun --output '{{ work_dir }}/{{ name }}-%j-%t.out' /bin/bash '{{ worker_script_path }}'
 fi
 {% endif %}

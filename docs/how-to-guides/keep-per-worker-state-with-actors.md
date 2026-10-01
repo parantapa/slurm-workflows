@@ -6,8 +6,8 @@ Some tasks load something expensive before they do any work:
 a model, a database connection or a large table.
 A load that runs once per task wastes most of the run.
 Register an **actor class** instead.
-Each worker creates it once at startup,
-and you submit **method names** (as strings) instead of functions.
+Each worker creates it once at startup.
+You submit **method names** (as strings) instead of functions.
 
 ## Write the actor class
 
@@ -37,9 +37,9 @@ For when `close()` runs, see
 [`define_job_group` options](../reference/executor.md#define_job_group-options).
 
 The class must be importable on the compute node.
-By default, each worker adds the driver's current working directory,
-as it is when you call `define_job_group`,
+By default, each worker adds the driver's current working directory
 to its own `sys.path`.
+That directory is the one that is current when you call `define_job_group`.
 Add more paths with `python_paths=[...]`.
 
 ## Name the class when you define the job group

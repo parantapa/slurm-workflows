@@ -178,11 +178,11 @@ because a round never has both kinds pending at once.
 
 botorch must be importable on the driver
 and in the `optimizer_queue` workers' environment.
-Where a compute node does not import it with no setup,
+Where botorch does not import on a compute node without extra setup,
 the `setup_script` of the job group that serves `optimizer_queue`
 activates that environment.
 Workers that serve only `objective_queue` need neither botorch nor torch.
-A fit that fails to import it raises on the driver and names the queue.
+A fit that fails to import botorch raises on the driver and names the queue.
 The traceback is in a worker log under `executor.work_dir`.
 
 ## Related

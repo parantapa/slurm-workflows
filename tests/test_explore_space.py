@@ -106,7 +106,7 @@ class LocalExecutor:
         self.batch_sizes.append(len(tasks))
         # The exploration always waits with `RAISE_AFTER_COMPLETED`,
         # and every callable already ran in `submit`,
-        # so raising on any failure is that policy here.
+        # so here that policy means a raise on any failure.
         failed = [t for t in tasks if isinstance(t.output, RemoteExecutionError)]
         if failed:
             raise RuntimeError(f"{len(failed)} of {len(tasks)} tasks did not succeed")
