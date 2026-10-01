@@ -11,6 +11,10 @@ and makes each item pay a task's overhead.
 `mapreduce` hands out the items and folds them on the worker that mapped them,
 so each map task brings back one partial result.
 
+If you need one value per item instead,
+in the order of the items,
+see [Keep every value with `map`](#keep-every-value-with-map).
+
 ## Write a function that maps one item
 
 The function runs on a worker, once per item, and returns a value to fold:
@@ -73,6 +77,8 @@ map_fn=lambda path: [summarize(path)], reduce_fn=add, init=[]
 
 Concatenation is not commutative.
 The list holds every value, but in no fixed order.
+To get the values in the order of the items, use `map` instead.
+See [Keep every value with `map`](#keep-every-value-with-map).
 
 An append in place of a concatenation looks equivalent, and is not.
 `acc + [partial]` puts a whole partial result inside the answer.
@@ -95,6 +101,32 @@ This happens because each map task resolves the name against the actor
 that its worker built at startup.
 For the rules, and for what a job group without an actor raises, see
 [Mapping with an actor's method](../reference/mapreduce.md#mapping-with-an-actors-method).
+
+## Keep every value with `map`
+
+When you need one value per item, and not one folded value,
+call `map` in place of `mapreduce`.
+It takes the same arguments,
+less `reduce_fn`, `init` and the two `reduce_extra_*` arguments,
+and it returns a list in the order of the items:
+
+```python
+summaries = executor.map(
+    desc="summarizing",
+    queue="cpu",
+    map_fn=summarize,
+    iterable=paths,
+    num_tasks=40,
+)
+```
+
+`map` hands out the items the same way,
+so the sections on an actor's method, on `num_tasks`
+and on chunking apply to it as well.
+The difference is memory:
+the driver holds every value at the end of the call.
+For a count or a total, `mapreduce` keeps that list off the driver.
+For the details, see [`map`](../reference/map.md).
 
 ## Set `num_tasks` by the pool, not by the item count
 
@@ -125,8 +157,13 @@ chunks = [paths[i : i + 50] for i in range(0, len(paths), 50)]
 Then map over `chunks` rather than over `paths`.
 The fold is unchanged, because the chunk's count folds like a file's count.
 
+With `map`, each value is then the result of one chunk.
+To get one value per item,
+have the chunk function return a list, and flatten the result.
+
 ## Related
 
 - [`mapreduce`](../reference/mapreduce.md)
+- [`map`](../reference/map.md)
 - [How to keep per-worker state with actors](keep-per-worker-state-with-actors.md)
 - [How to watch a run with `swtop`](watch-a-run-with-swtop.md)

@@ -42,3 +42,10 @@ not the continuous candidate.
 
 What that rounding costs a search on a mostly discrete space
 is in [Batch Bayesian optimization](../explanation/batch-bayesian-optimization.md).
+
+## Related
+
+- [The objective](objective.md)
+- [`ExploreSpaceSobolQMC`](explore-space.md)
+- [`OptimizeSpaceBotorch`](optimize-space.md)
+- [Batch Bayesian optimization](../explanation/batch-bayesian-optimization.md)

@@ -108,7 +108,6 @@ def poll_worker(worker: PilotWorker, polls: int) -> int:
     Use it for the empty-queue case, where `run_worker` never stops.
     The count tells a loop that gave up early from one that kept polling.
     """
-    # See docs/how-to-run-tests.md, "Notes for future changes".
     client = _IdlingClient(worker.client, polls)
     worker.client = cast(DsServiceClient, client)
     try:

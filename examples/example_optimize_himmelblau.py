@@ -66,7 +66,7 @@ KNOWN_MINIMA = [
 
 
 def himmelblau(x: float, y: float) -> dict[str, float]:
-    """The objective that the search minimizes over SEARCH_SPACE."""
+    """Evaluate Himmelblau's function at (`x`, `y`), under the `"objective"` key."""
     value = (x * x + y - 11.0) ** 2 + (x + y * y - 7.0) ** 2
     return {"objective": value, "distance_from_origin": math.hypot(x, y)}
 

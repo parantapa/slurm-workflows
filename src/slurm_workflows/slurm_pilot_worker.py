@@ -38,7 +38,9 @@ WORKER_INFO_PREFIX = "worker_info:"
 
 # One JSON key per worker that exited, keyed on its worker id,
 # and one per pilot job that started and that exited, keyed on its job name.
-# Each is written once, so `swtop` reads it once.
+# Each is written once.
+# `swtop` reads a start key once and caches it,
+# and finds the exit keys with one key search per prefix on each poll.
 # `docs/reference/what-a-run-publishes.md` lists the fields.
 WORKER_EXIT_PREFIX = "worker_exit:"
 PILOT_JOB_START_PREFIX = "pilot_job_start:"
@@ -56,12 +58,10 @@ RESTART_GENERATION_PREFIX = "restart_generation:"
 RESTART_EXIT_CODE = 75
 
 # How often an idle worker reads the restart counter.
-# A worker that just finished a task reads it at once,
-# and so does a worker about to claim its first task.
-# The limit bounds what idle workers cost the server.
-# An idle worker asks for a task every `NEXT_TASK_RETRY_TIME_S`.
-# A counter read on each of those polls doubles the load of idle workers.
-# A read once a second adds a tenth.
+# An idle worker asks for a task every `NEXT_TASK_RETRY_TIME_S`,
+# so a read on each of those polls doubles the load of idle workers,
+# and a read once a second adds a tenth.
+# See the developer notes, Restarting workers.
 RESTART_CHECK_INTERVAL_S: float = 1.0
 
 # The actor of the worker that runs in this process, or None.
@@ -190,7 +190,7 @@ class PilotWorker:
             raise
 
         # For a task that dispatches a method name of its own,
-        # such as the one `mapreduce` submits.
+        # such as the ones `mapreduce` and `map` submit.
         _set_current_actor(self.actor_instance)
 
     def _build_actor(self, actor_class_name: str) -> Any | None:

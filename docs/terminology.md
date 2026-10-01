@@ -132,7 +132,7 @@ and leave `bii` to `--partition`.
 | **parent task** | A task another task waits on, given to `submit` as `task_parents`. The server dispatches a task only after every parent finishes. | `ds-service` (`parent_task_ids`) | predecessor, upstream task, prerequisite |
 | **Slurm task** | A process in a job step, what `--ntasks` counts. Always qualified. | Slurm | bare "task", rank, process |
 | **task rank** | The index of a Slurm task within its job, `%t` in an output pattern. | Slurm | bare "task", task number, task slot |
-| **queue** | A named `ds-service` queue. Equal to a job group name, except for the mapreduce item queue. | `ds-service` | channel, topic, the server, partition |
+| **queue** | A named `ds-service` queue. Equal to a job group name, except for an item queue. | `ds-service` | channel, topic, the server, partition |
 | **submit** | What the executor does with a task, and what `sbatch` does with a pilot job. Always name the object. | both | push, post, launch a task |
 | **enqueue** | What `task_add` does to a task on each of its queues. | `ds-service` | add, register, queue up |
 | **claim** | What a worker does to a task through `task_get`. | `ds-service` | pull, take, fetch, grab |
@@ -140,18 +140,18 @@ and leave `bii` to `--partition`.
 | **setup script** | The shell text inlined into the generated worker script. | this library | env script, prologue, bootstrap |
 | **work dir** | The executor's directory of scripts and logs. | `work_dir` | run directory, output directory |
 
-### Mapreduce
+### Mapreduce and map
 
-One `mapreduce` call has two kinds of task and one kind of item.
+One `mapreduce` or `map` call has two kinds of task and one kind of item.
 Name all three.
 
 | Term | What it names | Do not use |
 | --- | --- | --- |
 | **item** | One element of `iterable`. | task, unit, record |
 | **item task** | The task that carries one item, `<queue>.item.<i>`. It holds no function. | item alone, mapreduce task |
-| **item queue** | `<executor-name>.mapreduce.<n>.<token>`. No job group serves it. | mapreduce queue, the private queue |
-| **map task** | The task that claims item tasks and folds them, with the task name `<item-queue>.task.<i>`. | mapreduce task, folding task, worker task |
-| **partial result** | What one map task returns. | partial, shard, chunk result |
+| **item queue** | `<executor-name>.mapreduce.<n>.<token>`, or `<executor-name>.map.<n>.<token>` for `map`. No job group serves it. | mapreduce queue, the private queue |
+| **map task** | The task that claims item tasks and maps them, with the task name `<item-queue>.task.<i>`. Under `mapreduce` it also folds them. | mapreduce task, folding task, worker task |
+| **partial result** | What one map task of `mapreduce` returns. | partial, shard, chunk result |
 | **chunk** | Several items batched into one item, to amortize the round trip. | group, batch, block |
 | **fold** | Applying `reduce_fn`. One verb for the worker-side and the driver-side fold alike. | reduce, accumulate, combine |
 

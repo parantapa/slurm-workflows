@@ -9,6 +9,7 @@ import os
 import sys
 import signal
 import subprocess
+import threading
 from pathlib import Path
 from types import FrameType, SimpleNamespace
 from typing import Any, Callable, Generator, Iterator, NoReturn
@@ -422,3 +423,55 @@ def pilot_jobs(executor: SlurmPilotExecutor) -> Callable[..., None]:
 def setup_script() -> str:
     """A setup script body, as define_job_group expects."""
     return "module load gcc/14.2.0\nexport TEST_SETUP=1\n"
+
+
+# --------------------------------------------------------------------------
+# Map tasks and in-process workers
+# --------------------------------------------------------------------------
+
+
+# See the developer notes, "A map task builds a client of its own".
+@pytest.fixture
+def map_task_env(monkeypatch: pytest.MonkeyPatch, ds_service_address: str) -> None:
+    """What a worker puts in the environment, for a task driven without one."""
+    monkeypatch.setenv("DS_SERVER_ADDRESS", ds_service_address)
+    monkeypatch.setenv("PILOT_WORKER_ID", "test-worker.42.testhost.4242")
+
+
+# Why a real worker runs in a thread:
+# see docs/how-to-run-tests.md, "Notes for future changes".
+@pytest.fixture
+def worker_thread(
+    ds_service_address: str, tmp_path: Path
+) -> Generator[Callable[..., None]]:
+    """Run a real worker in a thread until it completes `expect_tasks`."""
+    from worker_harness import make_worker, run_worker
+
+    started: list[tuple] = []
+
+    def start(
+        expect_tasks: int,
+        group: str = "cpu",
+        name: str = "worker-0",
+        actor_class_name: str = "",
+    ) -> None:
+        worker = make_worker(
+            ds_service_address,
+            tmp_path / name,
+            group=group,
+            name=name,
+            actor_class_name=actor_class_name,
+        )
+        thread = threading.Thread(
+            target=run_worker, args=(worker, expect_tasks), daemon=True
+        )
+        thread.start()
+        started.append((worker, thread))
+
+    yield start
+
+    for worker, thread in started:
+        # Well inside the 60 s alarm on every test,
+        # so a stuck worker fails here, not at the alarm.
+        thread.join(timeout=30)
+        worker.close()

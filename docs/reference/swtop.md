@@ -209,8 +209,8 @@ The two kinds of task in a search round get
 `<study>-fit-<round>` and `<study>-search-<round>-<index>`.
 They zero pad the index to the width of the batch,
 so the names sort in submission order.
-[`mapreduce`](mapreduce.md) names each map task `<item-queue>.task.<i>`,
-and leaves its item tasks unnamed.
+[`mapreduce`](mapreduce.md) and [`map`](map.md) name each map task `<item-queue>.task.<i>`,
+and leave their item tasks unnamed.
 
 ## What the hosts and jobs blocks measure
 
@@ -228,7 +228,7 @@ The two blocks show these columns:
 | `LOAD` | The node's 1 minute load average, over all its cores |
 | `/dev/shm`, `/tmp` | How full each node-local scratch filesystem is |
 | `JOB` | The Slurm job the reading comes from |
-| `MEMORY` | The job's cgroup total on that node: every process and thread of the job, not only the workers. Where the cgroup files cannot be read, it is the summed RSS of the job's processes instead. |
+| `MEMORY` | The job's cgroup total on that node: every process and thread of the job, not only the workers. Where the cgroup files cannot be read, it is the summed RSS of the processes in the job's cgroup. Where even that list cannot be read, it covers only the sampling worker and its children. |
 | `CPU` | Cores the job used on that node, averaged since the previous sample |
 
 `LOAD` reads against the node's core count.
@@ -329,3 +329,10 @@ The app that lays them out picks the other keys and every other id.
 For example, it picks a key for each tab and a key for `poll_now`.
 Each widget carries its own styles,
 so it needs no CSS from the app.
+
+## Related
+
+- [How to watch a run with `swtop`](../how-to-guides/watch-a-run-with-swtop.md)
+- [How to embed `swtop` in a Textual app](../how-to-guides/embed-swtop-in-a-textual-app.md)
+- [What a run publishes](what-a-run-publishes.md)
+- [The trail a run leaves](../explanation/the-trail-a-run-leaves.md)

@@ -66,11 +66,11 @@ submit it to this same job group.
 The worker reads a string as a method name, and a callable as itself.
 So a job group with an actor serves ordinary tasks as well.
 
-## If you want `mapreduce` to map with the actor
+## If you want `mapreduce` or `map` to map with the actor
 
-Give `mapreduce` a method name for its `map_fn`.
+Give `mapreduce` or `map` a method name for its `map_fn`.
 The map then runs against the actor, not against a shipped function.
-`reduce_fn` stays a callable, because that fold also runs on the driver.
+For `mapreduce`, `reduce_fn` stays a callable, because that fold also runs on the driver.
 For the rest, see
 [How to fold results across workers](fold-results-across-workers.md).
 

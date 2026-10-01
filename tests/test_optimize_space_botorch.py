@@ -114,8 +114,7 @@ class LocalExecutor:
         self.waits.append(desc)
         self.batch_sizes.append(len(tasks))
 
-        # The callables ran in `submit`, so only the raise policy is left.
-        # The optimizer relies on it to turn a failed evaluation into an exception.
+        # The optimizer relies on this to turn a failed evaluation into an exception.
         if raise_on_error is RaiseOnError.RAISE_NEVER:
             return
 
@@ -218,15 +217,15 @@ def make_study(
         "min_search_rounds": rounds,
         "max_search_rounds": rounds,
     }
+    # `extra` mixes study settings with objective arguments.
+    # The names listed here go to the study,
+    # and everything else reaches the objective.
     for field in (
         "min_search_rounds",
         "max_search_rounds",
         "patience",
         "min_improvement",
         "objective_key",
-        # The acquisition knobs travel the same way.
-        # This list names them,
-        # so they reach the optimizer instead of the objective.
         "num_restarts",
         "raw_samples",
         "mc_samples",
@@ -1409,10 +1408,6 @@ class TestSaveAndResume:
 
 class TestTaskNames:
     """Every task name carries its study, its kind and its round."""
-
-    # The round is in every name because the batches look alike:
-    # a queue full of evaluations otherwise says nothing
-    # about where the search stands.
 
     def test_the_fit_is_named_after_the_round_it_belongs_to(self, tmp_path):
         opt, executor = make_opt(tmp_path, rounds=2)

@@ -147,6 +147,10 @@ which is what `submit` and `wait` are for.
 ## Related
 
 - [`SlurmPilotExecutor`](../reference/executor.md)
+- [`ExploreSpaceSobolQMC`](../reference/explore-space.md)
+- [`OptimizeSpaceBotorch`](../reference/optimize-space.md)
+- [Batch Bayesian optimization](batch-bayesian-optimization.md),
+    for why a search runs in rounds
 - [Terminology](../terminology.md),
     for the word this project uses for each thing
 - [The trail a run leaves](the-trail-a-run-leaves.md),

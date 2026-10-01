@@ -109,6 +109,9 @@ The executor does not check the queue name at `submit` time.
 The same error follows `scale_jobs(name, 0)` or `stop()`,
 because the executor then holds no pilot job for the job group.
 Scale the job group back up before you wait.
+`mapreduce` and `map` refuse the same case before they submit anything,
+with `RuntimeError: mapreduce targets queues with no worker started`
+or `RuntimeError: map targets queues with no worker started`.
 
 ## `RuntimeError: ... tasks are on, or wait on tasks on, queues with no live pilot job`
 
@@ -119,7 +122,12 @@ or an exit before the queue drained.
 The worker's `.out` file says which.
 Scale the job group down to 0, then back up.
 Then wait on the same tasks again.
-The server still holds them, and the new pilot jobs run them.
+The server still holds the tasks that were waiting or ready,
+and the new pilot jobs run them.
+A task that was running when its pilot job left stays `Running` on the server,
+because no worker can claim it again.
+Submit such a task again,
+and wait on the new `Task` in place of the old one.
 A call with the old count submits nothing,
 because `scale_jobs` counts every pilot job it submitted,
 the ones that left the cluster included.
@@ -184,9 +192,8 @@ Three causes leave the workers block empty
 while the pilot jobs block holds entries.
 The pilot jobs are still pending, their setup scripts did not finish,
 or their workers cannot reach the server.
-A pilot job shows `-` under `STARTED` while it is still pending.
-The pilot job also shows `-`
-until its batch script finishes its first run of the setup script.
+What `STARTED` shows in each of the first two cases is in
+[Where each block comes from](../reference/swtop.md#where-each-block-comes-from).
 For workers that cannot reach the server, see
 [Tasks never complete, but the pilot jobs run](#tasks-never-complete-but-the-pilot-jobs-run).
 

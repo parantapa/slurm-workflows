@@ -57,7 +57,7 @@ The exploration study's fields, minus the design ones, plus the search:
 | `optimizer_queue` | | Queue the model fit and the propose step run on, one task per round. |
 | `search_parallelism` | | Points evaluated per round. Optional if the search carries a default. |
 | `min_search_rounds` | `5` | Rounds that always run. |
-| `max_search_rounds` | `30` | Hard ceiling on rounds. The search runs at least one round, even at `0`. |
+| `max_search_rounds` | `30` | Hard ceiling on rounds. It must be at least `min_search_rounds`, or construction raises `ValueError`. The search runs at least one round, even at `0`. |
 | `patience` | `3` | Consecutive rounds without improvement that end the search. |
 | `min_improvement` | `0.05` | Fraction a round must beat the incumbent by to count as improving. |
 | `objective_key` | `"objective"` | Which entry of the result is minimized. |

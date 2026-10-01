@@ -139,13 +139,26 @@ python examples/example_compute_pi_qmc.py
 
 The program does not print the server address.
 The executor prints its work directory when it starts.
-In that directory, the worker script `compute-pi-qmc.job.bii.0.sh`
-carries the address after `--server-address`.
+The line looks something like this:
+
+```text
+work directory: '/home/<user>/.cache/slurm-workflows/compute-pi-qmc/2026-10-01T09:30:00.123456'
+```
 
 We open a second shell on the login node.
-There we point [`swtop`](../how-to-guides/watch-a-run-with-swtop.md)
-at that address.
-Here it is `10.0.0.1:5051`:
+There we read the server address
+from the worker script `compute-pi-qmc.job.bii.0.sh` in that directory:
+
+```sh
+grep -- --server-address '<work directory>/compute-pi-qmc.job.bii.0.sh'
+```
+
+```text
+        --server-address '10.0.0.1:5051' \
+```
+
+We point [`swtop`](../how-to-guides/watch-a-run-with-swtop.md)
+at that address:
 
 ```sh
 swtop 10.0.0.1:5051
@@ -163,6 +176,9 @@ Behind that count, these steps happen, in order:
 * The exploration names the tasks `compute-pi-qmc-explore-0000` and up,
     so each point is recognizable in the tasks block.
 * `run` blocks until every task is back.
+* `run` then prints the study's best point.
+    The best point has the lowest score,
+    so here it is a point outside the circle.
 * `save` writes the points, the objective values and the whole mappings to a file.
 * The executor cancels the pilot job at the end of its block.
 * The driver averages the objective values.

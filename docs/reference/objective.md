@@ -35,6 +35,24 @@ but the search must not vary.
 It must not shadow a key of `space`.
 A shadowed key raises `ValueError` at construction.
 
+For a `space` with the keys `x` and `y`,
+an `extra_objective_kwargs` of `{"scale": 2.0}`
+and the default `objective_key` of `"objective"`,
+this objective meets the contract:
+
+```python
+import time
+
+
+def objective(x: float, y: int, scale: float) -> dict[str, float]:
+    start = time.monotonic()
+    value = scale * (x - 1.0) ** 2 + y
+    return {"objective": value, "runtime": time.monotonic() - start}
+```
+
+Both classes rank or model the `"objective"` entry,
+and record `runtime` beside it.
+
 ## Failures
 
 Both classes block until every pending point comes back.
@@ -47,7 +65,8 @@ rather than feed a `RemoteExecutionError` into a model.
 One bad evaluation therefore does not hide the rest of its batch.
 Both classes record what did come back before they raise the exception.
 `save()` therefore still holds the good points,
-and an `OptimizeSpaceBotorch` run can start from them.
+and an `OptimizeSpaceBotorch` run can start from them
+(see [How to resume a search](../how-to-guides/resume-a-search.md)).
 
 This holds for an objective that raises.
 In a batch where no objective raised,
@@ -65,3 +84,4 @@ and raises for the failed batch.
 - [Search spaces](search-space.md)
 - [`ExploreSpaceSobolQMC`](explore-space.md)
 - [`OptimizeSpaceBotorch`](optimize-space.md)
+- [How to resume a search](../how-to-guides/resume-a-search.md)

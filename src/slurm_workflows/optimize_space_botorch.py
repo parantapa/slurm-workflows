@@ -180,6 +180,7 @@ def fit_and_propose(
     dim = train_x.shape[-1]
     bounds = torch.stack([torch.zeros(dim, dtype=DTYPE), torch.ones(dim, dtype=DTYPE)])
 
+    # `train_x` here is `X_baseline`: this round's points, never a stale copy.
     acqf = qLogNoisyExpectedImprovement(
         model,
         train_x,
@@ -640,6 +641,9 @@ class OptimizeSpaceBotorch:
                     **params,
                     **study.extra_objective_kwargs,
                 )
+                # The round is in every name because the batches look alike.
+                # Without it, a queue of evaluations says nothing
+                # about where the search stands.
                 self.executor.set_task_name(
                     submission, f"{study.name}-search-{round_number}-{i:0{width}d}"
                 )

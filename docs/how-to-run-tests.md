@@ -18,9 +18,8 @@ pytest tests/test_templates.py::TestParseFile::test_a_body_is_stripped
 ```
 
 The suite needs no Slurm cluster.
-The suite takes about 55s end to end.
-Everything but the botorch tests takes about 20s,
-and GP fits take the rest.
+The suite takes about a minute end to end,
+and the botorch tests take about half of it.
 Most tests start a `ds-service` process of their own,
 and a test against the real server pays for that start.
 
@@ -78,6 +77,7 @@ Paths are relative to [`tests/`](../tests).
 | `test_slurm_utils.py` | `sbatch`/`squeue`/`scancel` wrappers, `get_clean_environ` |
 | `test_executor.py` | `SlurmPilotExecutor`: job groups, scaling, submit/poll, lifecycle |
 | `test_mapreduce.py` | `SlurmPilotExecutor.mapreduce`: item and map tasks, the fold, and the item queue |
+| `test_map.py` | `SlurmPilotExecutor.map`: item and map tasks, the order of the values, and the item queue |
 | `test_worker.py` | `PilotWorker` and the `slurm-pilot-worker` CLI |
 | `test_monitors.py` | The host, cgroup and GPU samplers and the monitor threads |
 | `test_swtop.py` | The `swtop` collector: what it collects, how it renders as text, and the CLI |
@@ -86,9 +86,10 @@ Paths are relative to [`tests/`](../tests).
 | `test_explore_space.py` | `ExploreSpaceSobolQMC`: the design it draws and what it records (no botorch needed) |
 | `test_utils.py` | The shared helpers |
 | `test_optimize_space_botorch.py` | `OptimizeSpaceBotorch`: the observations it starts from, rounds, acquisition, search behavior, resuming (skips without botorch) |
-| `conftest.py` | Fixtures: real `ds-service`, fake Slurm, fake NVML, executor, hang guards |
+| `conftest.py` | Fixtures: real `ds-service`, fake Slurm, fake NVML, executor, hang guards, in-process workers |
 | `worker_harness.py` | Runs a real worker's main loop for a bounded number of tasks, or of queue polls, or until it returns for a restart |
 | `support_actor.py` | Actor classes. They must stay importable by name for the actor tests |
+| `support_map.py` | Helpers the `mapreduce` and `map` tests share |
 
 ## Notes for future changes
 
@@ -129,7 +130,7 @@ Paths are relative to [`tests/`](../tests).
   and runs a whole search
   through the real executor, the real queue and a real worker.
 - **A test whose driver blocks runs its real worker in a thread.**
-  `mapreduce`, the exploration and the optimizer
+  `mapreduce`, `map`, the exploration and the optimizer
   all block in a wait the moment they submit.
   So nothing on the test's own thread can run the worker.
 - **Four botorch tests assert search behavior, not bookkeeping.**
@@ -155,9 +156,8 @@ Paths are relative to [`tests/`](../tests).
   All four use unimodal objectives on purpose:
   an earlier Himmelblau version of the random-search comparison
   lost 1 run in 10.
-- **Queue name == job group name.**
-  Only the workers in job group `cpu` serve a task on queue `cpu`.
-  The tests rely on this rule to keep job groups isolated.
+- **The tests keep job groups apart by queue name.**
+  See "Task flow" in the developer notes.
 - **Do not wait on an RPC to detect server readiness.**
   A failed first RPC puts the gRPC channel into a ~1s reconnect backoff.
   `DsServiceServer.wait_until_ready()` polls the TCP socket instead.

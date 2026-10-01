@@ -20,7 +20,7 @@ SBATCH_ARGS = [
 
 
 def do_step_pi(start: int, stop: int, step: int, stepsize: float) -> float:
-    """Sum every `step`-th midpoint slice, from `start`."""
+    """Sum 4 / (1 + x*x) at every `step`-th midpoint, unscaled by `stepsize`."""
     x, s = 0.0, 0.0
     for i in range(start, stop, step):
         x = (i + 0.5) * stepsize

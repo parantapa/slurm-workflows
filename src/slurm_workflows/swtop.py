@@ -683,9 +683,11 @@ def task_rows(snapshot: Snapshot) -> list[tuple[str, list[str]]]:
 
 @dataclass(frozen=True)
 class BlockSpec:
-    """What one block shows, for both displays."""
+    """What one block shows, for both displays.
 
-    # Names the block in ids, such as the `swtop-workers` tab.
+    `key` names the block in ids, such as the `swtop-workers` tab.
+    """
+
     key: str
     title: str
     columns: list[str]

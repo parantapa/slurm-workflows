@@ -58,7 +58,7 @@ class NoCloseActor:
 
 
 class MapActor:
-    """Maps one item with state built once, for the mapreduce tests."""
+    """Maps one item with state built once, for the mapreduce and map tests."""
 
     def __init__(self, factor: int = 1) -> None:
         self.factor = factor

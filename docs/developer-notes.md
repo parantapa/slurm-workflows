@@ -114,7 +114,7 @@ Paths are relative to `src/slurm_workflows/`.
 | Module | Holds |
 | --- | --- |
 | `__init__.py` | The public API of the library. Loads the botorch module lazily. An app that embeds `swtop` imports from `swtop` and `swtop_widgets` instead. |
-| `slurm_pilot_executor.py` | The driver side, entry point `SlurmPilotExecutor`: job groups, submitting tasks, waiting on them, and `mapreduce`. Depends on `slurm_utils`, `templates/` and `utils`, and on `slurm_pilot_worker` for the worker's actor and its shared constants. |
+| `slurm_pilot_executor.py` | The driver side, entry point `SlurmPilotExecutor`: job groups, submitting tasks, waiting on them, `mapreduce` and `map`. Depends on `slurm_utils`, `templates/` and `utils`, and on `slurm_pilot_worker` for the worker's actor and its shared constants. |
 | `slurm_pilot_worker.py` | The worker side, entry point the `slurm-pilot-worker` command that generated scripts run on compute nodes. Starts the monitors. |
 | `slurm_utils.py` | Calls to the Slurm commands, and the environment `sbatch` runs in |
 | `search_space.py` | Search spaces and the mapping to and from the unit cube. Imports no torch. |
@@ -201,9 +201,8 @@ This section lists the things that are easy to break and quiet when broken.
 `as_completed` and `wait` poll `task_get_status`
 with every still-pending id in one batched call.
 
-**Status and output are separate RPCs.**
-`task_get_status` returns only states,
-so each finished task then needs its own `task_get_output`.
+**A job group's queue has the group's name.**
+Only the workers of job group `cpu` serve a task on queue `cpu`.
 
 **`_as_completed` drops a task that can never run, not the batch.**
 `_starved_tasks` and `_stranded_tasks` return the subset they object to,
@@ -285,13 +284,13 @@ because a *cluster* holds many runs even when a server holds one.
 The check is the type of what `task.function` unpickles to,
 never whether the job group has an actor.
 A job group with an actor therefore still runs a plain callable,
-which is what lets `mapreduce` submit its own task function there.
+which is what lets `mapreduce` and `map` submit their own task functions there.
 A `str` with no actor to find it on raises,
 rather than failing later as a call on a string.
 
 **The worker publishes its actor to the process, as `current_actor()`.**
 A task the worker runs has no argument that carries the actor,
-so `_mapreduce_task` reads it from the module.
+so `_mapreduce_task` and `_map_task` read it from the module.
 One worker is one process and one actor, so a module global holds it.
 `close()` clears it, and only when the actor it holds is this worker's own,
 because a test builds two workers in one process.
@@ -324,7 +323,8 @@ even when each executor has a server to itself.
 (`[A-Za-z][A-Za-z0-9_-]*`, at least 3 characters).
 
 **A run publishes itself in two halves, one key each.**
-`SlurmPilotExecutor._add_job` writes `pilot_job_info:<job-name>`
+`SlurmPilotExecutor._add_job` publishes `pilot_job_info:<job-name>`
+through `_publish_pilot_job`
 as soon as `sbatch` returns, so a queued job is visible before it runs.
 `PilotWorker.__init__` writes `worker_info:<worker-id>`,
 a JSON object, before it builds the actor.
@@ -460,9 +460,14 @@ as in the liveness checks of a wait.
 A timeout raises but leaves the counter where it is,
 since the executor cannot lower the counter again.
 
-### Mapreduce
+### Mapreduce and map
 
-**`mapreduce` puts every item task on the item queue
+`map` hands out items the way `mapreduce` does,
+and both calls share the helpers that do it.
+Every rule in this section holds for both calls,
+unless the rule names one of them.
+
+**A call puts every item task on the item queue
 before it submits the first map task.**
 This ordering is the whole basis of the call,
 and it is what lets a map task read `NoTaskAvailable` as "the work is done".
@@ -471,30 +476,28 @@ On its own that means everything is claimed,
 not that nothing more arrives.
 The ordering supplies the other half:
 no map task can run before every item task exists,
-and `mapreduce` enqueues nothing on the item queue afterward.
+and the call enqueues nothing on the item queue afterward.
+`_enqueue_items` returns only after the last `task_add`,
+and `_submit_map_tasks` runs after it.
 
 Break that ordering, by streaming the iterable or by topping the item queue up.
 A fast map task then drains what is there and sees an empty item queue.
-It returns a partial result that covers part of the input.
-Nothing raises.
-The call returns a plausible wrong answer.
-For this reason, `mapreduce` reads the iterable out into a list first,
-and a test asserts on the order of the `task_add` calls.
+Under `mapreduce`, the call returns a partial result
+that covers part of the input, and nothing raises.
+Under `map`, the call finds items with no value,
+and raises `RuntimeError` for them rather than return a short list.
+For this reason, both calls read the iterable out into a list first,
+and a test of each call asserts on the order of the `task_add` calls.
 
-**A mapreduce call gets an item queue of its own,
+**Each call gets an item queue of its own,
 and no job group serves it.**
+`MAPREDUCE_QUEUE_TEMPLATE` and `MAP_QUEUE_TEMPLATE` name it,
+each with a counter of its own.
 Workers poll their own job group's queue only,
-so that call's own map tasks drain the item queue and nothing else does.
+so the call's own map tasks drain the item queue and nothing else does.
 The item queue also stays clear of `_starved_tasks` and `_stranded_tasks`.
 Both look at the queues of the tasks handed to the wait,
 never at the item queue.
-
-**A map task resolves a method name once, not once per item.**
-A worker builds its actor at startup and keeps it until the worker exits.
-The bound method is therefore the same for every item the map task folds.
-`reduce_fn` takes no method name at all,
-because the driver folds the partial results with it
-and there is no actor there.
 
 **A map task builds a client of its own.**
 A map task has no handle on the worker's client,
@@ -509,24 +512,24 @@ A `with` block closes the client.
 A worker runs many tasks over its life.
 A leaked gRPC channel per task therefore accumulates for all of it.
 
-**A map task marks its item task done after it folds the value in, not before,
-and it records an empty output.**
+**A map task marks an item task done only once it has the item's value,
+and records an empty output.**
+Under `mapreduce` that is after the fold,
+and under `map` after `map_fn` returns.
 `Finished` on the item queue therefore means "counted",
 which is what a reader of the item queue expects.
-The mapped value travels home inside the map task that computed it.
-A second copy on the item task
-holds the whole iterable on the server twice.
+The value travels home inside the map task that computed it.
+A second copy on the item task holds every mapped value on the server twice.
 
-**The driver folds into a copy of `init`.**
-Each map task already folds into a copy of its own,
-the one its input deserialized into.
-A `reduce_fn` that folds in place is therefore correct on a worker.
-Without the copy it is not correct on the driver.
-There it writes into the caller's own value,
-and a second call starts from the answer of the first.
-
-The copy does not remove the requirement that `init` be an identity.
-Every map task folds it in once, and the call folds it in once more.
+**A map task of `map` returns each value paired with the id of its item task.**
+The driver built every item task id when it enqueued the items,
+so it maps each id back to the index of its item.
+The values therefore land in input order
+whichever task claimed them and whenever it finished.
+The order of the pairs in a task's output carries no meaning,
+and a test reverses it to check that the driver does not rely on it.
+An id carries the index with no change to the item task's input,
+so both calls enqueue items through the same helper.
 
 ### Logging
 
@@ -651,10 +654,6 @@ each against its own `patience`, floor and ceiling.
   Tests assert them by constructing with them
   (`make_opt(..., acqf_timeout_s=...)`) or against `opt.studies[i].<knob>`,
   never against a literal.
-- **One acquisition, one `optimize_acqf` call per study per round**,
-  for the whole batch.
-  Its `X_baseline` must be the `train_x` from this round's fit,
-  not a stale copy.
 - **Never import this module eagerly from the package `__init__.py`.**
   `OptimizeSpaceBotorch` and `OptimizationStudy` are importable
   from the package root, but through the `__getattr__` there.
@@ -753,6 +752,13 @@ Each read goes into the cache as soon as it returns,
 rather than once the whole poll is done.
 A poll cut short, by an unmount or by a caller's timeout,
 then still leaves the next one less to read.
+
+**`SnapshotPoller` runs one poll at a time, and lets each one finish.**
+A tick that comes during a slow poll is dropped, not queued,
+so a slow server is polled as often as it answers.
+The rejected alternative cancels the poll in flight at every tick.
+With it, a poll slower than the interval never finishes,
+and the screen keeps its first reading with no error to say why.
 
 **`swtop` draws a failed poll, and does not raise it.**
 A display that exits when the server blinks

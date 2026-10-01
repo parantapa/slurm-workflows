@@ -62,6 +62,14 @@ because the poller does both on the app's event loop.
 To take all five tabs as they are,
 compose `SwtopTabs()` in place of your own `TabbedContent`.
 
+If you want the tasks tab to start on other states,
+yield `TaskTable(spec, states={"Failed"})` inside a `TabPane` of your own.
+The `TaskTable` takes the place of the tasks `block_pane`.
+`block_pane` takes no `states`.
+A `TaskTable` is a `BlockTable` with a row of state checkboxes above it,
+so `self.query(BlockTable)` still finds it.
+See [`TaskTable`](../reference/swtop.md#slurm_workflowsswtop_widgets).
+
 ## Bind your own keys
 
 The `swtop` widgets add no key bindings of their own,
@@ -88,14 +96,6 @@ class MyApp(App):
 A tab from `block_pane` has the id `swtop-` and the block key by default,
 such as `swtop-workers`.
 Pass `id=` to `block_pane` to choose another.
-
-If you want the tasks tab to start on other states,
-yield `TaskTable(spec, states={"Failed"})` inside a `TabPane` of your own.
-The `TaskTable` takes the place of the tasks `block_pane`.
-`block_pane` takes no `states`.
-A `TaskTable` is a `BlockTable` with a row of state checkboxes above it,
-so `self.query(BlockTable)` still finds it.
-See [`TaskTable`](../reference/swtop.md#slurm_workflowsswtop_widgets).
 
 ## React to a poll in your own widgets
 

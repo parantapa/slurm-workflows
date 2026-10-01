@@ -1083,8 +1083,6 @@ class TestRealServer:
         drive(scenario)
 
     def test_an_unreachable_server_is_reported_not_fatal(self):
-        """The app reports a failed poll, and does not stop."""
-
         async def scenario():
             async with open_collector("127.0.0.1:1") as collector:
                 app = SwtopApp(collector, 3600.0)

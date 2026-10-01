@@ -494,9 +494,7 @@ class SnapshotPoller(Widget):
             return
 
         # One poll at a time, and each one runs to its end.
-        # The rejected alternative cancels the poll in flight at every tick.
-        # With that alternative, a poll slower than the interval never finishes,
-        # and the screen keeps its first reading with no error to say why.
+        # See "`SnapshotPoller` runs one poll at a time" in the developer notes.
         self._polling = True
         # The group is per poller, so two pollers leave each other alone.
         self.run_worker(self._poll, group=f"swtop-poll-{id(self)}")

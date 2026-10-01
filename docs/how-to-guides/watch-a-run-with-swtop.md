@@ -35,8 +35,8 @@ for the pilot jobs, workers, hosts, slurm jobs or tasks tab.
 
 ## Make the tasks tab readable
 
-If you run an exploration or a search, skip this section.
-`ExploreSpaceSobolQMC` and `OptimizeSpaceBotorch` name what they submit,
+If you run an exploration, a search, a `mapreduce` or a `map`, skip this section.
+`ExploreSpaceSobolQMC`, `OptimizeSpaceBotorch`, `mapreduce` and `map` name what they submit,
 and the tasks tab is readable without your help.
 
 Otherwise, name your tasks.

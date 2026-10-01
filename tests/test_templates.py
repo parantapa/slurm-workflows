@@ -18,16 +18,12 @@ from slurm_workflows.templates import line_col_from_pos, parse_file, render_temp
 def run_sbatch_script(
     script: str, tmp_path: Path, **env: str
 ) -> subprocess.CompletedProcess[str]:
-    """Run a rendered sbatch body against a stub `srun`.
+    """Run a rendered sbatch body against a stub `srun`, and return both streams.
 
     The script sees only `PATH`, with the stub's directory first, and `env`.
-    It raises `subprocess.CalledProcessError` when the script exits non-zero.
-    Both streams come back, because the script uses both.
     The stub echoes its command line to stdout,
-    among whatever the script itself echoed on the way there.
-    For this reason, callers pick that line back out with `srun_lines`
-    rather than read stdout whole.
-    `set -x` traces to stderr.
+    mixed in with what the script itself echoes.
+    It raises `subprocess.CalledProcessError` when the script exits non-zero.
     """
 
     bin_dir = tmp_path / "bin"
@@ -41,7 +37,7 @@ def run_sbatch_script(
 
     # Only the shell knows which `srun` runs.
     # See the developer notes, "Slurm interaction".
-    # Nothing is inherited, so the SLURM variables are exactly what a case sets,
+    # Only `PATH` is inherited, so the SLURM variables are exactly what a case sets,
     # even when the suite itself runs from inside a Slurm job.
     proc = subprocess.run(
         ["bash", str(script_path)],

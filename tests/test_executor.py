@@ -1571,7 +1571,6 @@ class TestStrandedTasks:
     def test_a_task_is_fine_while_any_of_its_queues_is_live(
         self, executor, fake_slurm, setup_script, ds_client, check_immediately
     ):
-        """A task submitted to several queues survives the loss of one of them."""
         executor.define_job_group("cpu", [], setup_script)
         executor.define_job_group("gpu", [], setup_script)
         executor.scale_jobs("cpu", 1)

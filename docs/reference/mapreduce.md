@@ -8,6 +8,8 @@ The call blocks until every map task is back.
 
 For the problem `mapreduce` solves and how to size a call, see
 [How to fold results across workers](../how-to-guides/fold-results-across-workers.md).
+To get every value back instead of one folded value,
+see [`map`](map.md).
 
 ```python
 result = executor.mapreduce(
@@ -146,7 +148,7 @@ For the rest of what an actor does, see
 ## The queue it creates
 
 A call creates an item queue named `<executor-name>.mapreduce.<n>.<token>`.
-`<n>` counts the calls on this executor that enqueued items,
+`<n>` counts the `mapreduce` calls on this executor that enqueued items,
 and `<token>` is 8 hex characters of a UUID4.
 No job group serves that queue.
 Only that call's own map tasks claim from it.
@@ -204,4 +206,5 @@ where the item tasks complete one by one.
 ## Related
 
 - [`SlurmPilotExecutor`](executor.md)
+- [`map`](map.md)
 - [How to fold results across workers](../how-to-guides/fold-results-across-workers.md)

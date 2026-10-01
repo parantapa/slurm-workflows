@@ -5,12 +5,12 @@
 `slurm_workflows.slurm_pilot_executor`:
 the executor, the `Task` handle it returns,
 and the `RaiseOnError` policy that decides what a failure does.
-[`mapreduce`](mapreduce.md)
+[`mapreduce`](mapreduce.md), [`map`](map.md)
 and [what a run publishes](what-a-run-publishes.md)
 have pages of their own.
 The driver runs on a login node, or inside a Slurm job.
 
-Every name this page and those two use is importable from the package root,
+Every name this page and those three use is importable from the package root,
 except `NoOutput`:
 
 ```python
@@ -28,7 +28,8 @@ executor = SlurmPilotExecutor(name, server_address, work_dir=None)
 `name` identifies the executor.
 It prefixes every task id (`<name>.task.<n>`)
 and every pilot job's Slurm job name (`<name>.job.<group>.<index>`),
-and it names the executor's log.
+and it names the executor's logger
+and the directory its default work dir sits in.
 Two executors on one cluster must have two names.
 A shared one collides on all three,
 whether or not they talk to the same server.
@@ -61,6 +62,7 @@ Generated scripts and all logs land there.
 | [`restart_jobs(group, wait=True, timeout=None) -> int`](#restart_jobs) | Restarts the workers of a job group inside its running pilot jobs, so they run the code on disk now. Cancels and submits no Slurm job. Returns the job group's new restart generation. See [`restart_jobs`](#restart_jobs). |
 | `submit(queue, fn, *args, task_parents=None, task_priority=0.0, **kwargs) -> Task` | Enqueues one task and returns a `Task` straight away. `queue` is a job group name or a list of them. `fn` is a callable, or a method name (`str`) for actor workers. `task_parents` is a list of the `Task`s this one waits on. `task_priority` orders the queue. See [`submit` options](#submit-options). |
 | [`mapreduce(desc, queue, ...)`](mapreduce.md) | Maps an iterable across the pool and folds the results into one value. Blocks. `init` must be the identity of `reduce_fn`. |
+| [`map(desc, queue, ...) -> list`](map.md) | Maps an iterable across the pool and returns one value per item, in the order of the iterable. Blocks. |
 | `as_completed(tasks, desc, unit="task", raise_on_error=...)` | Yields tasks as their results arrive. `desc` and `unit` label the progress `swtop` draws. Raises `RuntimeError` on a task whose queues have no worker, and does not block forever. |
 | `wait(tasks, desc, unit="task", raise_on_error=...)` | Same, but discards the iterator. Blocks until all are done. |
 | `set_task_name(task, name)` | Names a task, on the server as well as locally. |
@@ -108,10 +110,12 @@ they wait on the queue until a worker claims them.
 | `actor_class_args` | `None` | Positional arguments for that class's constructor. Only valid with `actor_class_name`. |
 | `actor_class_kwargs` | `None` | Keyword arguments for that class's constructor. Only valid with `actor_class_name`. |
 | `python_paths` | `None` | Extra paths prepended to the workers' `sys.path`. |
-| `add_cwd_to_python_path` | `True` | Also adds the driver's cwd to the workers' `sys.path`. |
+| `add_cwd_to_python_path` | `True` | Also adds the driver's cwd to the workers' `sys.path`. The cwd goes ahead of every `python_paths` entry. The workers take `python_paths` in reverse order. |
 
-The executor passes `sbatch_args` straight through to `sbatch`,
-so any Slurm option works.
+The executor writes each element of `sbatch_args` as one `#SBATCH` line
+in the generated `<job-name>.sbatch`,
+so most Slurm options work.
+The executor sets `--job-name` and `--output` itself.
 
 The executor cloudpickles the actor arguments
 and puts them in the `ds-service` map.
@@ -282,7 +286,7 @@ Whoever looks at the queue reads it,
 which in practice means [`swtop`](swtop.md).
 `ExploreSpaceSobolQMC` and `OptimizeSpaceBotorch` call `set_task_name` themselves
 for every task they submit.
-[`mapreduce`](mapreduce.md) calls `set_task_name` for every map task it submits.
+[`mapreduce`](mapreduce.md) and [`map`](map.md) call `set_task_name` for every map task they submit.
 
 ## Errors that end a wait
 
@@ -428,6 +432,7 @@ before it builds its actor and before it claims a task.
 ## Related
 
 - [`mapreduce`](mapreduce.md)
+- [`map`](map.md)
 - [What a run publishes](what-a-run-publishes.md)
 - [`swtop`](swtop.md)
 - [How to keep per-worker state with actors](../how-to-guides/keep-per-worker-state-with-actors.md)

@@ -97,7 +97,7 @@ They wait on the queue until a worker starts and claims them.
 | [How to install slurm-workflows on Rivanna](docs/how-to-guides/install-on-rivanna.md) | Installing the package and the `ds-service` binary on Rivanna. |
 | [How to run the `ds-service` server](docs/how-to-guides/run-the-ds-service-server.md) | Starting a `ds-service` server from the driver and binding it where workers can reach it. |
 | [How to keep per-worker state with actors](docs/how-to-guides/keep-per-worker-state-with-actors.md) | Loading an expensive model or connection once per worker instead of once per task. |
-| [How to fold results across workers](docs/how-to-guides/fold-results-across-workers.md) | Using `mapreduce` to run one function over a whole collection and bring back a single value. |
+| [How to fold results across workers](docs/how-to-guides/fold-results-across-workers.md) | Using `mapreduce` to run one function over a whole collection and bring back a single value, or `map` to bring back every value. |
 | [How to watch a run with `swtop`](docs/how-to-guides/watch-a-run-with-swtop.md) | Following a live run from another shell, and keeping a record of one. |
 | [How to embed `swtop` in a Textual app](docs/how-to-guides/embed-swtop-in-a-textual-app.md) | Putting the `swtop` tabs, summary line, progress bar and error line in your own Textual app. |
 | [How to troubleshoot a failing run](docs/how-to-guides/troubleshoot-a-failing-run.md) | Finding the right log, and what each `RuntimeError` means. |
@@ -105,6 +105,7 @@ They wait on the queue until a worker starts and claims them.
 | [How to update worker code without resubmitting](docs/how-to-guides/update-worker-code-without-resubmitting.md) | Restarting the workers in running pilot jobs, so they run new code without a second wait in Slurm's queue. |
 | [`SlurmPilotExecutor`](docs/reference/executor.md) | The executor, `Task`, `RaiseOnError`, the job group options, restarting workers, and the worker entry point. |
 | [`mapreduce`](docs/reference/mapreduce.md) | Mapping an iterable across the pool, the fold contract, and what the call creates on the server. |
+| [`map`](docs/reference/map.md) | Mapping an iterable across the pool and getting every value back in order. |
 | [What a run publishes](docs/reference/what-a-run-publishes.md) | The keys and time series a run writes, and the logs. |
 | [`ExploreSpaceSobolQMC`](docs/reference/explore-space.md) | The Sobol' exploration, its study fields, and the results file. |
 | [`OptimizeSpaceBotorch`](docs/reference/optimize-space.md) | The batch Bayesian search, its study fields, and its stopping rule. |

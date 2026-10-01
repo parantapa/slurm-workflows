@@ -72,12 +72,13 @@ and so does a worker that restarts.
 A process that dies of SIGKILL, or with its node, publishes nothing.
 Nothing removes these keys either.
 
-### `mapreduce` tasks
+### `mapreduce` and `map` tasks
 
-**A `mapreduce` call publishes one task per item**,
-on a queue of its own, under `<executor-name>.mapreduce.`.
+**A `mapreduce` or `map` call publishes one task per item**,
+on a queue of its own, under `<executor-name>.mapreduce.`
+or `<executor-name>.map.`.
 Those tasks outlive the call.
-[`mapreduce`](mapreduce.md) covers the ids and what they hold.
+[`mapreduce`](mapreduce.md) and [`map`](map.md) cover the ids and what they hold.
 
 ### Task names and actor arguments
 
@@ -173,7 +174,8 @@ It does not display the GPU series yet.
 
 Why a run publishes in these two halves rather than one
 is in [The trail a run leaves](../explanation/the-trail-a-run-leaves.md).
-That page also says why nothing updates these two kinds of key after the first write.
+That page also says why nothing updates
+`pilot_job_info:` and `worker_info:` keys after the first write.
 
 ## Watching a wait
 
@@ -209,7 +211,7 @@ and the attribute `executor.work_dir` holds it:
 
 | File | Contents |
 | --- | --- |
-| `executor.log` | Pilot job submission, and cancellation by `scale_jobs`, from the executor's side. A line for each `mapreduce` call that enqueues items. A line for each `restart_jobs` call, and one for the end of its wait. Each liveness check that could not run `squeue`. |
+| `executor.log` | Pilot job submission, and cancellation by `scale_jobs`, from the executor's side. A line for each `mapreduce` or `map` call that enqueues items. A line for each `restart_jobs` call, and one for the end of its wait. Each liveness check that could not run `squeue`. |
 | `<job-name>.sh`, `<job-name>.sbatch` | The generated scripts |
 | `<job-name>-<job-id>-<rank>.out` | One per Slurm task, shared by each worker a restart starts in it: setup-script output, task-by-task progress, full tracebacks |
 | `<job-name>-<job-id>.out` | The pilot job's own output, and the worker's log too when the job holds a single Slurm task or runs a batch worker |

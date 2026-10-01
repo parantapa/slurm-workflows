@@ -55,14 +55,29 @@ python examples/example_optimize_himmelblau.py
 ```
 
 The program does not print the server address `swtop` needs.
-The executor prints its work directory.
-In that directory, the worker script `himmelblau.job.eval.0.sh`
-carries the address after `--server-address`.
+The executor prints its work directory when it starts.
+The line looks something like this:
+
+```text
+work directory: '/home/<user>/.cache/slurm-workflows/himmelblau/2026-10-01T09:30:00.123456'
+```
+
 We open another shell on the login node.
-There we start `swtop` with that address:
+There we read the server address
+from the worker script `himmelblau.job.eval.0.sh` in that directory:
 
 ```sh
-swtop <server-address>
+grep -- --server-address '<work directory>/himmelblau.job.eval.0.sh'
+```
+
+```text
+        --server-address '10.0.0.1:5051' \
+```
+
+We start `swtop` with that address:
+
+```sh
+swtop 10.0.0.1:5051
 ```
 
 Either phase names every task it submits on the server.
@@ -169,7 +184,7 @@ KNOWN_MINIMA = [
 
 
 def himmelblau(x: float, y: float) -> dict[str, float]:
-    """The objective that the search minimizes over SEARCH_SPACE."""
+    """Evaluate Himmelblau's function at (`x`, `y`), under the `"objective"` key."""
     value = (x * x + y - 11.0) ** 2 + (x + y * y - 7.0) ** 2
     return {"objective": value, "distance_from_origin": math.hypot(x, y)}
 

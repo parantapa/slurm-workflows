@@ -1,22 +1,18 @@
-"""Tests for `SlurmPilotExecutor.mapreduce`."""
+"""Tests for `SlurmPilotExecutor.map`."""
 
 from __future__ import annotations
 
 import json
-import operator
 import threading
-from typing import NoReturn
+from typing import Any, NoReturn
 
 import pytest
 import cloudpickle
 from typeguard import TypeCheckError
 from ds_service_client import TaskState
 
-from slurm_workflows.slurm_pilot_executor import (
-    MAPREDUCE_TOKEN_LEN,
-    SlurmPilotExecutor,
-    _mapreduce_task,
-)
+from slurm_workflows import slurm_pilot_executor
+from slurm_workflows.slurm_pilot_executor import MAPREDUCE_TOKEN_LEN, _map_task
 from slurm_workflows.slurm_pilot_worker import current_actor
 from slurm_workflows.swtop import ALL_TASK_IDS
 
@@ -37,34 +33,29 @@ def add(acc, x):
     return acc + x
 
 
+def square(x: int) -> int:
+    return x * x
+
+
 def scale(x: int, factor: int, offset: int = 0) -> int:
     return x * factor + offset
-
-
-def add_mod(acc: int, x: int, modulus: int = 1000) -> int:
-    """An associative `reduce_fn` that takes an extra keyword argument."""
-    return (acc + x) % modulus
-
-
-def wrap[T](x: T) -> list[T]:
-    """Map one item to a one-item list, so `add` concatenates."""
-    return [x]
-
-
-def extend_in_place(acc: list[int], x: list[int]) -> list[int]:
-    """A `reduce_fn` that folds into its accumulator rather than replacing it."""
-    acc.extend(x)
-    return acc
 
 
 def explode(x: int) -> NoReturn:
     raise ValueError(f"no good: {x}")
 
 
-def count_hits(path: str, threshold: float) -> int:
-    """The map function the how-to guide shows."""
-    with open(path) as fobj:
-        return sum(1 for line in fobj if float(line.split(",")[2]) > threshold)
+def add_items(ds_client, queue: str, count: int) -> None:
+    """Put `count` items on `queue`, the way `map` does."""
+    for index in range(count):
+        ds_client.task_add(
+            task_id=f"{queue}.item.{index}",
+            parent_task_ids=[],
+            queue=[queue],
+            priority=0.0,
+            function=b"",
+            input=cloudpickle.dumps(index),
+        )
 
 
 # --------------------------------------------------------------------------
@@ -73,163 +64,112 @@ def count_hits(path: str, threshold: float) -> int:
 
 
 class TestResults:
-    def test_it_sums_a_range(self, executor, pilot_jobs, worker_thread):
+    def test_it_maps_a_range_in_order(self, executor, pilot_jobs, worker_thread):
         pilot_jobs("cpu")
         worker_thread(expect_tasks=4)
 
-        total = executor.mapreduce(
-            desc="sum",
+        got = executor.map(
+            desc="square",
             queue="cpu",
-            map_fn=identity,
-            reduce_fn=add,
+            map_fn=square,
             iterable=range(100),
-            init=0,
             num_tasks=4,
         )
 
-        assert total == 4950
+        assert got == [x * x for x in range(100)]
 
-    def test_every_item_is_mapped_once(self, executor, pilot_jobs, worker_thread):
-        """A fold that keeps the items shows a lost one and a doubled one."""
+    def test_the_order_does_not_rest_on_the_task_output_order(
+        self, executor, pilot_jobs, worker_thread, monkeypatch
+    ):
+        """The driver places each value by its item id, not by where it came back."""
         pilot_jobs("cpu")
-        worker_thread(expect_tasks=3)
+        worker_thread(expect_tasks=2)
+        real_map_task = slurm_pilot_executor._map_task
 
-        got = executor.mapreduce(
-            desc="collect",
+        def reversed_map_task(*args: Any) -> list[tuple[str, Any]]:
+            return list(reversed(real_map_task(*args)))
+
+        # The worker runs in a thread of this process,
+        # so it runs whatever the executor submits.
+        monkeypatch.setattr(slurm_pilot_executor, "_map_task", reversed_map_task)
+
+        got = executor.map(
+            desc="square",
             queue="cpu",
-            map_fn=wrap,
-            reduce_fn=add,
-            iterable=range(50),
-            init=[],
-            num_tasks=3,
+            map_fn=square,
+            iterable=range(20),
+            num_tasks=2,
         )
 
-        assert sorted(got) == list(range(50))
+        assert got == [x * x for x in range(20)]
 
     def test_it_passes_the_extra_arguments(self, executor, pilot_jobs, worker_thread):
         pilot_jobs("cpu")
         worker_thread(expect_tasks=2)
 
-        total = executor.mapreduce(
+        got = executor.map(
             desc="weighted",
             queue="cpu",
             map_fn=scale,
-            reduce_fn=add_mod,
             iterable=range(10),
-            init=0,
             num_tasks=2,
             map_extra_args=(3,),
             map_extra_kwargs={"offset": 1},
-            reduce_extra_args=(),
-            reduce_extra_kwargs={"modulus": 100},
         )
 
-        assert total == sum(x * 3 + 1 for x in range(10)) % 100
+        assert got == [x * 3 + 1 for x in range(10)]
 
     def test_one_task_agrees_with_many(self, executor, pilot_jobs, worker_thread):
         pilot_jobs("cpu")
         worker_thread(expect_tasks=1 + 8)
 
-        one = executor.mapreduce(
-            desc="one",
-            queue="cpu",
-            map_fn=identity,
-            reduce_fn=add,
-            iterable=range(20),
-            init=0,
-            num_tasks=1,
+        one = executor.map(
+            desc="one", queue="cpu", map_fn=square, iterable=range(20), num_tasks=1
         )
-        many = executor.mapreduce(
-            desc="many",
-            queue="cpu",
-            map_fn=identity,
-            reduce_fn=add,
-            iterable=range(20),
-            init=0,
-            num_tasks=8,
+        many = executor.map(
+            desc="many", queue="cpu", map_fn=square, iterable=range(20), num_tasks=8
         )
 
-        assert one == many == 190
+        assert one == many == [x * x for x in range(20)]
 
     def test_a_queue_list_works(self, executor, pilot_jobs, worker_thread):
         pilot_jobs("cpu")
         worker_thread(expect_tasks=2)
 
-        total = executor.mapreduce(
-            desc="sum",
-            queue=["cpu"],
-            map_fn=identity,
-            reduce_fn=add,
-            iterable=range(10),
-            init=0,
-            num_tasks=2,
+        got = executor.map(
+            desc="square", queue=["cpu"], map_fn=square, iterable=range(10), num_tasks=2
         )
 
-        assert total == 45
+        assert got == [x * x for x in range(10)]
 
-    def test_it_does_not_mutate_init(self, executor, pilot_jobs, worker_thread):
-        """A `reduce_fn` that folds in place leaves the caller's value alone."""
-        pilot_jobs("cpu")
-        worker_thread(expect_tasks=2)
-        init: list[int] = []
-
-        got = executor.mapreduce(
-            desc="collect",
-            queue="cpu",
-            map_fn=wrap,
-            reduce_fn=extend_in_place,
-            iterable=range(10),
-            init=init,
-            num_tasks=2,
-        )
-
-        assert sorted(got) == list(range(10))
-        assert init == []
-
-    def test_the_documented_shape_works(
-        self, executor, pilot_jobs, worker_thread, tmp_path
-    ):
-        """The example in `docs/how-to-guides/fold-results-across-workers.md`."""
-        pilot_jobs("cpu")
-        worker_thread(expect_tasks=4)
-
-        paths = []
-        for index in range(20):
-            path = tmp_path / f"rows-{index}.csv"
-            path.write_text("".join(f"a,b,{i}.0\n" for i in range(index)))
-            paths.append(str(path))
-
-        hits = executor.mapreduce(
-            desc="scanning",
-            queue="cpu",
-            map_fn=count_hits,
-            reduce_fn=operator.add,
-            iterable=paths,
-            init=0,
-            num_tasks=4,
-            map_extra_args=(1.5,),
-        )
-
-        assert hits == sum(max(index - 2, 0) for index in range(20))
-
-    def test_the_documented_gather_shape_works(
-        self, executor, pilot_jobs, worker_thread
-    ):
-        """A map to a one-item list, then a concatenation, as the guide shows."""
+    def test_a_lambda_works(self, executor, pilot_jobs, worker_thread):
         pilot_jobs("cpu")
         worker_thread(expect_tasks=2)
 
-        got = executor.mapreduce(
-            desc="gather",
+        got = executor.map(
+            desc="pairs",
             queue="cpu",
-            map_fn=lambda x: [x * x],
-            reduce_fn=operator.add,
-            iterable=range(10),
-            init=[],
+            map_fn=lambda x: (x, str(x)),
+            iterable=range(5),
             num_tasks=2,
         )
 
-        assert sorted(got) == [x * x for x in range(10)]
+        assert got == [(x, str(x)) for x in range(5)]
+
+    def test_a_none_value_is_a_value(self, executor, pilot_jobs, worker_thread):
+        """`None` from `map_fn` comes back as `None`, and does not look missing."""
+        pilot_jobs("cpu")
+        worker_thread(expect_tasks=1)
+
+        got = executor.map(
+            desc="nothing",
+            queue="cpu",
+            map_fn=lambda x: None,
+            iterable=range(3),
+            num_tasks=1,
+        )
+
+        assert got == [None, None, None]
 
 
 # --------------------------------------------------------------------------
@@ -258,35 +198,22 @@ class TestActors:
             expect_tasks=2, group="act", actor_class_name="support_actor.MapActor"
         )
 
-        total = executor.mapreduce(
-            desc="scale",
-            queue="act",
-            map_fn="scale",
-            reduce_fn=add,
-            iterable=range(10),
-            init=0,
-            num_tasks=2,
+        got = executor.map(
+            desc="scale", queue="act", map_fn="scale", iterable=range(10), num_tasks=2
         )
 
-        assert total == 3 * sum(range(10))
+        assert got == [3 * x for x in range(10)]
 
     def test_the_actor_is_the_one_the_worker_built(
         self, executor, actor_group, worker_thread
     ):
         """One actor per worker, not one per item, is the whole point."""
-        support_actor.INSTANCES.clear()
         worker_thread(
             expect_tasks=1, group="act", actor_class_name="support_actor.MapActor"
         )
 
-        executor.mapreduce(
-            desc="scale",
-            queue="act",
-            map_fn="scale",
-            reduce_fn=add,
-            iterable=range(6),
-            init=0,
-            num_tasks=1,
+        executor.map(
+            desc="scale", queue="act", map_fn="scale", iterable=range(6), num_tasks=1
         )
 
         # The worker runs in a thread of this process,
@@ -302,19 +229,17 @@ class TestActors:
             expect_tasks=1, group="act", actor_class_name="support_actor.MapActor"
         )
 
-        total = executor.mapreduce(
+        got = executor.map(
             desc="offset",
             queue="act",
             map_fn="offset",
-            reduce_fn=add,
             iterable=range(5),
-            init=0,
             num_tasks=1,
             map_extra_args=(2,),
             map_extra_kwargs={"sign": -1},
         )
 
-        assert total == sum(-(x * 3 + 2) for x in range(5))
+        assert got == [-(x * 3 + 2) for x in range(5)]
 
     def test_a_failing_method_raises(self, executor, actor_group, worker_thread):
         worker_thread(
@@ -322,13 +247,11 @@ class TestActors:
         )
 
         with pytest.raises(RuntimeError, match="failed on its worker"):
-            executor.mapreduce(
+            executor.map(
                 desc="boom",
                 queue="act",
                 map_fn="explode",
-                reduce_fn=add,
                 iterable=range(4),
-                init=0,
                 num_tasks=1,
             )
 
@@ -340,17 +263,11 @@ class TestActors:
             expect_tasks=2, group="act", actor_class_name="support_actor.MapActor"
         )
 
-        total = executor.mapreduce(
-            desc="sum",
-            queue="act",
-            map_fn=identity,
-            reduce_fn=add,
-            iterable=range(10),
-            init=0,
-            num_tasks=2,
+        got = executor.map(
+            desc="square", queue="act", map_fn=square, iterable=range(10), num_tasks=2
         )
 
-        assert total == 45
+        assert got == [x * x for x in range(10)]
 
 
 # --------------------------------------------------------------------------
@@ -358,63 +275,55 @@ class TestActors:
 # --------------------------------------------------------------------------
 
 
-class TestMapreduceTask:
+class TestMapTask:
     def test_concurrent_tasks_split_the_queue(
         self, ds_client, ds_service_address, map_task_env
     ):
-        """Three tasks on one queue fold every item exactly once between them."""
-        queue = "mr-direct"
-        for index in range(60):
-            # Any priority will do: these tests do not depend on serving order.
-            ds_client.task_add(
-                task_id=f"{queue}.item.{index}",
-                parent_task_ids=[],
-                queue=[queue],
-                priority=float(-index),
-                function=b"",
-                input=cloudpickle.dumps(index),
-            )
+        """Three tasks on one queue map every item exactly once between them."""
+        queue = "map-direct"
+        add_items(ds_client, queue, 60)
 
-        partials: list[list[int]] = []
+        pairs: list[tuple[str, Any]] = []
         lock = threading.Lock()
 
-        def fold():
-            got = _mapreduce_task(queue, wrap, add, [], (), {}, (), {})
+        def run():
+            got = _map_task(queue, identity, (), {})
             with lock:
-                partials.append(got)
+                pairs.extend(got)
 
-        threads = [threading.Thread(target=fold) for _ in range(3)]
+        threads = [threading.Thread(target=run) for _ in range(3)]
         for thread in threads:
             thread.start()
         for thread in threads:
             thread.join(timeout=30)
 
         assert not any(t.is_alive() for t in threads)
-        assert sorted(i for partial in partials for i in partial) == list(range(60))
+        assert sorted(pairs, key=lambda pair: pair[1]) == [
+            (f"{queue}.item.{index}", index) for index in range(60)
+        ]
 
     def test_it_marks_each_item_done(self, ds_client, ds_service_address, map_task_env):
-        queue = "mr-done"
-        for index in range(5):
-            # Any priority will do: these tests do not depend on serving order.
-            ds_client.task_add(
-                task_id=f"{queue}.item.{index}",
-                parent_task_ids=[],
-                queue=[queue],
-                priority=float(-index),
-                function=b"",
-                input=cloudpickle.dumps(index),
-            )
+        queue = "map-done"
+        add_items(ds_client, queue, 5)
 
-        assert _mapreduce_task(queue, identity, add, 0, (), {}, (), {}) == 10
+        got = _map_task(queue, square, (), {})
 
+        assert sorted(got) == [(f"{queue}.item.{i}", i * i) for i in range(5)]
         for index in range(5):
             task_id = f"{queue}.item.{index}"
             assert ds_client.task_get_status(task_id) == TaskState.Finished
             # See the developer notes, "A map task marks its item task done".
             assert ds_client.task_get_output(task_id) == b""
 
-    def test_an_empty_queue_returns_init(self, ds_service_address, map_task_env):
-        assert _mapreduce_task("mr-empty", identity, add, 7, (), {}, (), {}) == 7
+    def test_an_empty_queue_returns_nothing(self, ds_service_address, map_task_env):
+        assert _map_task("map-empty", identity, (), {}) == []
+
+    def test_a_method_name_on_a_worker_without_an_actor_is_reported(
+        self, ds_service_address, map_task_env
+    ):
+        """The worker-side half of the actor check, for a group defined elsewhere."""
+        with pytest.raises(RuntimeError, match="map map_fn .* no actor"):
+            _map_task("map-no-actor", "scale", (), {})
 
 
 # --------------------------------------------------------------------------
@@ -432,14 +341,8 @@ class TestQueuesAndIds:
         recorder = RecordingClient(executor.client)
         executor.client = recorder
 
-        executor.mapreduce(
-            desc="sum",
-            queue="cpu",
-            map_fn=identity,
-            reduce_fn=add,
-            iterable=range(10),
-            init=0,
-            num_tasks=2,
+        executor.map(
+            desc="square", queue="cpu", map_fn=square, iterable=range(10), num_tasks=2
         )
 
         items = [i for i, tid in enumerate(recorder.added_ids) if ".item." in tid]
@@ -454,27 +357,47 @@ class TestQueuesAndIds:
         pilot_jobs("cpu")
         worker_thread(expect_tasks=2)
 
-        executor.mapreduce(
-            desc="sum",
-            queue="cpu",
-            map_fn=identity,
-            reduce_fn=add,
-            iterable=range(6),
-            init=0,
-            num_tasks=2,
+        executor.map(
+            desc="square", queue="cpu", map_fn=square, iterable=range(6), num_tasks=2
         )
 
         items = item_ids(ds_client)
         assert len(items) == 6
-        prefix = f"{executor.name}.mapreduce.0."
+        prefix = f"{executor.name}.map.0."
         assert all(i.startswith(prefix) for i in items)
-        # `<name>.mapreduce.<index>.<token>.item.<i>`, and the token is hex.
+        # `<name>.map.<index>.<token>.item.<i>`, and the token is hex.
         token = items[0][len(prefix) :].split(".")[0]
         assert len(token) == MAPREDUCE_TOKEN_LEN
         assert int(token, 16) >= 0
 
         # The submitted tasks kept the plain numbering, and nothing collided.
         assert executor.submit("cpu", identity, 1).task_id == f"{executor.name}.task.2"
+
+    def test_map_and_mapreduce_use_queues_of_their_own(
+        self, executor, ds_client, pilot_jobs, worker_thread
+    ):
+        pilot_jobs("cpu")
+        worker_thread(expect_tasks=2)
+
+        executor.map(
+            desc="square", queue="cpu", map_fn=square, iterable=range(4), num_tasks=1
+        )
+        executor.mapreduce(
+            desc="sum",
+            queue="cpu",
+            map_fn=identity,
+            reduce_fn=add,
+            iterable=range(4),
+            init=0,
+            num_tasks=1,
+        )
+
+        queues = {i.split(".item.")[0] for i in item_ids(ds_client)}
+        # A queue is `<name>.<kind>.<index>.<token>`.
+        assert {tuple(q.split(".")[1:3]) for q in queues} == {
+            ("map", "0"),
+            ("mapreduce", "0"),
+        }
 
     def test_two_calls_use_two_queues(
         self, executor, ds_client, pilot_jobs, worker_thread
@@ -483,19 +406,17 @@ class TestQueuesAndIds:
         worker_thread(expect_tasks=2)
 
         for _ in range(2):
-            executor.mapreduce(
-                desc="sum",
+            executor.map(
+                desc="square",
                 queue="cpu",
-                map_fn=identity,
-                reduce_fn=add,
+                map_fn=square,
                 iterable=range(4),
-                init=0,
                 num_tasks=1,
             )
 
         queues = {i.split(".item.")[0] for i in item_ids(ds_client)}
         assert len(queues) == 2
-        # A queue is `<name>.mapreduce.<index>.<token>`, so field 2 is the index.
+        # A queue is `<name>.map.<index>.<token>`, so field 2 is the index.
         assert {q.split(".")[2] for q in queues} == {"0", "1"}
 
     def test_it_publishes_progress(
@@ -504,34 +425,26 @@ class TestQueuesAndIds:
         pilot_jobs("cpu")
         worker_thread(expect_tasks=3)
 
-        executor.mapreduce(
-            desc="counting things",
+        executor.map(
+            desc="squaring things",
             queue="cpu",
-            map_fn=identity,
-            reduce_fn=add,
+            map_fn=square,
             iterable=range(30),
-            init=0,
             num_tasks=3,
         )
 
         display = json.loads(ds_client.map_get("progress_display"))
-        assert display["desc"] == "counting things"
+        assert display["desc"] == "squaring things"
         assert display["unit"] == "task"
         assert display["total"] == 3
 
     def test_it_names_its_tasks(self, executor, ds_client, pilot_jobs, worker_thread):
-        """What `swtop` shows for a mapreduce task."""
+        """What `swtop` shows for a map task."""
         pilot_jobs("cpu")
         worker_thread(expect_tasks=2)
 
-        executor.mapreduce(
-            desc="sum",
-            queue="cpu",
-            map_fn=identity,
-            reduce_fn=add,
-            iterable=range(4),
-            init=0,
-            num_tasks=2,
+        executor.map(
+            desc="square", queue="cpu", map_fn=square, iterable=range(4), num_tasks=2
         )
 
         names = {
@@ -551,36 +464,14 @@ class TestQueuesAndIds:
 
 
 class TestEdgeCases:
-    def test_an_empty_iterable_returns_init(self, executor, ds_client):
+    def test_an_empty_iterable_returns_an_empty_list(self, executor, ds_client):
         """No worker, no queue, no task: the call never waits."""
-        assert (
-            executor.mapreduce(
-                desc="nothing",
-                queue="cpu",
-                map_fn=identity,
-                reduce_fn=add,
-                iterable=[],
-                init=0,
-                num_tasks=4,
-            )
-            == 0
-        )
-        assert ds_client.task_search_id(ALL_TASK_IDS) == []
-        assert executor.next_mapreduce_index == 0
-
-    def test_an_empty_iterable_copies_init(self, executor):
-        init: list[int] = []
-        got = executor.mapreduce(
-            desc="nothing",
-            queue="cpu",
-            map_fn=wrap,
-            reduce_fn=extend_in_place,
-            iterable=[],
-            init=init,
-            num_tasks=1,
+        got = executor.map(
+            desc="nothing", queue="cpu", map_fn=square, iterable=[], num_tasks=4
         )
         assert got == []
-        assert got is not init
+        assert ds_client.task_search_id(ALL_TASK_IDS) == []
+        assert executor.next_map_index == 0
 
     def test_fewer_items_than_tasks(
         self, executor, ds_client, pilot_jobs, worker_thread
@@ -589,76 +480,55 @@ class TestEdgeCases:
         pilot_jobs("cpu")
         worker_thread(expect_tasks=3)
 
-        total = executor.mapreduce(
-            desc="sum",
-            queue="cpu",
-            map_fn=identity,
-            reduce_fn=add,
-            iterable=[1, 2, 3],
-            init=0,
-            num_tasks=8,
+        got = executor.map(
+            desc="square", queue="cpu", map_fn=square, iterable=[1, 2, 3], num_tasks=8
         )
 
-        assert total == 6
+        assert got == [1, 4, 9]
         submitted = [i for i in ds_client.task_search_id(ALL_TASK_IDS) if ".task." in i]
         assert len(submitted) == 3
 
     def test_num_tasks_below_one_raises(self, executor, ds_client):
         with pytest.raises(ValueError, match="num_tasks"):
-            executor.mapreduce(
-                desc="sum",
+            executor.map(
+                desc="square",
                 queue="cpu",
-                map_fn=identity,
-                reduce_fn=add,
+                map_fn=square,
                 iterable=range(4),
-                init=0,
                 num_tasks=0,
             )
         assert ds_client.task_search_id(ALL_TASK_IDS) == []
 
     def test_a_non_int_num_tasks_raises(self, executor):
         with pytest.raises(TypeCheckError):
-            executor.mapreduce(
-                desc="sum",
+            executor.map(
+                desc="square",
                 queue="cpu",
-                map_fn=identity,
-                reduce_fn=add,
+                map_fn=square,
                 iterable=range(4),
-                init=0,
                 num_tasks="4",
             )
 
     def test_a_method_name_needs_an_actor(self, executor, pilot_jobs, ds_client):
         """Only a job group with an actor can resolve a method name."""
         pilot_jobs("cpu")
-        with pytest.raises(ValueError, match="actor"):
-            executor.mapreduce(
-                desc="sum",
+        with pytest.raises(ValueError, match="map names a method"):
+            executor.map(
+                desc="scale",
                 queue="cpu",
                 map_fn="scale",
-                reduce_fn=add,
                 iterable=range(4),
-                init=0,
                 num_tasks=2,
             )
         assert ds_client.task_search_id(ALL_TASK_IDS) == []
 
-    def test_a_method_name_on_a_worker_without_an_actor_is_reported(
-        self, ds_service_address, map_task_env
-    ):
-        """The worker-side half of the same check, for a group defined elsewhere."""
-        with pytest.raises(RuntimeError, match="no actor"):
-            _mapreduce_task("mr-no-actor", "scale", add, 0, (), {}, (), {})
-
     def test_a_queue_with_no_worker_raises_before_enqueueing(self, executor, ds_client):
         with pytest.raises(RuntimeError, match="no worker started"):
-            executor.mapreduce(
-                desc="sum",
+            executor.map(
+                desc="square",
                 queue="cpu",
-                map_fn=identity,
-                reduce_fn=add,
+                map_fn=square,
                 iterable=range(4),
-                init=0,
                 num_tasks=2,
             )
         assert ds_client.task_search_id(ALL_TASK_IDS) == []
@@ -669,12 +539,24 @@ class TestEdgeCases:
         worker_thread(expect_tasks=1)
 
         with pytest.raises(RuntimeError, match="failed on its worker"):
-            executor.mapreduce(
-                desc="boom",
-                queue="cpu",
-                map_fn=explode,
-                reduce_fn=add,
-                iterable=range(4),
-                init=0,
-                num_tasks=1,
+            executor.map(
+                desc="boom", queue="cpu", map_fn=explode, iterable=range(4), num_tasks=1
+            )
+
+    def test_a_missing_value_raises(
+        self, executor, pilot_jobs, worker_thread, monkeypatch
+    ):
+        """A broken ordering shows up as an error, never as a gap in the list."""
+        pilot_jobs("cpu")
+        worker_thread(expect_tasks=1)
+        real_map_task = slurm_pilot_executor._map_task
+
+        def lossy_map_task(*args: Any) -> list[tuple[str, Any]]:
+            return real_map_task(*args)[1:]
+
+        monkeypatch.setattr(slurm_pilot_executor, "_map_task", lossy_map_task)
+
+        with pytest.raises(RuntimeError, match="1 of 4 items .* no value"):
+            executor.map(
+                desc="lossy", queue="cpu", map_fn=square, iterable=range(4), num_tasks=1
             )

@@ -65,7 +65,7 @@ SBATCH_ARGS = [
 
 
 def do_step_pi(start: int, stop: int, step: int, stepsize: float) -> float:
-    """Sum every `step`-th midpoint slice, from `start`."""
+    """Sum 4 / (1 + x*x) at every `step`-th midpoint, unscaled by `stepsize`."""
     x, s = 0.0, 0.0
     for i in range(start, stop, step):
         x = (i + 0.5) * stepsize
@@ -168,8 +168,12 @@ Notice that the program submits the 800 tasks before a single worker exists.
 The tasks wait on the queue until a pilot job starts and its workers claim them.
 We time nothing by hand.
 When the last task is back,
-the program prints one line:
-`pi = `, then the estimate.
+the program prints one line.
+It looks something like this:
+
+```text
+pi = 3.14159265358979...
+```
 
 We ran a billion-slice integration
 across 80 workers on two compute nodes.
