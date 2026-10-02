@@ -63,7 +63,7 @@ pythonVersion = "3.12"
 fallback_version = "1.0.0-dev"
 
 [project.urls]
-"Homepage" = "https://github.com/parantapa/slurm-hpc-workflows"
+"Homepage" = "https://github.com/parantapa/slurm-workflows"
 
 [project.scripts]
 "slurm-pilot-worker" = "slurm_workflows.slurm_pilot_worker:slurm_pilot_worker"
